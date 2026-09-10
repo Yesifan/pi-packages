@@ -12,8 +12,8 @@ import type { DeliveryReport, TurnIssue, TurnOutcome } from "./turn-outcome.js";
 
 /** Default auto-close idle window for a shared session (10 minutes). */
 export const DEFAULT_SESSION_IDLE_MS = 10 * 60 * 1000;
-/** Maximum turn duration before aborting Pi (30 minutes). */
-export const DEFAULT_TURN_TIMEOUT_MS = 30 * 60 * 1000;
+/** Maximum turn duration before aborting Pi; disabled by default. */
+export const DEFAULT_TURN_TIMEOUT_MS = 0;
 /** Time allowed for Pi to settle after a timeout abort. */
 export const DEFAULT_ABORT_GRACE_MS = 10_000;
 /** Refresh interval for Weixin's transient typing state. */
@@ -39,7 +39,7 @@ export interface SessionControllerDeps {
   typingKeepaliveMs?: number;
   /** Human label for an inbound sender (used in "-- from weixin <name>"). */
   resolveSenderLabel?: (msg: InboundMessage) => string;
-  /** Maximum duration of one Pi turn; 0 disables the watchdog. */
+  /** Optional maximum duration of one Pi turn; 0 disables the watchdog (default). */
   turnTimeoutMs?: number;
   /** Grace period for Pi to settle after a watchdog abort. */
   abortGraceMs?: number;

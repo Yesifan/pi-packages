@@ -163,7 +163,7 @@ daemon 通过 Pi SDK 运行模型，需要对应 provider 的凭据。若运行�
 
 运行可靠性环境变量（同样需要通过 `EnvironmentFile` 注入 systemd 服务）：
 
-- `PI_WEIXIN_TURN_TIMEOUT_MS`：单个 Agent 回合的最长运行时间，默认 `1800000`（30 分钟），`0` 关闭 watchdog。
+- `PI_WEIXIN_TURN_TIMEOUT_MS`：可选的单个 Agent 回合最长运行时间；默认 `0`，即不限制。设置为正整数可启用 watchdog。
 - `PI_WEIXIN_ABORT_GRACE_MS`：回合超时并发送 abort 后等待 Pi 停止的时间，默认 `10000`（10 秒），`0` 表示无限等待。
 - `PI_WEIXIN_UI_TIMEOUT_MS`：等待微信 UI/权限答复的时间，默认 5 分钟。
 

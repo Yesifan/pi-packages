@@ -7,6 +7,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/) and [Semantic Ver
 
 ---
 
+## [0.6.9]
+
+### Changed
+
+- 单个 Agent 回合默认不再设置运行超时；仍可通过 `PI_WEIXIN_TURN_TIMEOUT_MS` 显式启用 watchdog。
+
 ## [0.6.8]
 
 ### Fixed

@@ -120,8 +120,8 @@ transport 首先丢弃明确的 BOT/非 USER 记录；该检查发生在项目�
 - 自动重试期间的中间错误不会提前告知；重试最终成功时只发送成功结果。
 - 错误发生前若已有部分输出，会标记“内容可能不完整”，且仅回复当前回合发起者，不广播。
 - 当前回合中的 extension runtime error 会作为警告回复发起者；不相关的后台错误只记日志。
-- Agent 回合默认最多运行 30 分钟，超时后 abort；可用 `PI_WEIXIN_TURN_TIMEOUT_MS`
-  覆盖（毫秒，`0` 表示关闭）。abort 后默认等待 10 秒，可用
+- Agent 回合默认不设运行时限。可用 `PI_WEIXIN_TURN_TIMEOUT_MS` 设置 watchdog
+  （毫秒，正整数表示超时后 abort，`0` 表示关闭）。abort 后默认等待 10 秒，可用
   `PI_WEIXIN_ABORT_GRACE_MS` 覆盖。仍无法停止时 session 进入 faulted 状态。
 - 所有用户可见错误都会清除控制字符、脱敏并截断；原始异常仅写 daemon 日志。
 - 微信发送通道自身失败时无法再通过同一通道告知用户。系统会记录项目、消息、账号及广播
