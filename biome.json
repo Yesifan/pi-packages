@@ -1,0 +1,82 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.12/schema.json",
+  "files": {
+    "includes": [
+      "**",
+      "!!**/dist",
+      "!!**/node_modules",
+      "!!**/.refer",
+      "!!**/coverage",
+      "!!**/release",
+      "!!**/test/.tmp"
+    ]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended",
+      "correctness": {
+        "noUnusedFunctionParameters": "off",
+        "noUnusedImports": "off",
+        "noUnusedPrivateClassMembers": "off",
+        "noUnusedVariables": "off"
+      },
+      "style": {
+        "noNonNullAssertion": "off",
+        "useConst": "off",
+        "useTemplate": "off"
+      },
+      "complexity": {
+        "noUselessEscapeInRegex": "off",
+        "useOptionalChain": "off"
+      },
+      "suspicious": {
+        "noConfusingVoidType": "off",
+        "noControlCharactersInRegex": "off"
+      }
+    }
+  },
+  "assist": {
+    "enabled": true,
+    "actions": {
+      "source": {
+        "organizeImports": "on"
+      }
+    }
+  },
+  "overrides": [
+    {
+      "includes": [
+        "packages/pi-weixin-daemon/src/**/*.ts",
+        "!packages/pi-weixin-daemon/src/pi/**/*.ts"
+      ],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "paths": {
+                  "@earendil-works/pi-coding-agent": "Only src/pi/ may import the Pi SDK. Use domain types/ports instead.",
+                  "@earendil-works/pi-ai/compat": "Only src/pi/ may import the Pi SDK. Use domain types/ports instead."
+                },
+                "patterns": [
+                  {
+                    "group": ["@earendil-works/pi-coding-agent/*", "@earendil-works/pi-ai/*"],
+                    "message": "Only src/pi/ may import the Pi SDK. Use domain types/ports instead."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

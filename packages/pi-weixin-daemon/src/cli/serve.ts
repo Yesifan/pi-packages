@@ -3,7 +3,10 @@ import { Daemon } from "../daemon.js";
 import { createLogger } from "../util/logger.js";
 
 /** Install SIGINT/SIGTERM handling: graceful stop, force-exit on second signal. */
-export function installSignalHandlers(daemon: Daemon, logger: ReturnType<typeof createLogger>): void {
+export function installSignalHandlers(
+  daemon: Daemon,
+  logger: ReturnType<typeof createLogger>,
+): void {
   let stopping = false;
   const shutdown = (signal: string) => {
     if (stopping) {
@@ -12,12 +15,10 @@ export function installSignalHandlers(daemon: Daemon, logger: ReturnType<typeof 
     }
     stopping = true;
     logger.info({ signal }, "signal received, shutting down");
-    daemon
-      .stop()
-      .catch((err: unknown) => {
-        logger.error({ err }, "error during shutdown");
-        process.exit(1);
-      });
+    daemon.stop().catch((err: unknown) => {
+      logger.error({ err }, "error during shutdown");
+      process.exit(1);
+    });
   };
   process.on("SIGINT", () => shutdown("SIGINT"));
   process.on("SIGTERM", () => shutdown("SIGTERM"));

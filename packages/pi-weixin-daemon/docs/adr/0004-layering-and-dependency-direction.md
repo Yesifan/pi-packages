@@ -72,7 +72,7 @@ src/
 
 - 禁止 `src/pi/` 之外 import `@earendil-works/pi-coding-agent` 与
   `@earendil-works/pi-ai/compat`（`ImageContent` 也须隔离）。
-- 用 eslint `no-restricted-imports` **强制**，不是约定。
+- 用 Biome `noRestrictedImports` **强制**，不是约定。
 - `pi/` 对外只暴露领域类型：`PiHostEvent`（`text_delta/agent_settled/tool_*/ui_*/extension_error/…`）、
   `HostPromptInput`（text + images 领域形状）、`HostStatus`、`SessionSwitchResult`、
   `Diagnostic`（自有的，非 SDK 类型）。

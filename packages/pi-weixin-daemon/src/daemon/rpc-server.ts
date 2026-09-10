@@ -2,8 +2,8 @@ import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import { resolveDaemonSocket, resolveRuntimeDir } from "../config/paths.js";
-import type { Logger } from "../util/logger.js";
 import type { Daemon } from "../daemon.js";
+import type { Logger } from "../util/logger.js";
 
 interface RpcRequest {
   id: number;

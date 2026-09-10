@@ -11,21 +11,21 @@ const bin = path.join(root, "dist", "index.js");
 // Prepare a fake account so `run` gets past the login check.
 const stateDir = path.join(root, "test", ".tmp", "signal-state");
 fs.mkdirSync(path.join(stateDir, "weixin", "accounts"), { recursive: true });
-fs.writeFileSync(path.join(stateDir, "weixin", "accounts.json"), JSON.stringify(["acct-a"]), "utf-8");
+fs.writeFileSync(
+  path.join(stateDir, "weixin", "accounts.json"),
+  JSON.stringify(["acct-a"]),
+  "utf-8",
+);
 fs.writeFileSync(
   path.join(stateDir, "weixin", "accounts", "acct-a.json"),
   JSON.stringify({ token: "fake-token-for-signal-test", baseUrl: "https://example.com" }),
   "utf-8",
 );
 
-const child = spawn(
-  process.execPath,
-  [bin, "run", "--cwd", root, "--account", "acct-a"],
-  {
-    stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, PI_WEIXIN_STATE_DIR: stateDir },
-  },
-);
+const child = spawn(process.execPath, [bin, "run", "--cwd", root, "--account", "acct-a"], {
+  stdio: ["ignore", "pipe", "pipe"],
+  env: { ...process.env, PI_WEIXIN_STATE_DIR: stateDir },
+});
 
 let output = "";
 child.stdout.on("data", (d) => (output += d.toString()));

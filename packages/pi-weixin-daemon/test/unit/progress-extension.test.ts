@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import type { InteractionPort } from "../../src/pi/ports.js";
 import {
   createWeixinSendProgressExtension,
   sanitizeProgressUpdate,
 } from "../../src/pi/extensions/weixin-send-progress.js";
+import type { InteractionPort } from "../../src/pi/ports.js";
 import { createLogger } from "../../src/util/logger.js";
 import { makeTurn } from "../helpers/fake-transport.js";
 
@@ -36,13 +36,17 @@ function interaction(turn: ReturnType<typeof makeTurn> | null = makeTurn()) {
 
 describe("weixin_send_progress", () => {
   it("sanitizes whitespace and control characters", () => {
-    expect(sanitizeProgressUpdate("  Read\u0001 files.\n  Next: tests.  ")).toBe("Read files. Next: tests.");
+    expect(sanitizeProgressUpdate("  Read\u0001 files.\n  Next: tests.  ")).toBe(
+      "Read files. Next: tests.",
+    );
     expect(sanitizeProgressUpdate("x".repeat(250))).toHaveLength(200);
   });
 
   it("sends only through the active turn", async () => {
     const bridge = interaction();
-    const result = await captureExecute(bridge)("call-1", { update: "  Files explored.\nTests next. " });
+    const result = await captureExecute(bridge)("call-1", {
+      update: "  Files explored.\nTests next. ",
+    });
 
     expect(bridge.sendText).toHaveBeenCalledWith(makeTurn(), "Files explored. Tests next.");
     expect(result.details).toEqual({ sent: true });
@@ -68,6 +72,8 @@ describe("weixin_send_progress", () => {
     const bridge = interaction();
     vi.mocked(bridge.sendText).mockRejectedValueOnce(new Error("network down"));
 
-    await expect(captureExecute(bridge)("call-1", { update: "Tests running." })).rejects.toThrow("network down");
+    await expect(captureExecute(bridge)("call-1", { update: "Tests running." })).rejects.toThrow(
+      "network down",
+    );
   });
 });

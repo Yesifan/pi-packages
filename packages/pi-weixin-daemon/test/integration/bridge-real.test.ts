@@ -1,12 +1,12 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { PiSdkHost } from "../../src/pi/sdk-host.js";
 import { SessionController } from "../../src/sessions/session-controller.js";
 import { CurrentTurn } from "../../src/sessions/turn-context.js";
-import { WeixinInteractionController } from "../../src/weixin/interaction-controller.js";
 import { createLogger } from "../../src/util/logger.js";
-import { createTmpProject, waitForMarker } from "../helpers/tmp-project.js";
+import { WeixinInteractionController } from "../../src/weixin/interaction-controller.js";
 import { FakeWeixinTransport, makeInboundMessage } from "../helpers/fake-transport.js";
 import { MultiAccountTransport } from "../helpers/multi-account-transport.js";
+import { createTmpProject, waitForMarker } from "../helpers/tmp-project.js";
 
 const logger = createLogger({ level: "warn" });
 const TIMEOUT = 120_000;

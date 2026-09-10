@@ -1,6 +1,6 @@
-import type { InboundMessage, WeixinTransport } from "../weixin/types.js";
-import type { Logger } from "../util/logger.js";
 import type { AccountInfo, AccountStatus } from "../projects/types.js";
+import type { Logger } from "../util/logger.js";
+import type { InboundMessage, WeixinTransport } from "../weixin/types.js";
 
 export interface ManagedAccount {
   accountId: string;
@@ -53,9 +53,11 @@ export class AccountManager {
     this.unsubscribes.get(accountId)?.();
     this.unsubscribes.delete(accountId);
     this.accounts.delete(accountId);
-    await mgd.transport.stop().catch((err: unknown) =>
-      this.opts.logger.warn({ err, account: accountId }, "account transport stop error"),
-    );
+    await mgd.transport
+      .stop()
+      .catch((err: unknown) =>
+        this.opts.logger.warn({ err, account: accountId }, "account transport stop error"),
+      );
   }
 
   has(accountId: string): boolean {

@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 
 import { apiGetFetch, apiPostFetch } from "../api/api.js";
-import { listIndexedWeixinAccountIds, loadWeixinAccount } from "./accounts.js";
 import { redactToken } from "../util/redact.js";
+import { listIndexedWeixinAccountIds, loadWeixinAccount } from "./accounts.js";
 
 type ActiveLogin = {
   sessionKey: string;

@@ -1,7 +1,7 @@
-import { encryptAesEcb } from "./aes-ecb.js";
-import { buildCdnUploadUrl } from "./cdn-url.js";
 import { createLogger } from "../../util/logger.js";
 import { redactUrl } from "../util/redact.js";
+import { encryptAesEcb } from "./aes-ecb.js";
+import { buildCdnUploadUrl } from "./cdn-url.js";
 
 const logger = createLogger();
 
@@ -34,9 +34,7 @@ export async function uploadBufferToCdn(params: {
   } else {
     throw new Error(`${label}: CDN upload URL missing (need upload_full_url or upload_param)`);
   }
-  logger.debug(
-    `${label}: CDN POST url=${redactUrl(cdnUrl)} ciphertextSize=${ciphertext.length}`,
-  );
+  logger.debug(`${label}: CDN POST url=${redactUrl(cdnUrl)} ciphertextSize=${ciphertext.length}`);
 
   let downloadParam: string | undefined;
   let lastError: unknown;

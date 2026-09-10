@@ -1,7 +1,7 @@
-import { describe, it, expect } from "vitest";
-import { normalizeInboundMessage, extractText } from "../../src/weixin/normalize.js";
-import { splitTextChunks } from "../../src/weixin/messaging/send.js";
+import { describe, expect, it } from "vitest";
 import type { WeixinMessage } from "../../src/weixin/api/types.js";
+import { splitTextChunks } from "../../src/weixin/messaging/send.js";
+import { extractText, normalizeInboundMessage } from "../../src/weixin/normalize.js";
 
 describe("normalizeInboundMessage", () => {
   const raw: WeixinMessage = {

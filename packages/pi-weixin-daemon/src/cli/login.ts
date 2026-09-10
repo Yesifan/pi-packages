@@ -1,4 +1,5 @@
 import { Command } from "commander";
+import { createLogger } from "../util/logger.js";
 import {
   clearStaleAccountsForUserId,
   DEFAULT_BASE_URL,
@@ -7,9 +8,12 @@ import {
   resolveWeixinAccountIdByName,
   saveWeixinAccount,
 } from "../weixin/auth/accounts.js";
-import { displayQRCode, startWeixinLoginWithQr, waitForWeixinLogin } from "../weixin/auth/login-qr.js";
+import {
+  displayQRCode,
+  startWeixinLoginWithQr,
+  waitForWeixinLogin,
+} from "../weixin/auth/login-qr.js";
 import { redactToken } from "../weixin/util/redact.js";
-import { createLogger } from "../util/logger.js";
 
 const NAME_RE = /^[A-Za-z0-9_.-]+$/;
 
@@ -82,10 +86,7 @@ export function loginCommand(): Command {
           name,
         });
         clearStaleAccountsForUserId(accountId, result.userId ?? "");
-        logger.info(
-          { accountId, name, userId: redactToken(result.userId) },
-          "account saved",
-        );
+        logger.info({ accountId, name, userId: redactToken(result.userId) }, "account saved");
         console.log(`\n✅ 微信账号已保存: ${name} (${accountId})`);
         // Best-effort: ask a running daemon to pick up the new account now.
         try {

@@ -14,8 +14,14 @@ export function formatUserFacingError(
     .replace(/[\u0000-\u001f\u007f]/g, " ")
     .replace(/\b(authorization\s*:\s*bearer\s+)[^\s,;]+/gi, "$1[REDACTED]")
     .replace(/\b(bearer\s+)[A-Za-z0-9._~+/=-]{8,}/gi, "$1[REDACTED]")
-    .replace(/\b(api[_-]?key|token|access[_-]?token|refresh[_-]?token)(\s*[:=]\s*)[^\s&,;]+/gi, "$1$2[REDACTED]")
-    .replace(/([?&](?:api[_-]?key|token|access[_-]?token|refresh[_-]?token)=)[^&#\s]*/gi, "$1[REDACTED]")
+    .replace(
+      /\b(api[_-]?key|token|access[_-]?token|refresh[_-]?token)(\s*[:=]\s*)[^\s&,;]+/gi,
+      "$1$2[REDACTED]",
+    )
+    .replace(
+      /([?&](?:api[_-]?key|token|access[_-]?token|refresh[_-]?token)=)[^&#\s]*/gi,
+      "$1[REDACTED]",
+    )
     .replace(/\s+/g, " ")
     .trim();
 

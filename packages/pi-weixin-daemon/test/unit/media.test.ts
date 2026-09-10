@@ -1,10 +1,13 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
-import { encryptAesEcb, decryptAesEcb, aesEcbPaddedSize } from "../../src/weixin/cdn/aes-ecb.js";
-import { downloadAttachmentsFromMessage, detectImageMime } from "../../src/weixin/media/media-download.js";
-import { getMimeFromFilename } from "../../src/weixin/media/mime.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createLogger } from "../../src/util/logger.js";
+import { aesEcbPaddedSize, decryptAesEcb, encryptAesEcb } from "../../src/weixin/cdn/aes-ecb.js";
+import {
+  detectImageMime,
+  downloadAttachmentsFromMessage,
+} from "../../src/weixin/media/media-download.js";
+import { getMimeFromFilename } from "../../src/weixin/media/mime.js";
 
 const logger = createLogger({ level: "silent" });
 
@@ -31,7 +34,11 @@ describe("detectImageMime", () => {
     expect(detectImageMime(jpg)).toBe("image/jpeg");
     const gif = Buffer.from("GIF89a", "ascii");
     expect(detectImageMime(gif)).toBe("image/gif");
-    const webp = Buffer.concat([Buffer.from("RIFF", "ascii"), Buffer.alloc(4), Buffer.from("WEBP", "ascii")]);
+    const webp = Buffer.concat([
+      Buffer.from("RIFF", "ascii"),
+      Buffer.alloc(4),
+      Buffer.from("WEBP", "ascii"),
+    ]);
     expect(detectImageMime(webp)).toBe("image/webp");
     expect(detectImageMime(Buffer.from("nope"))).toBeUndefined();
   });
@@ -56,9 +63,12 @@ describe("downloadAttachmentsFromMessage", () => {
     const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
     const ciphertext = encryptAesEcb(pngBytes, key);
 
-    vi.stubGlobal("fetch", vi.fn(async () => {
-      return new Response(new Uint8Array(ciphertext), { status: 200 });
-    }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        return new Response(new Uint8Array(ciphertext), { status: 200 });
+      }),
+    );
 
     const raw = {
       message_id: 123,
@@ -74,7 +84,10 @@ describe("downloadAttachmentsFromMessage", () => {
       ],
     };
 
-    const { attachments } = await downloadAttachmentsFromMessage(raw as never, { inboxDir, logger });
+    const { attachments } = await downloadAttachmentsFromMessage(raw as never, {
+      inboxDir,
+      logger,
+    });
     expect(attachments).toHaveLength(1);
     const img = attachments[0]!;
     expect(img.kind).toBe("image");
@@ -92,9 +105,12 @@ describe("downloadAttachmentsFromMessage", () => {
     // file aes_key is base64(hex string) per Tencent's format
     const aesKeyBase64 = Buffer.from(key.toString("hex"), "ascii").toString("base64");
 
-    vi.stubGlobal("fetch", vi.fn(async () => {
-      return new Response(new Uint8Array(ciphertext), { status: 200 });
-    }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        return new Response(new Uint8Array(ciphertext), { status: 200 });
+      }),
+    );
 
     const raw = {
       message_id: 456,
@@ -110,7 +126,10 @@ describe("downloadAttachmentsFromMessage", () => {
       ],
     };
 
-    const { attachments } = await downloadAttachmentsFromMessage(raw as never, { inboxDir, logger });
+    const { attachments } = await downloadAttachmentsFromMessage(raw as never, {
+      inboxDir,
+      logger,
+    });
     expect(attachments).toHaveLength(1);
     const file = attachments[0]!;
     expect(file.kind).toBe("file");
@@ -122,18 +141,27 @@ describe("downloadAttachmentsFromMessage", () => {
 
   it("records failing items as failures but still completes (no exception)", async () => {
     const inboxDir = fs.mkdtempSync(path.join(process.cwd(), "test/.tmp", "inbox-skip-"));
-    vi.stubGlobal("fetch", vi.fn(async () => {
-      return new Response("oops", { status: 500 });
-    }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        return new Response("oops", { status: 500 });
+      }),
+    );
     const raw = {
       message_id: 789,
       from_user_id: "user-1",
       item_list: [
-        { type: 4, file_item: { file_name: "x.pdf", media: { encrypt_query_param: "q", aes_key: "a2V5" } } },
+        {
+          type: 4,
+          file_item: { file_name: "x.pdf", media: { encrypt_query_param: "q", aes_key: "a2V5" } },
+        },
         { type: 1, text_item: { text: "hi" } },
       ],
     };
-    const { attachments, failures } = await downloadAttachmentsFromMessage(raw as never, { inboxDir, logger });
+    const { attachments, failures } = await downloadAttachmentsFromMessage(raw as never, {
+      inboxDir,
+      logger,
+    });
     expect(attachments).toHaveLength(0);
     expect(failures).toHaveLength(1);
     expect(failures[0]?.kind).toBe("file");

@@ -62,7 +62,12 @@ export class PiExtensionHost {
       },
       onError: (error) => {
         this.deps.logger.error(
-          { extension: error.extensionPath, event: error.event, stack: error.stack, error: error.error },
+          {
+            extension: error.extensionPath,
+            event: error.event,
+            stack: error.stack,
+            error: error.error,
+          },
           "extension runtime error",
         );
         this.deps.onError?.(error);

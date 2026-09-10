@@ -1,5 +1,5 @@
-import { getConfig } from "./api.js";
 import type { Logger } from "../../util/logger.js";
+import { getConfig } from "./api.js";
 
 /** Subset of getConfig fields that we actually need; add new fields here as needed. */
 export interface CachedConfig {

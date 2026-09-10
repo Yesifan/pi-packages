@@ -14,7 +14,8 @@ export const DAEMON_COMMANDS = [
 export type DaemonCommand = (typeof DAEMON_COMMANDS)[number];
 
 const HELP: Record<string, string> = {
-  model: "`/model` — 选择模型；每页 5 个，回复字母选择、数字翻页、q 退出；`a default` 同时设为项目默认。",
+  model:
+    "`/model` — 选择模型；每页 5 个，回复字母选择、数字翻页、q 退出；`a default` 同时设为项目默认。",
   thinking: "`/thinking` — 选择思考强度；回复字母选择、q 退出；`a default` 同时设为项目默认。",
   resume: "`/resume` — 选择并恢复最近会话；`/resume latest` 恢复最近会话。",
   reload: "`/reload` — 重新加载当前会话的 Pi 配置和扩展。",

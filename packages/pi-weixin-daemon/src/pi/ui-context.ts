@@ -1,4 +1,8 @@
-import { Theme, type ExtensionUIContext, type ExtensionUIDialogOptions } from "@earendil-works/pi-coding-agent";
+import {
+  type ExtensionUIContext,
+  type ExtensionUIDialogOptions,
+  Theme,
+} from "@earendil-works/pi-coding-agent";
 import type { Logger } from "../util/logger.js";
 import type { InteractionPort } from "./ports.js";
 
@@ -107,7 +111,11 @@ export class WeixinUIContext implements ExtensionUIContext {
     return confirmed;
   }
 
-  async select(title: string, options: string[], opts?: ExtensionUIDialogOptions): Promise<string | undefined> {
+  async select(
+    title: string,
+    options: string[],
+    opts?: ExtensionUIDialogOptions,
+  ): Promise<string | undefined> {
     const turn = this.requireTurn();
     const list = options.map((o, i) => `${i + 1}. ${o}`).join("\n");
     await this.deps.interaction.sendText(turn, `🔔 ${title}\n\n${list}\n\n请回复选项编号或内容。`);
@@ -130,7 +138,11 @@ export class WeixinUIContext implements ExtensionUIContext {
     return selected;
   }
 
-  async input(title: string, placeholder?: string, opts?: ExtensionUIDialogOptions): Promise<string | undefined> {
+  async input(
+    title: string,
+    placeholder?: string,
+    opts?: ExtensionUIDialogOptions,
+  ): Promise<string | undefined> {
     const turn = this.requireTurn();
     const hint = placeholder ? `\n\n（例如：${placeholder}）` : "";
     await this.deps.interaction.sendText(turn, `⌨️ ${title}${hint}\n\n请直接回复内容。`);
@@ -156,7 +168,10 @@ export class WeixinUIContext implements ExtensionUIContext {
    * The SDK's `ExtensionUIDialogOptions.timeout` (ms) is the caller's value; when
    * absent we fall back to {@link DEFAULT_UI_TIMEOUT_MS}.
    */
-  private async waitForUiAnswer(turn: Parameters<InteractionPort["waitForResponse"]>[0], opts?: ExtensionUIDialogOptions): Promise<string> {
+  private async waitForUiAnswer(
+    turn: Parameters<InteractionPort["waitForResponse"]>[0],
+    opts?: ExtensionUIDialogOptions,
+  ): Promise<string> {
     const timeoutMs = opts?.timeout ?? DEFAULT_UI_TIMEOUT_MS;
     return this.deps.interaction.waitForResponse(turn, { timeoutMs, signal: opts?.signal });
   }

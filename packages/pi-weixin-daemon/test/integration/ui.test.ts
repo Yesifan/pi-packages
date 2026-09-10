@@ -1,12 +1,12 @@
-import { describe, it, expect, vi } from "vitest";
-import { BUSY_REPLY } from "../../src/sessions/session-state.js";
-import { SessionController } from "../../src/sessions/session-controller.js";
-import { CurrentTurn } from "../../src/sessions/turn-context.js";
-import { WeixinUIContext } from "../../src/pi/ui-context.js";
+import { describe, expect, it, vi } from "vitest";
 import type { InteractionPort } from "../../src/pi/ports.js";
+import { WeixinUIContext } from "../../src/pi/ui-context.js";
+import { SessionController } from "../../src/sessions/session-controller.js";
+import { BUSY_REPLY } from "../../src/sessions/session-state.js";
+import { CurrentTurn } from "../../src/sessions/turn-context.js";
+import { createLogger } from "../../src/util/logger.js";
 import { WeixinInteractionController } from "../../src/weixin/interaction-controller.js";
 import type { TurnContext } from "../../src/weixin/types.js";
-import { createLogger } from "../../src/util/logger.js";
 import { FakeAgentRuntime } from "../helpers/fake-runtime.js";
 import { FakeWeixinTransport, makeInboundMessage, makeTurn } from "../helpers/fake-transport.js";
 import { MultiAccountTransport } from "../helpers/multi-account-transport.js";
@@ -95,7 +95,11 @@ describe("M9 WeixinUIContext dialogs", () => {
     endCount = 0;
     private turn: TurnContext | undefined;
     private transport: FakeWeixinTransport;
-    private waiters: Array<{ resolve: (t: string) => void; reject: (e: Error) => void; timer?: NodeJS.Timeout }> = [];
+    private waiters: Array<{
+      resolve: (t: string) => void;
+      reject: (e: Error) => void;
+      timer?: NodeJS.Timeout;
+    }> = [];
 
     constructor(turn: TurnContext | undefined, transport: FakeWeixinTransport) {
       this.turn = turn;
@@ -121,7 +125,10 @@ describe("M9 WeixinUIContext dialogs", () => {
     sendText(turn: TurnContext, text: string): Promise<void> {
       return this.transport.sendText(turn, text);
     }
-    waitForResponse(_turn: TurnContext, opts?: { timeoutMs?: number; signal?: AbortSignal }): Promise<string> {
+    waitForResponse(
+      _turn: TurnContext,
+      opts?: { timeoutMs?: number; signal?: AbortSignal },
+    ): Promise<string> {
       return new Promise((resolve, reject) => {
         const waiter = { resolve, reject, timer: undefined as NodeJS.Timeout | undefined };
         this.waiters.push(waiter);

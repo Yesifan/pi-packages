@@ -28,9 +28,7 @@ export class FakeAgentRuntime implements SessionRuntimePort {
   resumeCalls: string[] = [];
   reloadCalls = 0;
   private listeners = new Set<(event: PiHostEvent) => void>();
-  private pending:
-    | { resolve: () => void; reject: (err: Error) => void }
-    | undefined;
+  private pending: { resolve: () => void; reject: (err: Error) => void } | undefined;
   private idleWaiters: Array<() => void> = [];
 
   constructor(cwd = "/fake/project") {
@@ -80,7 +78,11 @@ export class FakeAgentRuntime implements SessionRuntimePort {
 
   failThenRetrySuccessfully(reply: string): void {
     this.emitText("failed partial");
-    this.emit({ type: "assistant_finished", stopReason: "error", errorMessage: "temporary failure" });
+    this.emit({
+      type: "assistant_finished",
+      stopReason: "error",
+      errorMessage: "temporary failure",
+    });
     this.emit({ type: "assistant_started" });
     this.emitText(reply);
     this.emit({ type: "assistant_finished", stopReason: "stop" });

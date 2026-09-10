@@ -1,13 +1,13 @@
 import {
-  createAgentSessionFromServices,
-  createAgentSessionServices,
-  getAgentDir,
-  hasTrustRequiringProjectResources,
-  SettingsManager,
   type AgentSessionRuntimeDiagnostic,
   type AgentSessionServices,
   type CreateAgentSessionRuntimeFactory,
+  createAgentSessionFromServices,
+  createAgentSessionServices,
   type ExtensionFactory,
+  getAgentDir,
+  hasTrustRequiringProjectResources,
+  SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { resolveProjectTrust } from "./project-trust.js";
 
@@ -34,7 +34,9 @@ export interface PiRuntimeFactoryOptions {
  * fail-closed startup: services diagnostics + settings errors (warning) +
  * extension load errors (error).
  */
-export function createPiRuntimeFactory(opts: PiRuntimeFactoryOptions): CreateAgentSessionRuntimeFactory {
+export function createPiRuntimeFactory(
+  opts: PiRuntimeFactoryOptions,
+): CreateAgentSessionRuntimeFactory {
   return async ({ cwd: factoryCwd, sessionManager, sessionStartEvent }) => {
     const agentDir = getAgentDir();
 

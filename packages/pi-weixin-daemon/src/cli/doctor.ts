@@ -4,8 +4,12 @@ import path from "node:path";
 import { Command } from "commander";
 import { z } from "zod";
 import { checkModelAvailability, isPiSdkAvailable, piSdkVersion } from "../pi/sdk-info.js";
+import {
+  listIndexedWeixinAccountIds,
+  loadWeixinAccount,
+  resolveWeixinBaseUrl,
+} from "../weixin/auth/accounts.js";
 import { resolveStateDir } from "../weixin/storage/state-dir.js";
-import { listIndexedWeixinAccountIds, loadWeixinAccount, resolveWeixinBaseUrl } from "../weixin/auth/accounts.js";
 
 const DoctorArgsSchema = z.object({
   cwd: z.string().min(1).optional(),
@@ -46,7 +50,9 @@ export function doctorCommand(): Command {
 
       // --- Node version ---
       const [major, minor] = process.versions.node.split(".").map((p) => parseInt(p, 10));
-      const nodeOk = (major ?? 0) > MIN_NODE_MAJOR || ((major ?? 0) === MIN_NODE_MAJOR && (minor ?? 0) >= MIN_NODE_MINOR);
+      const nodeOk =
+        (major ?? 0) > MIN_NODE_MAJOR ||
+        ((major ?? 0) === MIN_NODE_MAJOR && (minor ?? 0) >= MIN_NODE_MINOR);
       checks.push({
         name: "node version",
         ok: nodeOk,
@@ -110,7 +116,8 @@ export function doctorCommand(): Command {
       }
 
       // --- Accounts ---
-      const accountIds = args.accounts && args.accounts.length > 0 ? args.accounts : listIndexedWeixinAccountIds();
+      const accountIds =
+        args.accounts && args.accounts.length > 0 ? args.accounts : listIndexedWeixinAccountIds();
       if (accountIds.length === 0) {
         checks.push({
           name: "weixin accounts",
@@ -135,7 +142,9 @@ export function doctorCommand(): Command {
       let allOk = true;
       for (const check of checks) {
         if (!check.ok) allOk = false;
-        console.log(`${check.ok ? "✓" : "✗"} ${check.name}${check.detail ? ` — ${check.detail}` : ""}`);
+        console.log(
+          `${check.ok ? "✓" : "✗"} ${check.name}${check.detail ? ` — ${check.detail}` : ""}`,
+        );
       }
       if (!allOk) {
         console.log("\nSome checks failed; fix them before starting the daemon.");

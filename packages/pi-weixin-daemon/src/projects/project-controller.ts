@@ -2,19 +2,16 @@ import type { InteractionPort } from "../pi/ports.js";
 import type { SessionRuntimePort } from "../sessions/runtime-port.js";
 import { SessionController } from "../sessions/session-controller.js";
 import { CurrentTurn, toTurnContext } from "../sessions/turn-context.js";
-import { WeixinInteractionController } from "../weixin/interaction-controller.js";
-import type {
-  InboundMessage,
-  WeixinTransport,
-} from "../weixin/types.js";
+import type { DeliveryReport } from "../sessions/turn-outcome.js";
 import type { Logger } from "../util/logger.js";
 import { formatUserFacingError } from "../util/user-facing-error.js";
-import type { DeliveryReport } from "../sessions/turn-outcome.js";
+import { WeixinInteractionController } from "../weixin/interaction-controller.js";
+import type { InboundMessage, WeixinTransport } from "../weixin/types.js";
 import { CommandRouter } from "./command-router.js";
-import { ParticipantRegistry, type Participant } from "./participant-registry.js";
+import { type Participant, ParticipantRegistry } from "./participant-registry.js";
 import type { ProjectRuntimeConfig } from "./project-config.js";
-import type { ProjectRuntimeState } from "./types.js";
 import { OutboundDeliveryError } from "./project-transport.js";
+import type { ProjectRuntimeState } from "./types.js";
 
 /** Factory builds the per-project agent host (real PiSdkHost, or a fake in tests). */
 export interface ProjectHostFactoryContext {
@@ -114,7 +111,10 @@ export class ProjectController {
       });
       await this.session.start();
       this.state = "idle";
-      this.opts.logger.info({ project: this.projectId, cwd: this.config.cwd }, "project controller started");
+      this.opts.logger.info(
+        { project: this.projectId, cwd: this.config.cwd },
+        "project controller started",
+      );
     } catch (err) {
       this.state = "error";
       this.error = formatUserFacingError(err);
@@ -169,7 +169,10 @@ export class ProjectController {
 
       // ③ Notify other project participants when a sender speaks (ordinary messages only).
       await this.notifyOthers(msg).catch((err: unknown) =>
-        this.opts.logger.warn({ err, project: this.projectId, messageId: msg.messageId }, "notify others failed"),
+        this.opts.logger.warn(
+          { err, project: this.projectId, messageId: msg.messageId },
+          "notify others failed",
+        ),
       );
       await session.handleUserMessage(msg);
       this.reflectState(session);
@@ -193,7 +196,12 @@ export class ProjectController {
         .sendText(toTurnContext(msg), `⚠️ 消息处理失败：${this.error}`)
         .catch((sendErr: unknown) =>
           this.opts.logger.error(
-            { err: sendErr, project: this.projectId, account: msg.accountId, messageId: msg.messageId },
+            {
+              err: sendErr,
+              project: this.projectId,
+              account: msg.accountId,
+              messageId: msg.messageId,
+            },
             "unexpected-error reply delivery failed",
           ),
         );
@@ -202,9 +210,11 @@ export class ProjectController {
 
   async stop(): Promise<void> {
     this.state = "stopping";
-    await this.session?.stop().catch((err: unknown) =>
-      this.opts.logger.warn({ err, project: this.projectId }, "session stop error"),
-    );
+    await this.session
+      ?.stop()
+      .catch((err: unknown) =>
+        this.opts.logger.warn({ err, project: this.projectId }, "session stop error"),
+      );
     this.session = undefined;
     this.state = "off";
   }
@@ -256,7 +266,12 @@ export class ProjectController {
   /** Send a proactive text to a participant via their account's transport. */
   private async sendTo(p: Participant, text: string): Promise<void> {
     await this.opts.transport.sendText(
-      { accountId: p.accountId, senderId: p.senderId, messageId: "broadcast", contextToken: p.contextToken },
+      {
+        accountId: p.accountId,
+        senderId: p.senderId,
+        messageId: "broadcast",
+        contextToken: p.contextToken,
+      },
       text,
     );
   }
@@ -266,7 +281,12 @@ export class ProjectController {
     for (const p of this.broadcastTargets()) {
       try {
         await this.opts.transport.setTyping(
-          { accountId: p.accountId, senderId: p.senderId, messageId: "typing", contextToken: p.contextToken },
+          {
+            accountId: p.accountId,
+            senderId: p.senderId,
+            messageId: "typing",
+            contextToken: p.contextToken,
+          },
           typing,
         );
       } catch (err) {

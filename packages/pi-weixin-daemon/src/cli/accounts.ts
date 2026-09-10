@@ -17,12 +17,14 @@ export function accountsCommand(): Command {
         console.log("No accounts. Run `pi-wx login --name <label>` to add one.");
         return;
       }
-      console.log("NAME        ID                         STATUS         USER              PROJECT        SINCE");
+      console.log(
+        "NAME        ID                         STATUS         USER              PROJECT        SINCE",
+      );
       for (const a of accounts) {
         const name = a.name ?? a.accountId;
         const user = a.userId ?? "-";
         const project = a.projectId ?? "-";
-        const since = (a.since ?? "").length > 19 ? a.since!.slice(0, 19) : a.since ?? "-";
+        const since = (a.since ?? "").length > 19 ? a.since!.slice(0, 19) : (a.since ?? "-");
         console.log(
           `${name.padEnd(11)}${a.accountId.padEnd(26)}${a.status.padEnd(15)}${user.padEnd(17)}${project.padEnd(15)}${since}`,
         );

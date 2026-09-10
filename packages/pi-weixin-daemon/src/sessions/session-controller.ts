@@ -1,14 +1,14 @@
 import type { InteractionPort } from "../pi/ports.js";
-import type { SessionRuntimePort } from "./runtime-port.js";
 import type { Logger } from "../util/logger.js";
+import { formatUserFacingError } from "../util/user-facing-error.js";
 import type { InboundMessage, TurnContext, WeixinTransport } from "../weixin/types.js";
-import { helpText, type DaemonCommand } from "./commands.js";
+import { type DaemonCommand, helpText } from "./commands.js";
 import { buildPromptInput } from "./prompt.js";
 import { ResponseAccumulator } from "./response-accumulator.js";
+import type { SessionRuntimePort } from "./runtime-port.js";
 import { BUSY_REPLY, type SessionState } from "./session-state.js";
+import { type CurrentTurn, toTurnContext } from "./turn-context.js";
 import type { DeliveryReport, TurnIssue, TurnOutcome } from "./turn-outcome.js";
-import { CurrentTurn, toTurnContext } from "./turn-context.js";
-import { formatUserFacingError } from "../util/user-facing-error.js";
 
 /** Default auto-close idle window for a shared session (10 minutes). */
 export const DEFAULT_SESSION_IDLE_MS = 10 * 60 * 1000;
@@ -90,38 +90,59 @@ export class SessionController {
       clearTimeout(this.idleTimer);
       this.idleTimer = undefined;
     }
-    await this.deps.host.stop().catch((err: unknown) =>
-      this.deps.logger.warn({ err, project: this.deps.projectId }, "host stop error"),
-    );
+    await this.deps.host
+      .stop()
+      .catch((err: unknown) =>
+        this.deps.logger.warn({ err, project: this.deps.projectId }, "host stop error"),
+      );
     this.state = "inactive";
   }
 
   /** Execute an explicitly-mapped daemon command (classification done upstream). */
   async handleCommand(command: DaemonCommand, msg: InboundMessage): Promise<void>;
   async handleCommand(command: DaemonCommand, args: string, msg: InboundMessage): Promise<void>;
-  async handleCommand(command: DaemonCommand, argsOrMsg: string | InboundMessage, maybeMsg?: InboundMessage): Promise<void> {
+  async handleCommand(
+    command: DaemonCommand,
+    argsOrMsg: string | InboundMessage,
+    maybeMsg?: InboundMessage,
+  ): Promise<void> {
     const args = typeof argsOrMsg === "string" ? argsOrMsg : "";
     const msg = typeof argsOrMsg === "string" ? maybeMsg! : argsOrMsg;
     this.lastActivityAt = Date.now();
     this.scheduleIdleCheck();
 
     const turn = toTurnContext(msg);
-    this.deps.logger.info({ command, accountId: msg.accountId, messageId: msg.messageId }, "command");
+    this.deps.logger.info(
+      { command, accountId: msg.accountId, messageId: msg.messageId },
+      "command",
+    );
     try {
-      if (this.deps.interaction.isUiInteractionActive() && command !== "abort" && command !== "status" && command !== "help") {
+      if (
+        this.deps.interaction.isUiInteractionActive() &&
+        command !== "abort" &&
+        command !== "status" &&
+        command !== "help"
+      ) {
         await this.reply(turn, "当前正在等待 Pi UI 交互回复，请先完成或中止该交互。");
         return;
       }
       await this.executeCommand(command, args, turn);
     } catch (err) {
-      this.deps.logger.error({ err, command, project: this.deps.projectId }, "command execution failed");
+      this.deps.logger.error(
+        { err, command, project: this.deps.projectId },
+        "command execution failed",
+      );
       // A failed outbound send cannot be reported over the same failed channel;
       // let that second failure reach the project boundary for structured logging.
       await this.reply(turn, `⚠️ 命令 /${command} 执行失败：${formatUserFacingError(err)}`);
     }
   }
 
-  private async executeCommand(command: DaemonCommand, args: string, turn: TurnContext): Promise<void> {
+  private async executeCommand(
+    command: DaemonCommand,
+    args: string,
+    turn: TurnContext,
+  ): Promise<void> {
     switch (command) {
       case "help":
         await this.reply(turn, helpText(args));
@@ -230,7 +251,10 @@ export class SessionController {
         this.deps.logger.info({ accountId: msg.accountId }, "UI response received");
         this.deps.interaction.tryResolveUi(turn, msg.text ?? "");
       } else {
-        this.deps.logger.info({ accountId: msg.accountId, senderId: msg.senderId }, "busy refusal (ui)");
+        this.deps.logger.info(
+          { accountId: msg.accountId, senderId: msg.senderId },
+          "busy refusal (ui)",
+        );
         await this.reply(toTurnContext(msg), BUSY_REPLY);
       }
       return;
@@ -251,7 +275,10 @@ export class SessionController {
     }
 
     if (this.state === "busy" || this.state === "replacing") {
-      this.deps.logger.info({ accountId: msg.accountId, senderId: msg.senderId, state: this.state }, "busy refusal");
+      this.deps.logger.info(
+        { accountId: msg.accountId, senderId: msg.senderId, state: this.state },
+        "busy refusal",
+      );
       await this.reply(turn, BUSY_REPLY);
       return;
     }
@@ -318,7 +345,10 @@ export class SessionController {
             "agent turn timed out",
           );
         } else {
-          this.deps.logger.warn({ err, project: this.deps.projectId, messageId: msg.messageId }, "agent run failed");
+          this.deps.logger.warn(
+            { err, project: this.deps.projectId, messageId: msg.messageId },
+            "agent run failed",
+          );
           outcome = {
             status: "error",
             text: accumulator.accumulatedText.trim(),
@@ -346,7 +376,10 @@ export class SessionController {
         if (this.deps.broadcastTyping) await this.deps.broadcastTyping(typing);
         else await this.deps.transport.setTyping(turn, typing);
       } catch (err) {
-        this.deps.logger.warn({ err, project: this.deps.projectId, typing }, "typing update failed (ignored)");
+        this.deps.logger.warn(
+          { err, project: this.deps.projectId, typing },
+          "typing update failed (ignored)",
+        );
       }
     };
 
@@ -369,7 +402,11 @@ export class SessionController {
     };
   }
 
-  private async deliverOutcome(turn: TurnContext, outcome: TurnOutcome, messageId: string): Promise<void> {
+  private async deliverOutcome(
+    turn: TurnContext,
+    outcome: TurnOutcome,
+    messageId: string,
+  ): Promise<void> {
     if (outcome.status === "success") {
       if (outcome.text) {
         if (this.deps.broadcastText) {
@@ -485,7 +522,9 @@ export class SessionController {
     const pages = Math.max(1, Math.ceil(selector.options.length / pageSize));
     selector.page = Math.min(selector.page, pages - 1);
     const slice = selector.options.slice(selector.page * pageSize, (selector.page + 1) * pageSize);
-    const rows = slice.map((item, i) => `- **${String.fromCharCode(97 + i)}.** ${selectorLabel(item)}`);
+    const rows = slice.map(
+      (item, i) => `- **${String.fromCharCode(97 + i)}.** ${selectorLabel(item)}`,
+    );
     const sections: string[] = [];
     if (selector.kind === "model" || selector.kind === "thinking") {
       const status = this.deps.host.getStatus();
@@ -495,15 +534,24 @@ export class SessionController {
         `- 思考强度：${status.thinkingLevel ?? "unknown"}`,
       );
     }
-    sections.push(selector.kind === "resume" ? "**选择会话**" : selector.kind === "model" ? "**选择模型**" : "**选择思考强度**");
+    sections.push(
+      selector.kind === "resume"
+        ? "**选择会话**"
+        : selector.kind === "model"
+          ? "**选择模型**"
+          : "**选择思考强度**",
+    );
     sections.push(...rows);
-    if (selector.kind !== "thinking") sections.push(`页 ${selector.page + 1}/${pages}（回复页码翻页）`);
+    if (selector.kind !== "thinking")
+      sections.push(`页 ${selector.page + 1}/${pages}（回复页码翻页）`);
     if (selector.kind === "model" && !this.deps.host.hasSession()) {
       sections.push("当前没有活动会话，选择将切换该项目的默认模型。");
     }
-    sections.push(selector.kind === "resume"
-      ? "回复字母选择、页码翻页，或 `q` 退出。"
-      : "回复字母选择、`字母 default` 设项目默认，或 `q` 退出。");
+    sections.push(
+      selector.kind === "resume"
+        ? "回复字母选择、页码翻页，或 `q` 退出。"
+        : "回复字母选择、`字母 default` 设项目默认，或 `q` 退出。",
+    );
     await this.reply(selector.turn, sections.join("\n\n"));
   }
 
@@ -537,15 +585,22 @@ export class SessionController {
       await this.reply(selector.turn, "无法识别，请回复选项字母、页码或 q 退出。");
       return;
     }
-    const makeDefault = Boolean(match[2]) || (selector.kind === "model" && !this.deps.host.hasSession());
+    const makeDefault =
+      Boolean(match[2]) || (selector.kind === "model" && !this.deps.host.hasSession());
     this.clearSelector();
     if (selector.kind === "model") {
       const model = item as ModelChoice;
       await this.deps.host.setModel(model.provider, model.id, makeDefault);
-      await this.reply(selector.turn, `✅ 已选择模型 ${model.provider}/${model.id}${makeDefault ? "，并设为项目默认" : ""}。`);
+      await this.reply(
+        selector.turn,
+        `✅ 已选择模型 ${model.provider}/${model.id}${makeDefault ? "，并设为项目默认" : ""}。`,
+      );
     } else if (selector.kind === "thinking") {
       const actual = await this.deps.host.setThinkingLevel(item as string, makeDefault);
-      await this.reply(selector.turn, `✅ 思考强度已设为 ${actual}${makeDefault ? "，并设为项目默认" : ""}。`);
+      await this.reply(
+        selector.turn,
+        `✅ 思考强度已设为 ${actual}${makeDefault ? "，并设为项目默认" : ""}。`,
+      );
     } else {
       await this.switchToSession(selector.turn, (item as SessionChoice).path);
     }
@@ -620,25 +675,41 @@ export class SessionController {
       this.state = "inactive";
       this.deps.logger.info({ project: this.deps.projectId }, "session auto-closed (idle)");
       if (this.deps.broadcastText) {
-        await this.deps.broadcastText("本次会话已关闭").catch((err: unknown) =>
-          this.deps.logger.warn({ err, project: this.deps.projectId }, "idle close broadcast failed"),
-        );
+        await this.deps
+          .broadcastText("本次会话已关闭")
+          .catch((err: unknown) =>
+            this.deps.logger.warn(
+              { err, project: this.deps.projectId },
+              "idle close broadcast failed",
+            ),
+          );
       }
     } catch (err) {
       this.state = "faulted";
       this.error = formatUserFacingError(err);
       this.deps.logger.error({ err, project: this.deps.projectId }, "session auto-close failed");
       if (this.deps.broadcastText) {
-        await this.deps.broadcastText(`⚠️ 会话自动关闭失败：${this.error}`).catch((sendErr: unknown) =>
-          this.deps.logger.error({ err: sendErr, project: this.deps.projectId }, "idle-close error broadcast failed"),
-        );
+        await this.deps
+          .broadcastText(`⚠️ 会话自动关闭失败：${this.error}`)
+          .catch((sendErr: unknown) =>
+            this.deps.logger.error(
+              { err: sendErr, project: this.deps.projectId },
+              "idle-close error broadcast failed",
+            ),
+          );
       }
     }
   }
 }
 
 type ModelChoice = { provider: string; id: string; name: string };
-type SessionChoice = { path: string; id: string; modifiedAt: number; firstMessage: string; name?: string };
+type SessionChoice = {
+  path: string;
+  id: string;
+  modifiedAt: number;
+  firstMessage: string;
+  name?: string;
+};
 type SlashSelectorBase = {
   turn: TurnContext;
   page: number;
@@ -656,7 +727,8 @@ function sameOrigin(a: TurnContext, b: TurnContext): boolean {
 
 function selectorLabel(item: ModelChoice | SessionChoice | string): string {
   if (typeof item === "string") return item;
-  if ("provider" in item) return `${item.provider}/${item.id}${item.name === item.id ? "" : ` (${item.name})`}`;
+  if ("provider" in item)
+    return `${item.provider}/${item.id}${item.name === item.id ? "" : ` (${item.name})`}`;
   const title = item.name || item.firstMessage || item.id;
   return `${new Date(item.modifiedAt).toLocaleString("zh-CN")} ${title.replace(/\s+/g, " ").slice(0, 60)}`;
 }

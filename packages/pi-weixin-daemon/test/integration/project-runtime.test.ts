@@ -1,10 +1,10 @@
-import { describe, it, expect, vi } from "vitest";
-import { ProjectManager } from "../../src/projects/project-manager.js";
+import { describe, expect, it, vi } from "vitest";
 import { PiInitializationError } from "../../src/pi/runtime-factory.js";
-import { createLogger } from "../../src/util/logger.js";
+import { ProjectManager } from "../../src/projects/project-manager.js";
 import type { ProjectConfig } from "../../src/projects/types.js";
-import { FakeWeixinTransport, makeInboundMessage } from "../helpers/fake-transport.js";
+import { createLogger } from "../../src/util/logger.js";
 import { FakeAgentRuntime } from "../helpers/fake-runtime.js";
+import { FakeWeixinTransport, makeInboundMessage } from "../helpers/fake-transport.js";
 
 const logger = createLogger({ level: "silent" });
 
@@ -91,7 +91,9 @@ describe("ProjectRuntime: sender marker + project-wide notify/broadcast + idle c
 
   it("keeps the Pi project healthy when one broadcast delivery fails", async () => {
     class FailingTransport extends FakeWeixinTransport {
-      override async sendText(): Promise<void> { throw new Error("weixin unavailable"); }
+      override async sendText(): Promise<void> {
+        throw new Error("weixin unavailable");
+      }
     }
     const transports = new Map<string, FakeWeixinTransport>([
       ["A", new FailingTransport()],

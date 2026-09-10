@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   migrateLegacyAccounts,
   resolveAccountsDir,
@@ -45,16 +45,26 @@ describe("paths (XDG layout)", () => {
     const legacyDir = path.join(stateDir, "weixin", "accounts");
     fs.mkdirSync(legacyDir, { recursive: true });
     fs.writeFileSync(path.join(legacyDir, "acct-a.json"), JSON.stringify({ token: "t1" }), "utf-8");
-    fs.writeFileSync(path.join(stateDir, "weixin", "accounts.json"), JSON.stringify(["acct-a"]), "utf-8");
+    fs.writeFileSync(
+      path.join(stateDir, "weixin", "accounts.json"),
+      JSON.stringify(["acct-a"]),
+      "utf-8",
+    );
 
     migrateLegacyAccounts();
     expect(fs.existsSync(path.join(dataDir, "accounts", "acct-a.json"))).toBe(true);
     expect(fs.existsSync(path.join(dataDir, "accounts", "accounts.json"))).toBe(true);
 
     // idempotent: second run doesn't clobber existing target
-    fs.writeFileSync(path.join(dataDir, "accounts", "acct-a.json"), JSON.stringify({ token: "t2" }), "utf-8");
+    fs.writeFileSync(
+      path.join(dataDir, "accounts", "acct-a.json"),
+      JSON.stringify({ token: "t2" }),
+      "utf-8",
+    );
     migrateLegacyAccounts();
-    const moved = JSON.parse(fs.readFileSync(path.join(dataDir, "accounts", "acct-a.json"), "utf-8"));
+    const moved = JSON.parse(
+      fs.readFileSync(path.join(dataDir, "accounts", "acct-a.json"), "utf-8"),
+    );
     expect(moved.token).toBe("t2");
   });
 

@@ -1,9 +1,13 @@
 import type { Logger } from "../../util/logger.js";
-import { classifyFetchError, getUpdates as getUpdatesDefault, type GetUpdatesFn } from "../api/api.js";
-import { pauseSession, getRemainingPauseMs, STALE_TOKEN_ERRCODE } from "../api/session-guard.js";
+import {
+  classifyFetchError,
+  type GetUpdatesFn,
+  getUpdates as getUpdatesDefault,
+} from "../api/api.js";
+import { getRemainingPauseMs, pauseSession, STALE_TOKEN_ERRCODE } from "../api/session-guard.js";
+import type { WeixinMessage } from "../api/types.js";
 import { loadGetUpdatesBuf, saveGetUpdatesBuf } from "../storage/sync-buf.js";
 import { redactBody } from "../util/redact.js";
-import type { WeixinMessage } from "../api/types.js";
 
 const DEFAULT_LONG_POLL_TIMEOUT_MS = 35_000;
 const MAX_CONSECUTIVE_FAILURES = 3;
@@ -69,13 +73,12 @@ export async function monitorWeixinProvider(opts: MonitorWeixinOpts): Promise<vo
         (resp.ret !== undefined && resp.ret !== 0) ||
         (resp.errcode !== undefined && resp.errcode !== 0);
       if (isApiError) {
-        const isStaleToken = resp.errcode === STALE_TOKEN_ERRCODE || resp.ret === STALE_TOKEN_ERRCODE;
+        const isStaleToken =
+          resp.errcode === STALE_TOKEN_ERRCODE || resp.ret === STALE_TOKEN_ERRCODE;
         if (isStaleToken) {
           pauseSession(accountId);
           const pauseMs = getRemainingPauseMs(accountId);
-          log.error(
-            `token is stale, pausing all requests for ${Math.ceil(pauseMs / 60_000)} min`,
-          );
+          log.error(`token is stale, pausing all requests for ${Math.ceil(pauseMs / 60_000)} min`);
           consecutiveFailures = 0;
           await sleep(pauseMs, abortSignal);
           continue;
@@ -86,7 +89,9 @@ export async function monitorWeixinProvider(opts: MonitorWeixinOpts): Promise<vo
           `getUpdates failed: ret=${resp.ret} errcode=${resp.errcode} errmsg=${resp.errmsg ?? ""} (${consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES}) body=${redactBody(JSON.stringify(resp))}`,
         );
         if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-          log.error(`getUpdates: ${MAX_CONSECUTIVE_FAILURES} consecutive failures, backing off 30s`);
+          log.error(
+            `getUpdates: ${MAX_CONSECUTIVE_FAILURES} consecutive failures, backing off 30s`,
+          );
           consecutiveFailures = 0;
           await sleep(backoffDelayMs, abortSignal);
         } else {
@@ -114,9 +119,7 @@ export async function monitorWeixinProvider(opts: MonitorWeixinOpts): Promise<vo
         // never see that response arrive). Fire-and-forget keeps the loop
         // unblocked; the bridge serializes concurrent messages via its own
         // IDLE/RUNNING/WAITING_FOR_UI state machine.
-        onInbound(full).catch((err: unknown) =>
-          log.error({ err }, "inbound handling failed"),
-        );
+        onInbound(full).catch((err: unknown) => log.error({ err }, "inbound handling failed"));
       }
     } catch (err) {
       if (abortSignal?.aborted) {

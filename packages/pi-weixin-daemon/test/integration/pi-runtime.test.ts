@@ -1,14 +1,18 @@
-import { describe, it, expect, afterEach } from "vitest";
 import { getAgentDir, ProjectTrustStore } from "@earendil-works/pi-coding-agent";
+import { afterEach, describe, expect, it } from "vitest";
 import { PiSdkHost } from "../../src/pi/sdk-host.js";
 import { createLogger } from "../../src/util/logger.js";
-import { createTmpProject, waitForMarker, type TmpProject } from "../helpers/tmp-project.js";
+import { createTmpProject, type TmpProject, waitForMarker } from "../helpers/tmp-project.js";
 
 const logger = createLogger({ level: "warn" });
 
 const TIMEOUT = 120_000;
 
-async function promptAndExpectMarker(runtime: PiSdkHost, input: string, markerFile: string): Promise<string> {
+async function promptAndExpectMarker(
+  runtime: PiSdkHost,
+  input: string,
+  markerFile: string,
+): Promise<string> {
   await runtime.prompt({
     text: `请调用 mark_test_tool 工具，参数 input 的值为 ${input}。只调用这个工具，不要做其他事情。`,
   });

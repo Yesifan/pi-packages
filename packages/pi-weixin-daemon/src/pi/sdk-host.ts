@@ -1,16 +1,17 @@
+import type { ThinkingLevel } from "@earendil-works/pi-ai";
 import {
+  type AgentSession,
+  type AgentSessionRuntime,
   createAgentSessionRuntime,
+  type ExtensionFactory,
+  type ExtensionUIContext,
   getAgentDir,
   ModelRuntime,
   SessionManager,
   SettingsManager,
-  type AgentSession,
-  type AgentSessionRuntime,
-  type ExtensionFactory,
-  type ExtensionUIContext,
 } from "@earendil-works/pi-coding-agent";
 import type { Logger } from "../util/logger.js";
-import { toPiHostEvent, type PiHostEvent } from "./events.js";
+import { type PiHostEvent, toPiHostEvent } from "./events.js";
 import { PiExtensionHost } from "./extension-host.js";
 import { resolveProjectTrust } from "./project-trust.js";
 import { createPiRuntimeFactory, PiInitializationError } from "./runtime-factory.js";
@@ -23,7 +24,6 @@ import type {
   HostStatus,
   SessionSwitchResult,
 } from "./types.js";
-import type { ThinkingLevel } from "@earendil-works/pi-ai";
 
 export interface PiSdkHostOptions {
   /** Project working directory. The single entry point for the project. */
@@ -185,7 +185,11 @@ export class PiSdkHost {
     const models = this.runtime
       ? await this.runtime.services.modelRuntime.getAvailable()
       : await (await ModelRuntime.create()).getAvailable();
-    return models.map((model) => ({ provider: model.provider, id: model.id, name: model.name ?? model.id }));
+    return models.map((model) => ({
+      provider: model.provider,
+      id: model.id,
+      name: model.name ?? model.id,
+    }));
   }
 
   async setModel(provider: string, modelId: string, projectDefault: boolean): Promise<void> {
@@ -200,12 +204,22 @@ export class PiSdkHost {
   }
 
   async getThinkingLevels(): Promise<string[]> {
-    return this.sessionRef?.getAvailableThinkingLevels() ?? ["off", "minimal", "low", "medium", "high", "xhigh"];
+    return (
+      this.sessionRef?.getAvailableThinkingLevels() ?? [
+        "off",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+      ]
+    );
   }
 
   async setThinkingLevel(level: string, projectDefault: boolean): Promise<string> {
     if (this.sessionRef) this.sessionRef.setThinkingLevel(level as ThinkingLevel);
-    if (projectDefault || !this.sessionRef) await this.updateProjectSettings("defaultThinkingLevel", level);
+    if (projectDefault || !this.sessionRef)
+      await this.updateProjectSettings("defaultThinkingLevel", level);
     return String(this.sessionRef?.thinkingLevel ?? level);
   }
 
@@ -231,13 +245,17 @@ export class PiSdkHost {
   }
 
   private async updateProjectSettings(field: string, value: unknown): Promise<void> {
-    const settings = this.runtime?.services.settingsManager ?? SettingsManager.create(this.opts.cwd, getAgentDir());
+    const settings =
+      this.runtime?.services.settingsManager ??
+      SettingsManager.create(this.opts.cwd, getAgentDir());
     // Pi 0.84 exposes project-scoped package setters but not scalar defaults;
     // use its project update primitive so locking, merge and error handling stay in Pi.
     const scoped = settings as unknown as {
       updateProjectSettings(key: string, update: (project: Record<string, unknown>) => void): void;
     };
-    scoped.updateProjectSettings(field, (project) => { project[field] = value; });
+    scoped.updateProjectSettings(field, (project) => {
+      project[field] = value;
+    });
     await settings.flush();
     const errors = settings.drainErrors();
     if (errors.length) throw errors[0]!.error;

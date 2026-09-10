@@ -1,15 +1,18 @@
 import path from "node:path";
-
-import { CDN_BASE_URL } from "../auth/accounts.js";
-import { uploadFileAttachmentToWeixin, uploadFileToWeixin, uploadVideoToWeixin } from "../cdn/upload.js";
-import { getMimeFromFilename } from "../media/mime.js";
 import { createLogger } from "../../util/logger.js";
 import { sendMessage } from "../api/api.js";
-import type { SendMessageReq, MessageItem } from "../api/types.js";
+import type { MessageItem, SendMessageReq } from "../api/types.js";
 import { MessageItemType, MessageState, MessageType } from "../api/types.js";
+import { CDN_BASE_URL } from "../auth/accounts.js";
+import type { UploadedFileInfo } from "../cdn/upload.js";
+import {
+  uploadFileAttachmentToWeixin,
+  uploadFileToWeixin,
+  uploadVideoToWeixin,
+} from "../cdn/upload.js";
+import { getMimeFromFilename } from "../media/mime.js";
 import { generateId } from "../util/random.js";
 import type { WeixinMessageSendOptions } from "./send.js";
-import type { UploadedFileInfo } from "../cdn/upload.js";
 
 const logger = createLogger();
 
@@ -141,17 +144,32 @@ export async function sendWeixinMediaFile(params: {
 
   if (mime.startsWith("video/")) {
     logger.info(`sending video filePath=${filePath} to=${to}`);
-    const uploaded = await uploadVideoToWeixin({ filePath, toUserId: to, opts: uploadOpts, cdnBaseUrl });
+    const uploaded = await uploadVideoToWeixin({
+      filePath,
+      toUserId: to,
+      opts: uploadOpts,
+      cdnBaseUrl,
+    });
     return sendVideoMessageWeixin({ to, text, uploaded, opts });
   }
   if (mime.startsWith("image/")) {
     logger.info(`sending image filePath=${filePath} to=${to}`);
-    const uploaded = await uploadFileToWeixin({ filePath, toUserId: to, opts: uploadOpts, cdnBaseUrl });
+    const uploaded = await uploadFileToWeixin({
+      filePath,
+      toUserId: to,
+      opts: uploadOpts,
+      cdnBaseUrl,
+    });
     return sendImageMessageWeixin({ to, text, uploaded, opts });
   }
 
   const fileName = path.basename(filePath);
   logger.info(`sending file attachment filePath=${filePath} name=${fileName} to=${to}`);
-  const uploaded = await uploadFileAttachmentToWeixin({ filePath, toUserId: to, opts: uploadOpts, cdnBaseUrl });
+  const uploaded = await uploadFileAttachmentToWeixin({
+    filePath,
+    toUserId: to,
+    opts: uploadOpts,
+    cdnBaseUrl,
+  });
   return sendFileMessageWeixin({ to, text, fileName, uploaded, opts });
 }

@@ -1,6 +1,6 @@
+import fs from "node:fs";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import fs from "node:fs";
 
 /**
  * M2 acceptance fixture: a project extension that registers a custom tool.

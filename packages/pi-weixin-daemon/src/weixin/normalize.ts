@@ -1,6 +1,6 @@
-import type { InboundAttachment, InboundMessage, MediaFailure } from "./types.js";
 import type { MessageItem, WeixinMessage } from "./api/types.js";
 import { MessageItemType, MessageType } from "./api/types.js";
+import type { InboundAttachment, InboundMessage, MediaFailure } from "./types.js";
 import { generateId } from "./util/random.js";
 
 /** Collect the concatenated text from a message's item_list (text + voice STT). */
@@ -34,11 +34,10 @@ export function normalizeInboundMessage(
   const messageId =
     raw.message_id !== undefined && raw.message_id !== 0
       ? String(raw.message_id)
-      : raw.client_id ?? generateId("msg");
+      : (raw.client_id ?? generateId("msg"));
 
   // Only user-originated, finished messages are agent input.
-  const isUserMessage =
-    raw.message_type === undefined || raw.message_type === MessageType.USER;
+  const isUserMessage = raw.message_type === undefined || raw.message_type === MessageType.USER;
 
   return {
     accountId,

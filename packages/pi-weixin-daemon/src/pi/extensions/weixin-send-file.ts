@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { Type, type Static } from "typebox";
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
+import { type Static, Type } from "typebox";
 import type { Logger } from "../../util/logger.js";
 import { sanitizeFilename } from "../../util/sanitize.js";
 import type { TurnContext } from "../../weixin/types.js";
@@ -78,7 +78,9 @@ export function createWeixinSendFileExtension(deps: WeixinSendFileExtensionDeps)
         if (!turn) {
           deps.logger.warn("weixin_send_file called with no active turn");
           return {
-            content: [{ type: "text", text: "Error: no active Weixin conversation for this turn." }],
+            content: [
+              { type: "text", text: "Error: no active Weixin conversation for this turn." },
+            ],
             details: { error: "no active turn" },
           };
         }

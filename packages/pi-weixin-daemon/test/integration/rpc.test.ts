@@ -1,13 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { rpcCall } from "../../src/cli/rpc-client.js";
 import { Daemon } from "../../src/daemon.js";
 import { ProjectStore } from "../../src/projects/project-store.js";
-import { registerWeixinAccountId, saveWeixinAccount } from "../../src/weixin/auth/accounts.js";
-import { rpcCall } from "../../src/cli/rpc-client.js";
 import { createLogger } from "../../src/util/logger.js";
-import { FakeWeixinTransport } from "../helpers/fake-transport.js";
+import { registerWeixinAccountId, saveWeixinAccount } from "../../src/weixin/auth/accounts.js";
 import { FakeAgentRuntime } from "../helpers/fake-runtime.js";
+import { FakeWeixinTransport } from "../helpers/fake-transport.js";
 
 const logger = createLogger({ level: "silent" });
 const OLD_DATA = process.env.PI_WEIXIN_DATA_DIR;
@@ -49,12 +49,20 @@ describe("daemon UDS RPC", () => {
     await daemon.start();
 
     // Initially empty.
-    let list = await rpcCall<Array<{ name: string; state: string }>>("project.list", {}, socketPath);
+    let list = await rpcCall<Array<{ name: string; state: string }>>(
+      "project.list",
+      {},
+      socketPath,
+    );
     expect(list).toEqual([]);
 
     // Create (disabled by default, accounts=[]).
     await rpcCall("project.create", { name: "foo", cwd: projectDir }, socketPath);
-    list = await rpcCall<Array<{ name: string; enabled: boolean; accounts: string[] }>>("project.list", {}, socketPath);
+    list = await rpcCall<Array<{ name: string; enabled: boolean; accounts: string[] }>>(
+      "project.list",
+      {},
+      socketPath,
+    );
     expect(list).toHaveLength(1);
     expect(list[0]!.name).toBe("foo");
     expect(list[0]!.enabled).toBe(false);
@@ -62,7 +70,11 @@ describe("daemon UDS RPC", () => {
 
     // Add an account by label.
     await rpcCall("project.account.add", { name: "foo", accounts: ["personal"] }, socketPath);
-    list = await rpcCall<Array<{ name: string; accounts: string[] }>>("project.list", {}, socketPath);
+    list = await rpcCall<Array<{ name: string; accounts: string[] }>>(
+      "project.list",
+      {},
+      socketPath,
+    );
     expect(list[0]!.accounts).toEqual(["personal"]);
 
     // Enable -> runtime starts.
@@ -81,7 +93,11 @@ describe("daemon UDS RPC", () => {
 
     // Remove account by label.
     await rpcCall("project.account.remove", { name: "foo", accounts: ["personal"] }, socketPath);
-    list = await rpcCall<Array<{ name: string; accounts: string[] }>>("project.list", {}, socketPath);
+    list = await rpcCall<Array<{ name: string; accounts: string[] }>>(
+      "project.list",
+      {},
+      socketPath,
+    );
     expect(list[0]!.accounts).toEqual([]);
 
     // Remove.

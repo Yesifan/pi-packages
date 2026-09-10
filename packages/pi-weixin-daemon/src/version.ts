@@ -10,8 +10,12 @@ function readPackageVersion(): string {
     const candidate = path.join(dir, "package.json");
     if (fs.existsSync(candidate)) {
       try {
-        const parsed = JSON.parse(fs.readFileSync(candidate, "utf-8")) as { name?: string; version?: string };
-        if (parsed && parsed.name === "pi-weixin-daemon" && typeof parsed.version === "string") return parsed.version;
+        const parsed = JSON.parse(fs.readFileSync(candidate, "utf-8")) as {
+          name?: string;
+          version?: string;
+        };
+        if (parsed && parsed.name === "pi-weixin-daemon" && typeof parsed.version === "string")
+          return parsed.version;
       } catch {
         // keep walking up
       }

@@ -73,7 +73,10 @@ export class WeixinInteractionController implements InteractionPort {
       opts?.signal?.addEventListener("abort", onAbort, { once: true });
       let timeoutHandle: NodeJS.Timeout | undefined;
       if (opts?.timeoutMs) {
-        timeoutHandle = setTimeout(() => waiter.reject(new Error("UI interaction timed out")), opts.timeoutMs);
+        timeoutHandle = setTimeout(
+          () => waiter.reject(new Error("UI interaction timed out")),
+          opts.timeoutMs,
+        );
       }
       this.uiWaiters.push(waiter);
     });

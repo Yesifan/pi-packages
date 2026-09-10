@@ -1,14 +1,14 @@
-import { describe, it, expect, afterEach } from "vitest";
 import fs from "node:fs";
+import { afterEach, describe, expect, it } from "vitest";
 import { PiSdkHost } from "../../src/pi/sdk-host.js";
 import { WeixinUIContext } from "../../src/pi/ui-context.js";
 import { SessionController } from "../../src/sessions/session-controller.js";
 import { CurrentTurn } from "../../src/sessions/turn-context.js";
-import { WeixinInteractionController } from "../../src/weixin/interaction-controller.js";
 import { createLogger } from "../../src/util/logger.js";
-import { createTmpProject, waitForMarker } from "../helpers/tmp-project.js";
+import { WeixinInteractionController } from "../../src/weixin/interaction-controller.js";
 import { FakeWeixinTransport, makeInboundMessage } from "../helpers/fake-transport.js";
 import { MultiAccountTransport } from "../helpers/multi-account-transport.js";
+import { createTmpProject, waitForMarker } from "../helpers/tmp-project.js";
 
 const logger = createLogger({ level: "warn" });
 const TIMEOUT = 120_000;
@@ -56,7 +56,11 @@ describe("M9 e2e: extension UI dialogs completed over weixin (real SDK)", () => 
     return { project, transport, session };
   }
 
-  async function waitForText(transport: FakeWeixinTransport, needle: string, timeoutMs = TIMEOUT): Promise<void> {
+  async function waitForText(
+    transport: FakeWeixinTransport,
+    needle: string,
+    timeoutMs = TIMEOUT,
+  ): Promise<void> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       if (transport.sentTexts.some((s) => s.text.includes(needle))) return;
@@ -143,7 +147,12 @@ describe("M9 e2e: extension UI dialogs completed over weixin (real SDK)", () => 
       expect(session.getState()).toBe("busy");
 
       await session.handleUserMessage(
-        makeInboundMessage({ accountId: "acct-a", senderId: "user-a", messageId: "m2", text: "v9.9.9" }),
+        makeInboundMessage({
+          accountId: "acct-a",
+          senderId: "user-a",
+          messageId: "m2",
+          text: "v9.9.9",
+        }),
       );
 
       await turnPromise;

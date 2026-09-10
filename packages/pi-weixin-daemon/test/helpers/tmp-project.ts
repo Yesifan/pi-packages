@@ -11,7 +11,10 @@ export interface TmpProject {
 }
 
 /** Create a temporary project with .pi/extensions fixtures. */
-export function createTmpProject(name: string, options: { withUiExtension?: boolean } = {}): TmpProject {
+export function createTmpProject(
+  name: string,
+  options: { withUiExtension?: boolean } = {},
+): TmpProject {
   const dir = path.join(TEST_ROOT, name);
   fs.rmSync(dir, { recursive: true, force: true });
   const extDir = path.join(dir, ".pi", "extensions");

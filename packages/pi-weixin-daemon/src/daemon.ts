@@ -1,32 +1,32 @@
 import fs from "node:fs";
 import path from "node:path";
-import { PiSdkHost } from "./pi/sdk-host.js";
+import { AccountManager } from "./accounts/account-manager.js";
+import { migrateLegacyAccounts } from "./config/paths.js";
+import { RpcServer } from "./daemon/rpc-server.js";
 import { createWeixinSendFileExtension } from "./pi/extensions/weixin-send-file.js";
 import { createWeixinSendProgressExtension } from "./pi/extensions/weixin-send-progress.js";
+import { PiSdkHost } from "./pi/sdk-host.js";
 import { WeixinUIContext } from "./pi/ui-context.js";
-import { AccountManager } from "./accounts/account-manager.js";
-import type { WeixinTransport } from "./weixin/types.js";
-import { migrateLegacyAccounts } from "./config/paths.js";
-import { ProjectManager } from "./projects/project-manager.js";
 import type {
   ProjectHostFactory,
   ProjectHostFactoryContext,
 } from "./projects/project-controller.js";
-import { WeixinFileSender } from "./weixin/file-sender.js";
+import { ProjectManager } from "./projects/project-manager.js";
 import { ProjectStore } from "./projects/project-store.js";
 import type { ProjectConfig, ProjectStoreData } from "./projects/types.js";
+import type { Logger } from "./util/logger.js";
+import { VERSION } from "./version.js";
 import {
   clearWeixinAccount,
-  loadWeixinAccount,
   listIndexedWeixinAccountIds,
+  loadWeixinAccount,
   resolveWeixinAccountIdByName,
   resolveWeixinAccountName,
   unregisterWeixinAccountId,
 } from "./weixin/auth/accounts.js";
+import { WeixinFileSender } from "./weixin/file-sender.js";
 import { ILinkWeixinTransport } from "./weixin/transport.js";
-import { RpcServer } from "./daemon/rpc-server.js";
-import { VERSION } from "./version.js";
-import type { Logger } from "./util/logger.js";
+import type { WeixinTransport } from "./weixin/types.js";
 
 export interface DaemonDeps {
   logger: Logger;
@@ -169,7 +169,10 @@ export class Daemon {
     }
 
     logger.info(
-      { accounts: this.accountManager.listAccounts().length, projects: this.getProjectStatuses().length },
+      {
+        accounts: this.accountManager.listAccounts().length,
+        projects: this.getProjectStatuses().length,
+      },
       "daemon started",
     );
   }
@@ -180,16 +183,16 @@ export class Daemon {
     const { logger } = this.deps;
     logger.info("daemon stopping");
 
-    await this.projectManager.stopAll().catch((err: unknown) =>
-      logger.warn({ err }, "projectManager stop error"),
-    );
-    await this.accountManager.stopAll().catch((err: unknown) =>
-      logger.warn({ err }, "accountManager stop error"),
-    );
+    await this.projectManager
+      .stopAll()
+      .catch((err: unknown) => logger.warn({ err }, "projectManager stop error"));
+    await this.accountManager
+      .stopAll()
+      .catch((err: unknown) => logger.warn({ err }, "accountManager stop error"));
 
-    await this.rpcServer?.stop().catch((err: unknown) =>
-      logger.warn({ err }, "rpc server stop error"),
-    );
+    await this.rpcServer
+      ?.stop()
+      .catch((err: unknown) => logger.warn({ err }, "rpc server stop error"));
     this.rpcServer = undefined;
 
     if (this.keepAlive) clearInterval(this.keepAlive);
@@ -220,7 +223,10 @@ export class Daemon {
     const ids: string[] = [];
     for (const label of labels) {
       const id = resolveWeixinAccountIdByName(label);
-      if (!id) throw new Error(`account "${label}" is not registered (run \`pi-wx login --name ${label}\` first)`);
+      if (!id)
+        throw new Error(
+          `account "${label}" is not registered (run \`pi-wx login --name ${label}\` first)`,
+        );
       ids.push(id);
     }
     this.store.addAccounts(name, ids);
@@ -258,9 +264,11 @@ export class Daemon {
     const index = new Set(listIndexedWeixinAccountIds());
     for (const info of this.accountManager.listAccounts()) {
       if (!index.has(info.accountId)) {
-        await this.accountManager.remove(info.accountId).catch((err: unknown) =>
-          this.deps.logger.warn({ err, account: info.accountId }, "account stop error"),
-        );
+        await this.accountManager
+          .remove(info.accountId)
+          .catch((err: unknown) =>
+            this.deps.logger.warn({ err, account: info.accountId }, "account stop error"),
+          );
         this.deps.logger.info({ account: info.accountId }, "account monitor stopped (logged out)");
       }
     }
@@ -280,14 +288,19 @@ export class Daemon {
     for (const { name, config } of this.store.list()) {
       if (config.accounts.includes(accountId)) {
         this.store.removeAccounts(name, [accountId]);
-        this.deps.logger.info({ project: name, account: accountId }, "removed account from project");
+        this.deps.logger.info(
+          { project: name, account: accountId },
+          "removed account from project",
+        );
       }
     }
     // 2. Stop its monitor first so it can't rewrite the sync/context-token files.
     if (this.accountManager.has(accountId)) {
-      await this.accountManager.remove(accountId).catch((err: unknown) =>
-        this.deps.logger.warn({ err, account: accountId }, "account stop error"),
-      );
+      await this.accountManager
+        .remove(accountId)
+        .catch((err: unknown) =>
+          this.deps.logger.warn({ err, account: accountId }, "account stop error"),
+        );
     }
     // 3. Clear credentials + index.
     clearWeixinAccount(accountId);

@@ -1,26 +1,28 @@
-import { describe, it, expect, vi } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
-import { BUSY_REPLY } from "../../src/sessions/session-state.js";
+import { describe, expect, it, vi } from "vitest";
 import { SessionController } from "../../src/sessions/session-controller.js";
+import { BUSY_REPLY } from "../../src/sessions/session-state.js";
 import { CurrentTurn } from "../../src/sessions/turn-context.js";
-import { WeixinInteractionController } from "../../src/weixin/interaction-controller.js";
 import { createLogger } from "../../src/util/logger.js";
+import { WeixinInteractionController } from "../../src/weixin/interaction-controller.js";
 import { FakeAgentRuntime } from "../helpers/fake-runtime.js";
 import { FakeWeixinTransport, makeInboundMessage } from "../helpers/fake-transport.js";
 
 const logger = createLogger({ level: "silent" });
 
-function setup(opts: {
-  broadcastText?: (t: string) => Promise<void>;
-  broadcastTyping?: (typing: boolean) => Promise<void>;
-  typingKeepaliveMs?: number;
-  senderLabel?: (m: { accountId: string }) => string;
-  runtime?: FakeAgentRuntime;
-  turnTimeoutMs?: number;
-  abortGraceMs?: number;
-  slashInteractionTimeoutMs?: number;
-} = {}) {
+function setup(
+  opts: {
+    broadcastText?: (t: string) => Promise<void>;
+    broadcastTyping?: (typing: boolean) => Promise<void>;
+    typingKeepaliveMs?: number;
+    senderLabel?: (m: { accountId: string }) => string;
+    runtime?: FakeAgentRuntime;
+    turnTimeoutMs?: number;
+    abortGraceMs?: number;
+    slashInteractionTimeoutMs?: number;
+  } = {},
+) {
   const runtime = opts.runtime ?? new FakeAgentRuntime();
   const transport = new FakeWeixinTransport();
   const currentTurn = new CurrentTurn();
@@ -92,7 +94,9 @@ describe("M6 session controller (fake transport + fake runtime)", () => {
   it("refreshes typing while a turn is running and stops after cleanup", async () => {
     const typing: boolean[] = [];
     const { runtime, session } = setup({
-      broadcastTyping: async (value) => { typing.push(value); },
+      broadcastTyping: async (value) => {
+        typing.push(value);
+      },
       typingKeepaliveMs: 10,
     });
 
@@ -140,7 +144,9 @@ describe("M6 session controller (fake transport + fake runtime)", () => {
   it("Pi protocol error produces an origin-only error reply", async () => {
     const broadcasts: string[] = [];
     const { runtime, transport, session } = setup({
-      broadcastText: async (text) => { broadcasts.push(text); },
+      broadcastText: async (text) => {
+        broadcasts.push(text);
+      },
     });
     const turnPromise = session.handleUserMessage(msgA("boom"));
     await vi.waitFor(() => expect(runtime.prompts.length).toBe(1));
@@ -172,7 +178,9 @@ describe("M6 session controller (fake transport + fake runtime)", () => {
   it("faults the session when a timed-out Pi run cannot be stopped", async () => {
     class StuckRuntime extends FakeAgentRuntime {
       override async abort(): Promise<void> {}
-      override async waitForIdle(): Promise<void> { await new Promise<void>(() => undefined); }
+      override async waitForIdle(): Promise<void> {
+        await new Promise<void>(() => undefined);
+      }
     }
     const runtime = new StuckRuntime();
     const { transport, session } = setup({ runtime, turnTimeoutMs: 5, abortGraceMs: 5 });
@@ -198,7 +206,9 @@ describe("M6 session controller (fake transport + fake runtime)", () => {
 describe("M6 commands over weixin", () => {
   it("reports command execution failures", async () => {
     class CompactFailureRuntime extends FakeAgentRuntime {
-      override async compact(): Promise<void> { throw new Error("compact exploded"); }
+      override async compact(): Promise<void> {
+        throw new Error("compact exploded");
+      }
     }
     const { transport, session } = setup({ runtime: new CompactFailureRuntime() });
     await session.handleCommand("compact", msgA("/compact"));
@@ -252,7 +262,6 @@ describe("M6 commands over weixin", () => {
     expect(transport.textsTo("acct-a").at(-1)).toContain("已中止");
     expect(session.getState()).toBe("ready");
   });
-
 });
 
 describe("slash selectors", () => {
@@ -268,7 +277,9 @@ describe("slash selectors", () => {
     expect(transport.textsTo("acct-a")[0]).toContain("选择将切换该项目的默认模型");
     await session.handleUserMessage(msgA("a", "choose-model"));
 
-    expect(runtime.selectedModels).toEqual([{ provider: "fake", id: "provider", projectDefault: true }]);
+    expect(runtime.selectedModels).toEqual([
+      { provider: "fake", id: "provider", projectDefault: true },
+    ]);
   });
 
   it("thinking selector shows the current model and thinking level", async () => {
@@ -286,12 +297,14 @@ describe("slash selectors", () => {
 
   it("resume selector blocks another account and restores the selected session", async () => {
     const runtime = new FakeAgentRuntime();
-    runtime.sessions = [{
-      path: "/fake/old.jsonl",
-      id: "old",
-      modifiedAt: Date.now(),
-      firstMessage: "old prompt",
-    }];
+    runtime.sessions = [
+      {
+        path: "/fake/old.jsonl",
+        id: "old",
+        modifiedAt: Date.now(),
+        firstMessage: "old prompt",
+      },
+    ];
     const { transport, session } = setup({ runtime });
     await session.start();
 
@@ -306,7 +319,11 @@ describe("slash selectors", () => {
 
   it("page changes refresh the selector inactivity timeout", async () => {
     const runtime = new FakeAgentRuntime();
-    runtime.models = Array.from({ length: 6 }, (_, i) => ({ provider: "fake", id: `m${i}`, name: `M${i}` }));
+    runtime.models = Array.from({ length: 6 }, (_, i) => ({
+      provider: "fake",
+      id: `m${i}`,
+      name: `M${i}`,
+    }));
     const { transport, session } = setup({ runtime, slashInteractionTimeoutMs: 40 });
     await session.start();
 
@@ -364,7 +381,9 @@ describe("M8 media routing through the session controller", () => {
         senderId: "user-a",
         messageId: "m-img",
         text: "看看这张图",
-        attachments: [{ kind: "image", localPath: imgPath, filename: "image.png", mimeType: "image/png" }],
+        attachments: [
+          { kind: "image", localPath: imgPath, filename: "image.png", mimeType: "image/png" },
+        ],
       }),
     );
     await vi.waitFor(() => expect(runtime.prompts.length).toBe(1));
@@ -391,7 +410,9 @@ describe("M8 media routing through the session controller", () => {
         senderId: "user-a",
         messageId: "m-ctx",
         text: "分析这个文件",
-        attachments: [{ kind: "file", localPath: filePath, filename: "data.csv", mimeType: "text/csv" }],
+        attachments: [
+          { kind: "file", localPath: filePath, filename: "data.csv", mimeType: "text/csv" },
+        ],
       }),
     );
     await vi.waitFor(() => expect(runtime.prompts.length).toBe(1));

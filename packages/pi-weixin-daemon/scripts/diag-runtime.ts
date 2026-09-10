@@ -27,7 +27,8 @@ runtime.onEvent((event) => {
     brief.toolName = event.toolName;
     brief.result = JSON.stringify(event.result).slice(0, 500);
   }
-  if (event.type === "queue_update") brief.queue = { steering: event.steering.length, followUp: event.followUp.length };
+  if (event.type === "queue_update")
+    brief.queue = { steering: event.steering.length, followUp: event.followUp.length };
   console.log("EVENT:", JSON.stringify(brief));
 });
 
@@ -35,7 +36,9 @@ await runtime.start();
 console.log("STATUS:", JSON.stringify(runtime.getStatus()));
 
 try {
-  await runtime.prompt("请调用 mark_test_tool 工具，参数 input 的值为 diag123。只调用这个工具，不要做其他事情。");
+  await runtime.prompt(
+    "请调用 mark_test_tool 工具，参数 input 的值为 diag123。只调用这个工具，不要做其他事情。",
+  );
   console.log("PROMPT DONE");
 } catch (err) {
   console.error("PROMPT ERROR:", err);

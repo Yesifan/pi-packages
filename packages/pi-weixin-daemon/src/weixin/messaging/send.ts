@@ -42,12 +42,17 @@ export async function sendTextMessage(params: {
 }): Promise<{ messageId: string }> {
   const { to, text, opts } = params;
   if (!opts.contextToken) {
-    opts.logger?.warn(`sendTextMessage: contextToken missing for to=${to}, sending without context`);
+    opts.logger?.warn(
+      `sendTextMessage: contextToken missing for to=${to}, sending without context`,
+    );
   }
   const chunks = splitTextChunks(text);
   let lastMessageId = "";
   let succeededChunks = 0;
-  opts.logger?.debug({ to, chunkCount: chunks.length, totalLength: text.length }, "sending weixin text");
+  opts.logger?.debug(
+    { to, chunkCount: chunks.length, totalLength: text.length },
+    "sending weixin text",
+  );
   for (const [chunkOffset, chunk] of chunks.entries()) {
     const chunkIndex = chunkOffset + 1;
     const clientId = generateId("pi-weixin-daemon");
@@ -94,7 +99,10 @@ export async function sendTextMessage(params: {
     );
   }
   if (chunks.length > 1) {
-    opts.logger?.info({ to, chunkCount: chunks.length, totalLength: text.length }, "weixin text chunks sent");
+    opts.logger?.info(
+      { to, chunkCount: chunks.length, totalLength: text.length },
+      "weixin text chunks sent",
+    );
   }
   return { messageId: lastMessageId };
 }

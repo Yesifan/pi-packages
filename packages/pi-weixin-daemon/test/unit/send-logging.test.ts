@@ -23,17 +23,21 @@ describe("sendTextMessage chunk logging", () => {
     const text = `PRIVATE-${"x".repeat(4500)}`;
     sendMessage.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error("network down"));
 
-    await expect(sendTextMessage({
-      to: "user-a",
-      text,
-      opts: { baseUrl: "https://example.test", contextToken: "ctx", logger: log },
-    })).rejects.toThrow("network down");
+    await expect(
+      sendTextMessage({
+        to: "user-a",
+        text,
+        opts: { baseUrl: "https://example.test", contextToken: "ctx", logger: log },
+      }),
+    ).rejects.toThrow("network down");
 
     expect(log.error).toHaveBeenCalledWith(
       expect.objectContaining({ chunkIndex: 2, chunkCount: 2, succeededChunks: 1 }),
       "weixin text chunk delivery failed",
     );
-    expect(JSON.stringify((log.debug as unknown as ReturnType<typeof vi.fn>).mock.calls)).not.toContain("PRIVATE-");
+    expect(
+      JSON.stringify((log.debug as unknown as ReturnType<typeof vi.fn>).mock.calls),
+    ).not.toContain("PRIVATE-");
     expect(sendMessage).toHaveBeenCalledTimes(2);
   });
 });

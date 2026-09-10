@@ -24,7 +24,10 @@ function envOr(env: string, fallback: string): string {
 
 /** Resolve the daemon config directory: $XDG_CONFIG_HOME/pi-weixin-daemon. */
 export function resolveConfigDir(): string {
-  return path.join(envOr("XDG_CONFIG_HOME", path.join(os.homedir(), ".config")), "pi-weixin-daemon");
+  return path.join(
+    envOr("XDG_CONFIG_HOME", path.join(os.homedir(), ".config")),
+    "pi-weixin-daemon",
+  );
 }
 
 /** Resolve the project config file path. */
@@ -36,7 +39,10 @@ export function resolveConfigPath(): string {
 export function resolveDataDir(): string {
   return (
     process.env.PI_WEIXIN_DATA_DIR?.trim() ||
-    path.join(envOr("XDG_DATA_HOME", path.join(os.homedir(), ".local", "share")), "pi-weixin-daemon")
+    path.join(
+      envOr("XDG_DATA_HOME", path.join(os.homedir(), ".local", "share")),
+      "pi-weixin-daemon",
+    )
   );
 }
 
@@ -49,7 +55,10 @@ export function resolveAccountsDir(): string {
 export function resolveStateDir(): string {
   return (
     process.env.PI_WEIXIN_STATE_DIR?.trim() ||
-    path.join(envOr("XDG_STATE_HOME", path.join(os.homedir(), ".local", "state")), "pi-weixin-daemon")
+    path.join(
+      envOr("XDG_STATE_HOME", path.join(os.homedir(), ".local", "state")),
+      "pi-weixin-daemon",
+    )
   );
 }
 
@@ -120,7 +129,10 @@ export function migrateLegacyAccounts(): void {
           return false;
         }
       });
-      if (remaining.length === 0 && fs.existsSync(path.join(resolveWeixinStateDir(), "accounts.json")) === false) {
+      if (
+        remaining.length === 0 &&
+        fs.existsSync(path.join(resolveWeixinStateDir(), "accounts.json")) === false
+      ) {
         fs.rmSync(legacyDir, { recursive: true, force: true });
       }
     } catch {

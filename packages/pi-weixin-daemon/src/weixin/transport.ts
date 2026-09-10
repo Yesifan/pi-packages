@@ -1,15 +1,15 @@
 import type { Logger } from "../util/logger.js";
-import type { InboundMessage, TurnContext, WeixinTransport } from "./types.js";
 import { getConfig, notifyStart, notifyStop, sendTyping as sendTypingApi } from "./api/api.js";
 import { WeixinConfigManager } from "./api/config-cache.js";
 import { MessageType, TypingStatus, type WeixinMessage } from "./api/types.js";
 import { resolveWeixinBaseUrl } from "./auth/accounts.js";
 import { downloadAttachmentsFromMessage } from "./media/media-download.js";
+import { sendTextMessage } from "./messaging/send.js";
 import { sendWeixinMediaFile } from "./messaging/send-media.js";
 import { monitorWeixinProvider } from "./monitor/monitor.js";
 import { normalizeInboundMessage } from "./normalize.js";
-import { sendTextMessage } from "./messaging/send.js";
 import { restoreContextTokens, setContextToken } from "./storage/context-token.js";
+import type { InboundMessage, TurnContext, WeixinTransport } from "./types.js";
 
 /** Inbound gate reply when the account is not bound to any project. */
 const GATE_UNBOUND_REPLY = "⚠️ 该账号尚未绑定任何项目，请先绑定 project 后再使用。";

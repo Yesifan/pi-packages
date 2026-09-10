@@ -7,16 +7,16 @@ import { createLogger, type Logger } from "../../util/logger.js";
 import { redactBody, redactUrl } from "../util/redact.js";
 import type {
   BaseInfo,
-  GetUploadUrlReq,
-  GetUploadUrlResp,
+  GetConfigResp,
   GetUpdatesReq,
   GetUpdatesResp,
-  NotifyStopResp,
+  GetUploadUrlReq,
+  GetUploadUrlResp,
   NotifyStartResp,
+  NotifyStopResp,
   SendMessageReq,
   SendMessageResp,
   SendTypingReq,
-  GetConfigResp,
 } from "./types.js";
 
 export type WeixinApiOptions = {
@@ -283,7 +283,9 @@ export async function apiGetFetch(params: {
   const timeoutMs = params.timeoutMs;
   const controller = timeoutMs != null && timeoutMs > 0 ? new AbortController() : undefined;
   const t =
-    controller != null && timeoutMs != null ? setTimeout(() => controller.abort(), timeoutMs) : undefined;
+    controller != null && timeoutMs != null
+      ? setTimeout(() => controller.abort(), timeoutMs)
+      : undefined;
   try {
     const res = await fetch(url.toString(), {
       method: "GET",
@@ -308,10 +310,10 @@ export async function apiGetFetch(params: {
 }
 
 /** Combine an internal timeout controller with an optional external abort signal. */
-function combineAbortSignals(params: {
-  internal?: AbortController;
-  external?: AbortSignal;
-}): { signal?: AbortSignal; cleanup: () => void } {
+function combineAbortSignals(params: { internal?: AbortController; external?: AbortSignal }): {
+  signal?: AbortSignal;
+  cleanup: () => void;
+} {
   const { internal, external } = params;
   if (!external) {
     return { signal: internal?.signal, cleanup: () => {} };

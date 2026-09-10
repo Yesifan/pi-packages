@@ -3,14 +3,11 @@ import path from "node:path";
 
 import type { Logger } from "../../util/logger.js";
 import { sanitizeDirName, sanitizeFilename } from "../../util/sanitize.js";
-import type { InboundAttachment, InboundAttachmentKind, MediaFailure } from "../types.js";
 import type { MessageItem, WeixinMessage } from "../api/types.js";
 import { MessageItemType } from "../api/types.js";
 import { CDN_BASE_URL } from "../auth/accounts.js";
-import {
-  downloadAndDecryptBuffer,
-  downloadPlainCdnBuffer,
-} from "../cdn/pic-decrypt.js";
+import { downloadAndDecryptBuffer, downloadPlainCdnBuffer } from "../cdn/pic-decrypt.js";
+import type { InboundAttachment, InboundAttachmentKind, MediaFailure } from "../types.js";
 import { getMimeFromFilename } from "./mime.js";
 
 const WEIXIN_MEDIA_MAX_BYTES = 100 * 1024 * 1024;
@@ -20,16 +17,23 @@ const WEIXIN_MEDIA_MAX_BYTES = 100 * 1024 * 1024;
  * Returns a mime type, or undefined when unknown.
  */
 export function detectImageMime(buf: Buffer): string | undefined {
-  if (buf.length >= 8 && buf.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) {
+  if (
+    buf.length >= 8 &&
+    buf.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+  ) {
     return "image/png";
   }
   if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) {
     return "image/jpeg";
   }
-  if (buf.length >= 6 && (buf.subarray(0, 4).toString("ascii") === "GIF8")) {
+  if (buf.length >= 6 && buf.subarray(0, 4).toString("ascii") === "GIF8") {
     return "image/gif";
   }
-  if (buf.length >= 12 && buf.subarray(0, 4).toString("ascii") === "RIFF" && buf.subarray(8, 12).toString("ascii") === "WEBP") {
+  if (
+    buf.length >= 12 &&
+    buf.subarray(0, 4).toString("ascii") === "RIFF" &&
+    buf.subarray(8, 12).toString("ascii") === "WEBP"
+  ) {
     return "image/webp";
   }
   if (buf.length >= 2 && buf[0] === 0x42 && buf[1] === 0x4d) {
@@ -56,7 +60,12 @@ async function saveInboundMedia(params: {
   return filePath;
 }
 
-function attachment(kind: InboundAttachmentKind, localPath: string, filename?: string, mimeType?: string): InboundAttachment {
+function attachment(
+  kind: InboundAttachmentKind,
+  localPath: string,
+  filename?: string,
+  mimeType?: string,
+): InboundAttachment {
   return { kind, localPath, filename, mimeType };
 }
 
@@ -118,7 +127,10 @@ export async function downloadMediaFromItem(
 
   if (item.type === MessageItemType.FILE) {
     const fileItem = item.file_item;
-    if ((!fileItem?.media?.encrypt_query_param && !fileItem?.media?.full_url) || !fileItem?.media?.aes_key) {
+    if (
+      (!fileItem?.media?.encrypt_query_param && !fileItem?.media?.full_url) ||
+      !fileItem?.media?.aes_key
+    ) {
       return {};
     }
     const filename = fileItem.file_name ?? "file.bin";
@@ -141,7 +153,10 @@ export async function downloadMediaFromItem(
 
   if (item.type === MessageItemType.VIDEO) {
     const videoItem = item.video_item;
-    if ((!videoItem?.media?.encrypt_query_param && !videoItem?.media?.full_url) || !videoItem?.media?.aes_key) {
+    if (
+      (!videoItem?.media?.encrypt_query_param && !videoItem?.media?.full_url) ||
+      !videoItem?.media?.aes_key
+    ) {
       return {};
     }
     try {
@@ -208,7 +223,11 @@ export async function downloadAttachmentsFromMessage(
   const attachments: InboundAttachment[] = [];
   const failures: MediaFailure[] = [];
   for (const item of raw.item_list ?? []) {
-    const result = await downloadMediaFromItem(item, { ...deps, messageKey, inboxDir: deps.inboxDir });
+    const result = await downloadMediaFromItem(item, {
+      ...deps,
+      messageKey,
+      inboxDir: deps.inboxDir,
+    });
     if (result.attachment) attachments.push(result.attachment);
     else if (result.failure) failures.push(result.failure);
   }

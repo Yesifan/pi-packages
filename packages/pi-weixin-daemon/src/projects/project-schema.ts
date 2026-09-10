@@ -57,7 +57,9 @@ export function validateProjectStoreData(raw: unknown): ProjectStoreValidationRe
   for (const [name, proj] of Object.entries(data.projects)) {
     for (const acc of proj.accounts) {
       if (!registered.has(acc)) {
-        errors.push(`project "${name}": account "${acc}" is not registered (run \`pi-wx login\` first)`);
+        errors.push(
+          `project "${name}": account "${acc}" is not registered (run \`pi-wx login\` first)`,
+        );
       }
       const existing = owner.get(acc);
       if (existing && existing !== name) {

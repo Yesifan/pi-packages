@@ -58,7 +58,9 @@ async function dispatch(first: string, rest: string[], opts: { cwd?: string }): 
       }
       const cwd = resolveCwd(opts.cwd);
       await rpcCall("project.create", { name, cwd });
-      console.log(`Created project "${name}" (disabled). Enable it with \`project enable ${name}\`.`);
+      console.log(
+        `Created project "${name}" (disabled). Enable it with \`project enable ${name}\`.`,
+      );
       return;
     }
     case "show": {
@@ -73,7 +75,14 @@ async function dispatch(first: string, rest: string[], opts: { cwd?: string }): 
     case "remove": {
       if (!name) throw new Error(`usage: project ${first} <name>`);
       await rpcCall(`project.${first}`, { name });
-      const past = first === "enable" ? "Enabled" : first === "disable" ? "Disabled" : first === "restart" ? "Restarted" : "Removed";
+      const past =
+        first === "enable"
+          ? "Enabled"
+          : first === "disable"
+            ? "Disabled"
+            : first === "restart"
+              ? "Restarted"
+              : "Removed";
       console.log(`${past} project "${name}".`);
       return;
     }
@@ -84,7 +93,9 @@ async function dispatch(first: string, rest: string[], opts: { cwd?: string }): 
       const labels = rest.slice(1);
       if ((verb === "add" || verb === "remove") && labels.length > 0) {
         await rpcCall(`project.account.${verb}`, { name: projectName, accounts: labels });
-        console.log(`${verb === "add" ? "Added" : "Removed"} account(s) ${verb === "add" ? "to" : "from"} project "${projectName}".`);
+        console.log(
+          `${verb === "add" ? "Added" : "Removed"} account(s) ${verb === "add" ? "to" : "from"} project "${projectName}".`,
+        );
         return;
       }
       throw new Error(

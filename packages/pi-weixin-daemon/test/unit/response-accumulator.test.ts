@@ -10,7 +10,11 @@ describe("ResponseAccumulator", () => {
     const acc = new ResponseAccumulator();
     acc.handleEvent({ type: "assistant_started" });
     acc.handleEvent({ type: "text_delta", delta: "partial" });
-    acc.handleEvent({ type: "assistant_finished", stopReason: "error", errorMessage: "quota exceeded" });
+    acc.handleEvent({
+      type: "assistant_finished",
+      stopReason: "error",
+      errorMessage: "quota exceeded",
+    });
     settle(acc);
 
     expect(acc.getOutcome()).toEqual({
@@ -49,7 +53,11 @@ describe("ResponseAccumulator", () => {
 
   it("distinguishes an aborted turn", () => {
     const acc = new ResponseAccumulator();
-    acc.handleEvent({ type: "assistant_finished", stopReason: "aborted", errorMessage: "cancelled" });
+    acc.handleEvent({
+      type: "assistant_finished",
+      stopReason: "aborted",
+      errorMessage: "cancelled",
+    });
     settle(acc);
     expect(acc.getOutcome().status).toBe("aborted");
   });

@@ -208,7 +208,7 @@ Tencent/openclaw-weixin          # 微信协议参考（MIT，见 LICENSE.attrib
         └─ UDS RPC（控制面）→  CLI project/service/control/login
 ```
 
-依赖方向：`weixin → accounts/projects → sessions → pi`。**只有 `src/pi/` import Pi SDK**（含类型，eslint 强制）；业务层只见领域类型与 port；`daemon.ts` 做组合。
+依赖方向：`weixin → accounts/projects → sessions → pi`。**只有 `src/pi/` import Pi SDK**（含类型，Biome 强制）；业务层只见领域类型与 port；`daemon.ts` 做组合。
 
 ## 配置与存储（XDG）
 

@@ -56,6 +56,8 @@ export function logsCommand(): Command {
     .description("Show recent daemon logs from journald")
     .option("-n <lines>", "number of lines", "100")
     .action((opts: { n: string }) =>
-      run("journalctl", ["--user", "-u", SERVICE_NAME, "-n", opts.n, "--no-pager"], { passthrough: true }),
+      run("journalctl", ["--user", "-u", SERVICE_NAME, "-n", opts.n, "--no-pager"], {
+        passthrough: true,
+      }),
     );
 }

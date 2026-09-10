@@ -1,8 +1,8 @@
-import type { InboundMessage, WeixinTransport } from "../weixin/types.js";
 import type { Logger } from "../util/logger.js";
+import type { InboundMessage, WeixinTransport } from "../weixin/types.js";
+import { type ProjectRuntimeConfig, runtimeKeyOf } from "./project-config.js";
 import { ProjectController, type ProjectHostFactory } from "./project-controller.js";
 import { ProjectTransport } from "./project-transport.js";
-import { runtimeKeyOf, type ProjectRuntimeConfig } from "./project-config.js";
 import type { ProjectConfig, ProjectStatus } from "./types.js";
 
 export interface ProjectManagerOptions {
@@ -60,9 +60,11 @@ export class ProjectManager {
     for (const [id, controller] of this.controllers) {
       const cfg = nextConfigs.get(id);
       if (!cfg || !cfg.enabled) {
-        await controller.stop().catch((err: unknown) =>
-          this.opts.logger.warn({ err, project: id }, "stop project error"),
-        );
+        await controller
+          .stop()
+          .catch((err: unknown) =>
+            this.opts.logger.warn({ err, project: id }, "stop project error"),
+          );
         this.controllers.delete(id);
       }
     }
@@ -77,9 +79,11 @@ export class ProjectManager {
         continue; // unchanged → none
       }
       if (existing) {
-        await existing.stop().catch((err: unknown) =>
-          this.opts.logger.warn({ err, project: name }, "stop project (accounts changed) error"),
-        );
+        await existing
+          .stop()
+          .catch((err: unknown) =>
+            this.opts.logger.warn({ err, project: name }, "stop project (accounts changed) error"),
+          );
         this.controllers.delete(name);
       }
 
@@ -118,17 +122,28 @@ export class ProjectManager {
     }
     const controller = this.controllers.get(projectId);
     if (!controller) {
-      this.opts.logger.info({ account: accountId, project: projectId }, "dropping inbound: project not running");
+      this.opts.logger.info(
+        { account: accountId, project: projectId },
+        "dropping inbound: project not running",
+      );
       // Tell the sender instead of silently dropping (bound+enabled but runtime not up).
       const transport = this.opts.getTransport(accountId);
       if (transport && msg.senderId) {
         await transport
           .sendText(
-            { accountId, senderId: msg.senderId, messageId: "not-running", contextToken: msg.contextToken },
+            {
+              accountId,
+              senderId: msg.senderId,
+              messageId: "not-running",
+              contextToken: msg.contextToken,
+            },
             "⚠️ 项目当前未运行（可能启动失败或仍在启动），请稍后重试。",
           )
           .catch((err: unknown) =>
-            this.opts.logger.warn({ err, account: accountId }, "project-not-running reply failed (ignored)"),
+            this.opts.logger.warn(
+              { err, account: accountId },
+              "project-not-running reply failed (ignored)",
+            ),
           );
       }
       return;

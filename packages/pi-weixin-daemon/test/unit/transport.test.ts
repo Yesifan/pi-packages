@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WeixinMessage } from "../../src/weixin/api/types.js";
 
 // --- module mocks -----------------------------------------------------------
@@ -38,9 +38,9 @@ vi.mock("../../src/weixin/monitor/monitor.js", () => ({
 
 import fs from "node:fs";
 import path from "node:path";
-import { ILinkWeixinTransport } from "../../src/weixin/transport.js";
 import { createLogger } from "../../src/util/logger.js";
 import { TypingStatus } from "../../src/weixin/api/types.js";
+import { ILinkWeixinTransport } from "../../src/weixin/transport.js";
 
 const logger = createLogger({ level: "silent" });
 

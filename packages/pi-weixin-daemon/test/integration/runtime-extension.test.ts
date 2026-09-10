@@ -1,12 +1,12 @@
-import { describe, it, expect, afterEach } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
-import { PiSdkHost } from "../../src/pi/sdk-host.js";
+import { afterEach, describe, expect, it } from "vitest";
 import { createWeixinSendFileExtension } from "../../src/pi/extensions/weixin-send-file.js";
 import { createWeixinSendProgressExtension } from "../../src/pi/extensions/weixin-send-progress.js";
+import { PiSdkHost } from "../../src/pi/sdk-host.js";
 import { createLogger } from "../../src/util/logger.js";
-import { createTmpProject, waitForMarker } from "../helpers/tmp-project.js";
 import { FakeWeixinTransport, makeTurn } from "../helpers/fake-transport.js";
+import { createTmpProject, waitForMarker } from "../helpers/tmp-project.js";
 
 const logger = createLogger({ level: "warn" });
 const TIMEOUT = 120_000;

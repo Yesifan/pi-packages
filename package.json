@@ -9,8 +9,13 @@
   },
   "scripts": {
     "build": "pnpm -r run build",
-    "check": "pnpm -r run typecheck",
+    "check": "pnpm -r run typecheck && biome check .",
     "test": "pnpm -r run test",
-    "lint": "pnpm -r run lint"
+    "lint": "biome lint .",
+    "format": "biome format --write .",
+    "format:check": "biome format ."
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.12"
   }
 }

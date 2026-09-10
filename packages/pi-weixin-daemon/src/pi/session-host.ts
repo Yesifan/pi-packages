@@ -1,5 +1,5 @@
-import type { AgentSession, AgentSessionRuntime } from "@earendil-works/pi-coding-agent";
 import type { ImageContent } from "@earendil-works/pi-ai/compat";
+import type { AgentSession, AgentSessionRuntime } from "@earendil-works/pi-coding-agent";
 import type { HostImage, HostPromptInput, SessionSwitchResult } from "./types.js";
 
 /** Domain images -> SDK multimodal ImageContent[]. */
@@ -42,7 +42,10 @@ export class PiSessionHost {
     await this.runtime.session.waitForIdle();
   }
 
-  async navigateTree(targetId: string, options?: Parameters<AgentSession["navigateTree"]>[1]): Promise<SessionSwitchResult> {
+  async navigateTree(
+    targetId: string,
+    options?: Parameters<AgentSession["navigateTree"]>[1],
+  ): Promise<SessionSwitchResult> {
     const r = await this.runtime.session.navigateTree(targetId, options);
     return { cancelled: r.cancelled };
   }
@@ -51,17 +54,25 @@ export class PiSessionHost {
     await this.runtime.session.reload();
   }
 
-  async newSession(options?: Parameters<AgentSessionRuntime["newSession"]>[0]): Promise<SessionSwitchResult> {
+  async newSession(
+    options?: Parameters<AgentSessionRuntime["newSession"]>[0],
+  ): Promise<SessionSwitchResult> {
     const r = await this.runtime.newSession(options);
     return { cancelled: r.cancelled };
   }
 
-  async fork(entryId: string, options?: Parameters<AgentSessionRuntime["fork"]>[1]): Promise<SessionSwitchResult> {
+  async fork(
+    entryId: string,
+    options?: Parameters<AgentSessionRuntime["fork"]>[1],
+  ): Promise<SessionSwitchResult> {
     const r = await this.runtime.fork(entryId, options);
     return { cancelled: r.cancelled };
   }
 
-  async switchSession(sessionPath: string, options?: Parameters<AgentSessionRuntime["switchSession"]>[1]): Promise<SessionSwitchResult> {
+  async switchSession(
+    sessionPath: string,
+    options?: Parameters<AgentSessionRuntime["switchSession"]>[1],
+  ): Promise<SessionSwitchResult> {
     const r = await this.runtime.switchSession(sessionPath, options);
     return { cancelled: r.cancelled };
   }

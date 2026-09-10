@@ -1,13 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Daemon } from "../../src/daemon.js";
 import { ProjectStore } from "../../src/projects/project-store.js";
-import { registerWeixinAccountId, saveWeixinAccount } from "../../src/weixin/auth/accounts.js";
 import { createLogger } from "../../src/util/logger.js";
-import { FakeWeixinTransport } from "../helpers/fake-transport.js";
-import { FakeAgentRuntime } from "../helpers/fake-runtime.js";
+import { registerWeixinAccountId, saveWeixinAccount } from "../../src/weixin/auth/accounts.js";
 import type { InboundMessage } from "../../src/weixin/types.js";
+import { FakeAgentRuntime } from "../helpers/fake-runtime.js";
+import { FakeWeixinTransport } from "../helpers/fake-transport.js";
 
 const logger = createLogger({ level: "silent" });
 const OLD_DATA = process.env.PI_WEIXIN_DATA_DIR;
@@ -68,7 +68,12 @@ describe("Daemon composition (fake transports + fake runtimes)", () => {
     await daemon.start();
 
     // Assert desired state: foo + bar runtimes started.
-    expect(daemon.getProjectStatuses().map((p) => p.name).sort()).toEqual(["bar", "foo"]);
+    expect(
+      daemon
+        .getProjectStatuses()
+        .map((p) => p.name)
+        .sort(),
+    ).toEqual(["bar", "foo"]);
 
     // C -> bar: emit on C's transport flows through dispatch -> bar runtime.
     const pC = transports.get("C")!.emit(msg("C", "u-c", "m1", "hello"));

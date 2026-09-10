@@ -49,7 +49,7 @@ pnpm install
 
 ```bash
 pnpm check       # 对所有提供 typecheck 脚本的子包执行类型检查
-pnpm lint        # 对所有提供 lint 脚本的子包执行 lint
+pnpm lint        # 使用根目录 Biome 配置检查整个 monorepo
 pnpm test        # 对所有提供 test 脚本的子包执行测试
 pnpm build       # 对所有提供 build 脚本的子包执行构建
 ```
@@ -98,7 +98,7 @@ pnpm --filter @BYKWP/pi-system-prompt typecheck
 - `package.json`、README、LICENSE 等用户所需文件；
 - README 直接引用且用户安装后需要阅读的文档。
 
-发布包不应包含测试、TypeScript/Vitest/ESLint 配置、内部计划、临时文件或 `AGENTS.md`。
+发布包不应包含测试、TypeScript/Vitest/Biome 配置、内部计划、临时文件或 `AGENTS.md`。
 
 发布前使用以下方式检查 tarball：
 

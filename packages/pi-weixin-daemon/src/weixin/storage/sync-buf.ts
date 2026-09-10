@@ -36,5 +36,9 @@ export function saveGetUpdatesBuf(accountId: string, getUpdatesBuf: string): voi
   const filePath = getSyncBufFilePath(accountId);
   const dir = path.dirname(filePath);
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(filePath, JSON.stringify({ get_updates_buf: getUpdatesBuf } as SyncBufData, null, 0), "utf-8");
+  fs.writeFileSync(
+    filePath,
+    JSON.stringify({ get_updates_buf: getUpdatesBuf } as SyncBufData, null, 0),
+    "utf-8",
+  );
 }

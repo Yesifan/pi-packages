@@ -1,6 +1,6 @@
+import { createLogger } from "../../util/logger.js";
 import { decryptAesEcb } from "./aes-ecb.js";
 import { buildCdnDownloadUrl, ENABLE_CDN_URL_FALLBACK } from "./cdn-url.js";
-import { createLogger } from "../../util/logger.js";
 
 const logger = createLogger();
 
@@ -14,7 +14,9 @@ async function fetchCdnBytes(url: string, label: string): Promise<Buffer> {
   } catch (err) {
     const cause =
       (err as NodeJS.ErrnoException).cause ?? (err as NodeJS.ErrnoException).code ?? "(no cause)";
-    logger.error(`${label}: fetch network error url=${url} err=${String(err)} cause=${String(cause)}`);
+    logger.error(
+      `${label}: fetch network error url=${url} err=${String(err)} cause=${String(cause)}`,
+    );
     throw err;
   }
   logger.debug(`${label}: response status=${res.status} ok=${res.ok}`);

@@ -102,7 +102,9 @@ function resolveAccountPath(accountId: string): string {
 function readAccountFile(filePath: string): WeixinAccountData | null {
   try {
     if (fs.existsSync(filePath)) {
-      const parsed = WeixinAccountDataSchema.safeParse(JSON.parse(fs.readFileSync(filePath, "utf-8")));
+      const parsed = WeixinAccountDataSchema.safeParse(
+        JSON.parse(fs.readFileSync(filePath, "utf-8")),
+      );
       return parsed.success ? parsed.data : null;
     }
   } catch {

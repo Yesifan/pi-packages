@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
-import { resolveAccountsDir } from "./state-dir.js";
 import { createLogger } from "../../util/logger.js";
+import { resolveAccountsDir } from "./state-dir.js";
 
 const logger = createLogger();
 

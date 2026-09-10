@@ -6,11 +6,33 @@ const router = new CommandRouter();
 
 describe("CommandRouter classifier", () => {
   it("classifies daemon commands and preserves arguments", () => {
-    for (const cmd of ["help", "status", "abort", "new", "compact", "model", "thinking", "resume", "reload"]) {
-      expect(router.classify(`/${cmd}`)).toEqual({ kind: "daemon-command", command: cmd, args: "" });
+    for (const cmd of [
+      "help",
+      "status",
+      "abort",
+      "new",
+      "compact",
+      "model",
+      "thinking",
+      "resume",
+      "reload",
+    ]) {
+      expect(router.classify(`/${cmd}`)).toEqual({
+        kind: "daemon-command",
+        command: cmd,
+        args: "",
+      });
     }
-    expect(router.classify("/help model")).toEqual({ kind: "daemon-command", command: "help", args: "model" });
-    expect(router.classify("/resume latest")).toEqual({ kind: "daemon-command", command: "resume", args: "latest" });
+    expect(router.classify("/help model")).toEqual({
+      kind: "daemon-command",
+      command: "help",
+      args: "model",
+    });
+    expect(router.classify("/resume latest")).toEqual({
+      kind: "daemon-command",
+      command: "resume",
+      args: "latest",
+    });
   });
 
   it("formats full help as a Markdown list", () => {
@@ -29,6 +51,10 @@ describe("CommandRouter classifier", () => {
 
   it("classifies ordinary input as a message", () => {
     expect(router.classify("hello")).toEqual({ kind: "message", text: "hello" });
-    expect(router.classify("/STATUS")).toEqual({ kind: "daemon-command", command: "status", args: "" });
+    expect(router.classify("/STATUS")).toEqual({
+      kind: "daemon-command",
+      command: "status",
+      args: "",
+    });
   });
 });

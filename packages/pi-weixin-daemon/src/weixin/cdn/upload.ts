@@ -1,15 +1,14 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-
+import { createLogger } from "../../util/logger.js";
 import { getUploadUrl, type WeixinApiOptions } from "../api/api.js";
 import { UploadMediaType } from "../api/types.js";
-import { redactUrl } from "../util/redact.js";
-import { tempFileName } from "../util/random.js";
 import { getExtensionFromContentTypeOrUrl } from "../media/mime.js";
+import { tempFileName } from "../util/random.js";
+import { redactUrl } from "../util/redact.js";
 import { aesEcbPaddedSize } from "./aes-ecb.js";
 import { uploadBufferToCdn } from "./cdn-upload.js";
-import { createLogger } from "../../util/logger.js";
 
 const logger = createLogger();
 
@@ -142,7 +141,9 @@ export async function downloadRemoteImageToTemp(url: string, destDir: string): P
   try {
     res = await fetch(url);
   } catch (err) {
-    logger.error(`downloadRemoteImageToTemp: fetch network error url=${redactUrl(url)} error=${String(err)}`);
+    logger.error(
+      `downloadRemoteImageToTemp: fetch network error url=${redactUrl(url)} error=${String(err)}`,
+    );
     throw err;
   }
   if (!res.ok) {

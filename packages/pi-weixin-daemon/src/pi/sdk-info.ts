@@ -42,7 +42,10 @@ export async function checkModelAvailability(settings: {
     return { ok: false, detail: "no defaultProvider in settings.json" };
   }
   const mr = await ModelRuntime.create({ allowModelNetwork: false });
-  const available = (await mr.getAvailable()) as unknown as Array<{ provider?: string; id?: string }>;
+  const available = (await mr.getAvailable()) as unknown as Array<{
+    provider?: string;
+    id?: string;
+  }>;
   const hasProvider = available.some((m) => m.provider === provider);
   const hasModel = model
     ? available.some((m) => m.provider === provider && m.id === model)

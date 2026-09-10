@@ -38,10 +38,11 @@ function safeStringify(o: unknown): string {
 
 // Extract the tool definitions array from a provider payload
 // (OpenAI / Anthropic `tools`, plus legacy OpenAI `functions`).
-function extractTools(payload: any): unknown[] | undefined {
-  if (!payload) return undefined;
-  if (Array.isArray(payload.tools)) return payload.tools;
-  if (Array.isArray(payload.functions)) return payload.functions;
+function extractTools(payload: unknown): unknown[] | undefined {
+  if (typeof payload !== "object" || payload === null) return undefined;
+  const request = payload as Record<string, unknown>;
+  if (Array.isArray(request.tools)) return request.tools;
+  if (Array.isArray(request.functions)) return request.functions;
   return undefined;
 }
 
@@ -74,7 +75,9 @@ export default function (pi: ExtensionAPI) {
         s.push(safeStringify(tools));
         s.push("```");
       } else {
-        s.push("_(no provider request captured yet in this session. Run `/system-prompt` after a turn to capture the tools array.)_");
+        s.push(
+          "_(no provider request captured yet in this session. Run `/system-prompt` after a turn to capture the tools array.)_",
+        );
       }
 
       const dump = s.join("\n");

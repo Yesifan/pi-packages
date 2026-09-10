@@ -1,12 +1,18 @@
 import { Command } from "commander";
+import { VERSION } from "../version.js";
 import { accountsCommand } from "./accounts.js";
-import { logsCommand, restartCommand, startCommand, statusCommand, stopCommand } from "./control.js";
+import {
+  logsCommand,
+  restartCommand,
+  startCommand,
+  statusCommand,
+  stopCommand,
+} from "./control.js";
 import { doctorCommand } from "./doctor.js";
 import { loginCommand } from "./login.js";
 import { projectCommand } from "./project.js";
 import { serveCommand } from "./serve.js";
 import { serviceCommand } from "./service.js";
-import { VERSION } from "../version.js";
 
 export function buildProgram(): Command {
   const program = new Command();
@@ -31,7 +37,9 @@ export function buildProgram(): Command {
 
 function logoutCommand(): Command {
   return new Command("logout")
-    .description("Log out a Weixin account (clear credentials, unbind from projects, stop its monitor)")
+    .description(
+      "Log out a Weixin account (clear credentials, unbind from projects, stop its monitor)",
+    )
     .argument("<account>", "account id or name")
     .action(async (account: string) => {
       try {

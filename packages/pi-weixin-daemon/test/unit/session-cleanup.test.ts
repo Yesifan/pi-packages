@@ -1,7 +1,7 @@
-import { describe, it, expect } from "vitest";
 import fs from "node:fs";
-import path from "node:path";
 import os from "node:os";
+import path from "node:path";
+import { describe, expect, it } from "vitest";
 import { cleanupTestSessions, encodeCwd } from "../helpers/session-cleanup.js";
 
 describe("session-cleanup", () => {
@@ -9,9 +9,7 @@ describe("session-cleanup", () => {
     expect(encodeCwd("/home/ye/code/pi-weixin-daemon/test/.tmp/m2-ext-load")).toBe(
       "--home-ye-code-pi-weixin-daemon-test-.tmp-m2-ext-load--",
     );
-    expect(encodeCwd("/home/ye/code/pi-weixin-daemon")).toBe(
-      "--home-ye-code-pi-weixin-daemon--",
-    );
+    expect(encodeCwd("/home/ye/code/pi-weixin-daemon")).toBe("--home-ye-code-pi-weixin-daemon--");
   });
 
   it("removes only sessions under the test tmp dir, keeps real ones", () => {

@@ -1,5 +1,5 @@
-import { Type, type Static } from "typebox";
 import type { AgentToolResult, ExtensionFactory } from "@earendil-works/pi-coding-agent";
+import { type Static, Type } from "typebox";
 import type { Logger } from "../../util/logger.js";
 import type { InteractionPort } from "../ports.js";
 
@@ -52,12 +52,17 @@ export function createWeixinSendProgressExtension(
         "must be one or two concise sentences, no more than 8-10 words long, recapping progress " +
         "so far in plain language and stating what comes next. Do not use for short tasks or the final answer.",
       parameters: SendProgressParamsSchema,
-      execute: async (_toolCallId, params: SendProgressParams): Promise<AgentToolResult<SendProgressDetails>> => {
+      execute: async (
+        _toolCallId,
+        params: SendProgressParams,
+      ): Promise<AgentToolResult<SendProgressDetails>> => {
         const turn = deps.interaction.getCurrentTurn();
         if (!turn) {
           deps.logger.warn("weixin_send_progress called with no active turn");
           return {
-            content: [{ type: "text", text: "Error: no active Weixin conversation for this turn." }],
+            content: [
+              { type: "text", text: "Error: no active Weixin conversation for this turn." },
+            ],
             details: { sent: false, error: "no active turn" } satisfies SendProgressDetails,
           };
         }

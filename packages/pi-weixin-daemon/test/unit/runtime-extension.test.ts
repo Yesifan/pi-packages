@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { describe, it, expect, beforeEach } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { validateSendFileParams } from "../../src/pi/extensions/weixin-send-file.js";
 import { sanitizeFilename } from "../../src/util/sanitize.js";
 
