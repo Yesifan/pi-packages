@@ -1,0 +1,16 @@
+{
+  "name": "@BYKWP/pi-packages",
+  "private": true,
+  "type": "module",
+  "description": "Monorepo for @BYKWP Pi packages",
+  "packageManager": "pnpm@11.25.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "pnpm -r run build",
+    "check": "pnpm -r run typecheck",
+    "test": "pnpm -r run test",
+    "lint": "pnpm -r run lint"
+  }
+}

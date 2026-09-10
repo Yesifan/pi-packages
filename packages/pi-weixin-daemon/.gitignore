@@ -1,0 +1,11 @@
+node_modules/
+dist/
+release/
+*.log
+.DS_Store
+test/.tmp/
+.pi-weixin/
+.refer/
+
+# 本机部署文档（含账号/项目等本机信息，不提交）
+docs/LOCAL-DEPLOYMENT.md

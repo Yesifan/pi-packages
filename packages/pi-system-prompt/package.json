@@ -1,0 +1,38 @@
+{
+  "name": "@BYKWP/pi-system-prompt",
+  "version": "0.1.0",
+  "description": "Pi extension: /system-prompt prints the real system prompt (with tool & skill context) sent to the model",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "system-prompt"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "files": [
+    "extensions",
+    "README.md"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.84.4",
+    "@types/node": "^26.4.0",
+    "typescript": "^5.9.3"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=0.84.4"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ]
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
