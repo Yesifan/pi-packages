@@ -15,7 +15,7 @@ export class CommandRouter {
     if (prompt) return { kind: "prompt", text: prompt[1] ?? "" };
     const m = /^\/([a-z][a-z0-9-]*)\s*(.*)$/is.exec(trimmed);
     if (!m) return { kind: "message", text };
-    const name = m[1]!.toLowerCase();
+    const name = (m[1] ?? "").toLowerCase();
     if ((DAEMON_COMMANDS as readonly string[]).includes(name)) {
       return { kind: "daemon-command", command: name as DaemonCommand, args: m[2] ?? "" };
     }

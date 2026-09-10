@@ -13,7 +13,7 @@ import type {
 } from "./projects/project-controller.js";
 import { ProjectManager } from "./projects/project-manager.js";
 import { ProjectStore } from "./projects/project-store.js";
-import type { ProjectConfig, ProjectStoreData } from "./projects/types.js";
+import type { ProjectStoreData } from "./projects/types.js";
 import type { Logger } from "./util/logger.js";
 import { VERSION } from "./version.js";
 import {

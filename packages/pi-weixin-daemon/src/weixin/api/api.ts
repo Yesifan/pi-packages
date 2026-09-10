@@ -112,12 +112,15 @@ export function sanitizeBotAgent(raw: string | undefined): string {
   const rawTokens = trimmed.split(/\s+/);
   const tokens: string[] = [];
   for (let i = 0; i < rawTokens.length; i += 1) {
-    const tok = rawTokens[i]!;
+    const tok = rawTokens[i];
+    if (!tok) continue;
     if (tok.startsWith("(") && !tok.endsWith(")")) {
       let acc = tok;
       while (i + 1 < rawTokens.length && !acc.endsWith(")")) {
         i += 1;
-        acc += " " + rawTokens[i]!;
+        const nextToken = rawTokens[i];
+        if (!nextToken) break;
+        acc += ` ${nextToken}`;
       }
       tokens.push(acc);
     } else {
@@ -228,7 +231,7 @@ export function classifyFetchError(err: unknown): {
 
   const cause = (err as NodeJS.ErrnoException)?.cause;
   const causeCode = (cause as { code?: string })?.code ?? "";
-  const causeStr = String(cause ?? err ?? "") + " " + String(causeCode);
+  const causeStr = `${String(cause ?? err ?? "")} ${String(causeCode)}`;
   const matchedCode = causeCode || (typeof cause === "string" ? cause : "");
 
   if (/ENOTFOUND|EAI_AGAIN|getaddrinfo/i.test(causeStr)) {

@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import net from "node:net";
-import path from "node:path";
 import { resolveDaemonSocket, resolveRuntimeDir } from "../config/paths.js";
 import type { Daemon } from "../daemon.js";
 import type { Logger } from "../util/logger.js";
@@ -48,11 +47,12 @@ export class RpcServer {
       socket.on("data", (buf: Buffer) => this.handleConnection(socket, buf));
       socket.on("error", (err) => this.logger.warn({ err }, "rpc socket error"));
     });
+    const server = this.server;
     await new Promise<void>((resolve, reject) => {
       const onError = (err: Error) => reject(err);
-      this.server!.once("error", onError);
-      this.server!.listen(this.socketPath, () => {
-        this.server!.off("error", onError);
+      server.once("error", onError);
+      server.listen(this.socketPath, () => {
+        server.off("error", onError);
         resolve();
       });
     });
@@ -65,8 +65,9 @@ export class RpcServer {
   }
 
   async stop(): Promise<void> {
-    if (!this.server) return;
-    await new Promise<void>((resolve) => this.server!.close(() => resolve()));
+    const server = this.server;
+    if (!server) return;
+    await new Promise<void>((resolve) => server.close(() => resolve()));
     this.server = undefined;
     try {
       if (fs.existsSync(this.socketPath)) fs.unlinkSync(this.socketPath);

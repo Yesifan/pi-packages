@@ -32,7 +32,7 @@ export interface SessionControllerDeps {
   /** Idle window before the session is disposed (min for tests). */
   sessionIdleMs?: number;
   /** Broadcast a turn's final reply / idle-close notice to all participants. */
-  broadcastText?: (text: string) => Promise<DeliveryReport | void>;
+  broadcastText?: (text: string) => Promise<DeliveryReport> | Promise<void>;
   /** Set or clear typing for all authorized project participants. */
   broadcastTyping?: (typing: boolean) => Promise<void>;
   /** Typing refresh interval; primarily configurable for tests. */
@@ -107,7 +107,8 @@ export class SessionController {
     maybeMsg?: InboundMessage,
   ): Promise<void> {
     const args = typeof argsOrMsg === "string" ? argsOrMsg : "";
-    const msg = typeof argsOrMsg === "string" ? maybeMsg! : argsOrMsg;
+    const msg = typeof argsOrMsg === "string" ? maybeMsg : argsOrMsg;
+    if (!msg) throw new Error("command message is required");
     this.lastActivityAt = Date.now();
     this.scheduleIdleCheck();
 
@@ -211,7 +212,9 @@ export class SessionController {
             await this.reply(turn, "没有可恢复的历史会话。");
             return;
           }
-          await this.switchToSession(turn, sessions[0]!.path);
+          const [latestSession] = sessions;
+          if (!latestSession) return;
+          await this.switchToSession(turn, latestSession.path);
           return;
         }
         await this.openResumeSelector(turn);
@@ -578,7 +581,8 @@ export class SessionController {
       return;
     }
     const match = /^([a-e])(?:\s+(default))?$/.exec(text);
-    const index = match ? match[1]!.charCodeAt(0) - 97 : -1;
+    const selectedLetter = match?.[1];
+    const index = selectedLetter ? selectedLetter.charCodeAt(0) - 97 : -1;
     const item = selector.options[selector.page * pageSize + index];
     if (!match || !item || index >= pageSize) {
       this.refreshSelectorTimeout(selector);

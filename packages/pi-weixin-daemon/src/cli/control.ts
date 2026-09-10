@@ -7,7 +7,7 @@ const SERVICE_NAME = "pi-weixin-daemon";
 
 /** Run a systemctl/journalctl command and stream stdout to the console. */
 function run(cmd: string, args: string[], opts: { passthrough?: boolean } = {}): void {
-  const child = execFile(cmd, args, (err, stdout, stderr) => {
+  execFile(cmd, args, (err, stdout, stderr) => {
     if (opts.passthrough) {
       if (stdout) process.stdout.write(stdout);
       if (stderr) process.stderr.write(stderr);

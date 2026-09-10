@@ -18,15 +18,9 @@ export class OutboundDeliveryError extends Error {
  * so the controller consumes inbound directly (see ProjectController).
  */
 export class ProjectTransport implements WeixinTransport {
-  private readonly accountIds: Set<string>;
   private handlers: Array<(message: InboundMessage) => Promise<void>> = [];
 
-  constructor(
-    accounts: string[],
-    private readonly getTransport: (accountId: string) => WeixinTransport | undefined,
-  ) {
-    this.accountIds = new Set(accounts);
-  }
+  constructor(private readonly getTransport: (accountId: string) => WeixinTransport | undefined) {}
 
   async start(): Promise<void> {}
   async stop(): Promise<void> {}

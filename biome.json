@@ -21,24 +21,9 @@
     "enabled": true,
     "rules": {
       "preset": "recommended",
-      "correctness": {
-        "noUnusedFunctionParameters": "off",
-        "noUnusedImports": "off",
-        "noUnusedPrivateClassMembers": "off",
-        "noUnusedVariables": "off"
-      },
-      "style": {
-        "noNonNullAssertion": "off",
-        "useConst": "off",
-        "useTemplate": "off"
-      },
       "complexity": {
         "noUselessEscapeInRegex": "off",
         "useOptionalChain": "off"
-      },
-      "suspicious": {
-        "noConfusingVoidType": "off",
-        "noControlCharactersInRegex": "off"
       }
     }
   },
@@ -51,6 +36,19 @@
     }
   },
   "overrides": [
+    {
+      "includes": ["packages/**/test/**/*.ts"],
+      "linter": {
+        "rules": {
+          "correctness": {
+            "noUnusedFunctionParameters": "off"
+          },
+          "style": {
+            "noNonNullAssertion": "off"
+          }
+        }
+      }
+    },
     {
       "includes": [
         "packages/pi-weixin-daemon/src/**/*.ts",

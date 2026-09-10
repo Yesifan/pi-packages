@@ -1,5 +1,5 @@
 import type { Logger } from "../util/logger.js";
-import { getConfig, notifyStart, notifyStop, sendTyping as sendTypingApi } from "./api/api.js";
+import { notifyStart, notifyStop, sendTyping as sendTypingApi } from "./api/api.js";
 import { WeixinConfigManager } from "./api/config-cache.js";
 import { MessageType, TypingStatus, type WeixinMessage } from "./api/types.js";
 import { resolveWeixinBaseUrl } from "./auth/accounts.js";

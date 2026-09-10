@@ -8,7 +8,7 @@ import { createLogger } from "../../src/util/logger.js";
 import { WeixinInteractionController } from "../../src/weixin/interaction-controller.js";
 import { FakeWeixinTransport, makeInboundMessage } from "../helpers/fake-transport.js";
 import { MultiAccountTransport } from "../helpers/multi-account-transport.js";
-import { createTmpProject, waitForMarker } from "../helpers/tmp-project.js";
+import { createTmpProject } from "../helpers/tmp-project.js";
 
 const logger = createLogger({ level: "warn" });
 const TIMEOUT = 120_000;

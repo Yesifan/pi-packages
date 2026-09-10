@@ -37,7 +37,7 @@ describe("session-cleanup", () => {
   });
 
   it("is a no-op when the sessions dir does not exist", () => {
-    const missing = path.join(os.tmpdir(), "pi-sess-missing-" + Date.now());
+    const missing = path.join(os.tmpdir(), `pi-sess-missing-${Date.now()}`);
     expect(() => cleanupTestSessions({ sessionsDir: missing, tmpDir: "/x" })).not.toThrow();
   });
 });

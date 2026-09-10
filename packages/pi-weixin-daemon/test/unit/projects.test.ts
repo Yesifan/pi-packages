@@ -1,11 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  CONFIG_VERSION,
-  validateProjectForInsert,
-  validateProjectStoreData,
-} from "../../src/projects/project-schema.js";
+import { CONFIG_VERSION, validateProjectStoreData } from "../../src/projects/project-schema.js";
 import { ProjectStore } from "../../src/projects/project-store.js";
 import { registerWeixinAccountId } from "../../src/weixin/auth/accounts.js";
 

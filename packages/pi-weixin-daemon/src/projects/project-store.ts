@@ -36,7 +36,10 @@ export class ProjectStore {
     if (!result.ok) {
       throw new Error(`config invalid: ${result.errors.join("; ")}`);
     }
-    return result.data!;
+    if (!result.data) {
+      throw new Error("config invalid: validator returned no data");
+    }
+    return result.data;
   }
 
   /** Atomically persist config. */

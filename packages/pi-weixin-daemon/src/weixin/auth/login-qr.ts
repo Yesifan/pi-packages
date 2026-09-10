@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 
 import { apiGetFetch, apiPostFetch } from "../api/api.js";
-import { redactToken } from "../util/redact.js";
 import { listIndexedWeixinAccountIds, loadWeixinAccount } from "./accounts.js";
 
 type ActiveLogin = {
@@ -260,7 +259,7 @@ export async function waitForWeixinLogin(opts: {
   apiBaseUrl: string;
   botType?: string;
 }): Promise<WeixinQrWaitResult> {
-  let activeLogin = activeLogins.get(opts.sessionKey);
+  const activeLogin = activeLogins.get(opts.sessionKey);
 
   if (!activeLogin) {
     return {

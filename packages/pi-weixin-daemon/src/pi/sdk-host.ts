@@ -153,9 +153,9 @@ export class PiSdkHost {
 
   /** Prompt the agent. Creates the session on first use (lazy). */
   async prompt(input: HostPromptInput): Promise<void> {
-    const { session } = await this.ensureRuntime();
-    this.opts.logger.info({ sessionId: session.sessionId }, "prompt");
-    await new PiSessionHost(this.runtime!).prompt(input);
+    const runtime = await this.ensureRuntime();
+    this.opts.logger.info({ sessionId: runtime.session.sessionId }, "prompt");
+    await new PiSessionHost(runtime).prompt(input);
   }
 
   /** Abort the current agent run. No-op when no session is active. */
@@ -257,8 +257,8 @@ export class PiSdkHost {
       project[field] = value;
     });
     await settings.flush();
-    const errors = settings.drainErrors();
-    if (errors.length) throw errors[0]!.error;
+    const [firstError] = settings.drainErrors();
+    if (firstError) throw firstError.error;
   }
 
   /** Compact the current session. No-op when no session exists. */

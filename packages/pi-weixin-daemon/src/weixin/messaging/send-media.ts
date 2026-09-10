@@ -22,9 +22,8 @@ async function sendMediaItems(params: {
   text: string;
   mediaItem: MessageItem;
   opts: WeixinMessageSendOptions;
-  label: string;
 }): Promise<{ messageId: string }> {
-  const { to, text, mediaItem, opts, label } = params;
+  const { to, text, mediaItem, opts } = params;
   const items: MessageItem[] = [];
   if (text) {
     items.push({ type: MessageItemType.TEXT, text_item: { text } });
@@ -75,7 +74,7 @@ export async function sendImageMessageWeixin(params: {
       mid_size: uploaded.fileSizeCiphertext,
     },
   };
-  return sendMediaItems({ to, text, mediaItem: imageItem, opts, label: "sendImageMessageWeixin" });
+  return sendMediaItems({ to, text, mediaItem: imageItem, opts });
 }
 
 /** Send a video message using a previously uploaded file. */
@@ -97,7 +96,7 @@ export async function sendVideoMessageWeixin(params: {
       video_size: uploaded.fileSizeCiphertext,
     },
   };
-  return sendMediaItems({ to, text, mediaItem: videoItem, opts, label: "sendVideoMessageWeixin" });
+  return sendMediaItems({ to, text, mediaItem: videoItem, opts });
 }
 
 /** Send a file attachment (non-image/video) using a previously uploaded file. */
@@ -121,7 +120,7 @@ export async function sendFileMessageWeixin(params: {
       len: String(uploaded.fileSize),
     },
   };
-  return sendMediaItems({ to, text, mediaItem: fileItem, opts, label: "sendFileMessageWeixin" });
+  return sendMediaItems({ to, text, mediaItem: fileItem, opts });
 }
 
 /**

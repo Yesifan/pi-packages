@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { ProjectManager } from "../../src/projects/project-manager.js";
 import type { ProjectConfig } from "../../src/projects/types.js";
 import { BUSY_REPLY } from "../../src/sessions/session-state.js";

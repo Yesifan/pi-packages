@@ -27,12 +27,15 @@ export interface WeixinSendProgressExtensionDeps {
 
 /** Remove unsafe formatting and enforce a small transport-side size limit. */
 export function sanitizeProgressUpdate(update: string): string {
-  return update
-    .replace(/[\u0000-\u001f\u007f]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, MAX_PROGRESS_LENGTH)
-    .trim();
+  return (
+    update
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: Intentionally remove ASCII control characters from user-visible progress text.
+      .replace(/[\u0000-\u001f\u007f]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, MAX_PROGRESS_LENGTH)
+      .trim()
+  );
 }
 
 /**

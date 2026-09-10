@@ -87,7 +87,7 @@ export class ProjectManager {
         this.controllers.delete(name);
       }
 
-      const transport = new ProjectTransport(cfg.accounts, this.opts.getTransport);
+      const transport = new ProjectTransport(this.opts.getTransport);
       const snapshot: ProjectRuntimeConfig = {
         projectId: name,
         cwd: cfg.cwd,

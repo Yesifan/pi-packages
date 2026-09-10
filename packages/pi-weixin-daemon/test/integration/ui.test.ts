@@ -42,7 +42,7 @@ const msg = (accountId: string, senderId: string, id: string, text: string) =>
 
 describe("M9 interaction controller UI response routing", () => {
   it("turn account's next message resolves the UI waiter; other accounts get busy", async () => {
-    const { runtime, transportA, transportB, interaction, session } = setupUiRouting();
+    const { runtime, transportB, interaction, session } = setupUiRouting();
     // Start a real turn so currentTurn is set (as in production).
     const turnPromise = session.handleUserMessage(msg("acct-a", "user-a", "t0", "开始任务"));
     await vi.waitFor(() => expect(runtime.prompts.length).toBe(1));

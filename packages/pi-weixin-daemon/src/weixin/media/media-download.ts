@@ -10,8 +10,6 @@ import { downloadAndDecryptBuffer, downloadPlainCdnBuffer } from "../cdn/pic-dec
 import type { InboundAttachment, InboundAttachmentKind, MediaFailure } from "../types.js";
 import { getMimeFromFilename } from "./mime.js";
 
-const WEIXIN_MEDIA_MAX_BYTES = 100 * 1024 * 1024;
-
 /**
  * Best-effort image format detection from magic bytes.
  * Returns a mime type, or undefined when unknown.

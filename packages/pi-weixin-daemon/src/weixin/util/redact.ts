@@ -24,9 +24,6 @@ export function redactToken(
   return `${token.slice(0, prefixLen)}…(len=${token.length})`;
 }
 
-/** Field names whose values should be masked in logged JSON bodies. */
-const SENSITIVE_FIELDS = /\b(context_token|bot_token|token|authorization|Authorization)\b/;
-
 /**
  * Truncate a JSON body string to `maxLen` chars for safe logging.
  * Redacts known sensitive fields before truncating.

@@ -11,6 +11,7 @@ export function formatUserFacingError(
   let text = error instanceof Error ? error.message : String(error ?? "");
 
   text = text
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: User-facing errors must not expose ASCII control characters.
     .replace(/[\u0000-\u001f\u007f]/g, " ")
     .replace(/\b(authorization\s*:\s*bearer\s+)[^\s,;]+/gi, "$1[REDACTED]")
     .replace(/\b(bearer\s+)[A-Za-z0-9._~+/=-]{8,}/gi, "$1[REDACTED]")

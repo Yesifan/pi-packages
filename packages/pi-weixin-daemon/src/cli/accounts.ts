@@ -24,7 +24,8 @@ export function accountsCommand(): Command {
         const name = a.name ?? a.accountId;
         const user = a.userId ?? "-";
         const project = a.projectId ?? "-";
-        const since = (a.since ?? "").length > 19 ? a.since!.slice(0, 19) : (a.since ?? "-");
+        const sinceValue = a.since ?? "";
+        const since = sinceValue.length > 19 ? sinceValue.slice(0, 19) : sinceValue || "-";
         console.log(
           `${name.padEnd(11)}${a.accountId.padEnd(26)}${a.status.padEnd(15)}${user.padEnd(17)}${project.padEnd(15)}${since}`,
         );
