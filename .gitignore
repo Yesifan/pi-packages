@@ -14,6 +14,7 @@ release/
 
 # Runtime data and temporary files
 .pi-weixin/
+.refer/
 .cache/
 .tmp/
 test/.tmp/

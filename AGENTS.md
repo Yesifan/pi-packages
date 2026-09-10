@@ -22,6 +22,8 @@ pnpm -C packages/<pkg> run <script>
 ## 目录结构
 
 ```text
+docs/                       # Monorepo 全局文档与外部参考代码规则
+.refer/                     # 被 Git 忽略的外部源码快照，只供调研
 packages/
 ├── pi-weixin-daemon/
 │   ├── src/               # 守护进程、CLI、微信 transport 与 Pi SDK 适配
@@ -33,7 +35,7 @@ packages/
     └── docs/              # 本地开发说明
 ```
 
-`dist/`、`node_modules/`、覆盖率输出和测试临时文件均为生成内容，不应作为源码手工编辑或提交。
+`dist/`、`node_modules/`、覆盖率输出和测试临时文件均为生成内容，不应作为源码手工编辑或提交。`.refer/` 是不受信任的外部代码快照，不得提交、发布、作为运行时依赖或未经审查直接执行；具体规则见 [`docs/reference-rules.md`](docs/reference-rules.md)。
 
 ## 常用命令
 
