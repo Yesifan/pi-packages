@@ -220,8 +220,12 @@ Tencent/openclaw-weixin          # 微信协议参考（MIT，见 LICENSE.attrib
 ## 测试
 
 ```bash
-corepack pnpm test          # 单元 + fake 集成 + 真 Pi SDK 集成 + UDS RPC 集成
+corepack pnpm test          # 全量：包含需要实际模型 API 的集成测试
+corepack pnpm test:ci       # 离线：单元、fake 集成和 UDS RPC；GitHub CI 使用此命令
 ```
+
+`test:ci` 明确排除 `bridge-real.test.ts`、`pi-runtime.test.ts`、
+`runtime-extension.test.ts` 和 `ui-real.test.ts`，避免 CI 访问实际 AI API 或消耗额度。
 
 层：单元（busy 状态、命令路由、路径校验、账号存储、媒体解密）、fake 集成（A 忙不影响 B、回复广播/互通、空闲关闭、UI 路由、多 project 隔离）、真 Pi SDK 集成（项目 extension、`weixin_send_file`）、Daemon/UDS RPC 集成（project create / `<name> add` / list / enable、account.logout、DaemonNotRunningError）。
 

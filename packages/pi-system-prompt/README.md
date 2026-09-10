@@ -7,7 +7,7 @@ A [Pi](https://pi.dev) extension that adds a `/system-prompt` slash command.
 ## Install
 
 ```bash
-pi install npm:@BYKWP/pi-system-prompt
+pi install npm:@bykwp/pi-system-prompt
 # project-local installation from a monorepo checkout:
 pi install -l ./packages/pi-system-prompt
 ```

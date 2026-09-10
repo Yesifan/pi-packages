@@ -1,5 +1,5 @@
 {
-  "name": "@BYKWP/pi-system-prompt",
+  "name": "@bykwp/pi-system-prompt",
   "version": "0.1.0",
   "description": "Pi extension: /system-prompt prints the real system prompt (with tool & skill context) sent to the model",
   "keywords": [
@@ -8,6 +8,11 @@
     "system-prompt"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Yesifan/pi-packages.git",
+    "directory": "packages/pi-system-prompt"
+  },
   "type": "module",
   "engines": {
     "node": ">=22"
@@ -33,6 +38,7 @@
     ]
   },
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "provenance": true
   }
 }

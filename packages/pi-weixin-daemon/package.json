@@ -1,7 +1,12 @@
 {
-  "name": "@BYKWP/pi-weixin-daemon",
+  "name": "@bykwp/pi-weixin-daemon",
   "version": "0.6.8",
   "description": "Connect Weixin iLink Bot with Pi Coding Agent",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Yesifan/pi-packages.git",
+    "directory": "packages/pi-weixin-daemon"
+  },
   "type": "module",
   "engines": {
     "node": ">=22.19.0"
@@ -22,6 +27,7 @@
     "dev": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:ci": "vitest run --exclude test/integration/bridge-real.test.ts --exclude test/integration/pi-runtime.test.ts --exclude test/integration/runtime-extension.test.ts --exclude test/integration/ui-real.test.ts",
     "test:watch": "vitest"
   },
   "dependencies": {
@@ -42,6 +48,7 @@
     "vitest": "^4.1.11"
   },
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "provenance": true
   }
 }

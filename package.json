@@ -1,8 +1,8 @@
 {
-  "name": "@BYKWP/pi-packages",
+  "name": "@bykwp/pi-packages",
   "private": true,
   "type": "module",
-  "description": "Monorepo for @BYKWP Pi packages",
+  "description": "Monorepo for @bykwp Pi packages",
   "packageManager": "pnpm@11.25.0",
   "engines": {
     "node": ">=22"
@@ -11,11 +11,16 @@
     "build": "pnpm -r run build",
     "check": "pnpm -r run typecheck && biome check .",
     "test": "pnpm -r run test",
+    "test:ci": "pnpm -r run test:ci",
     "lint": "biome lint .",
     "format": "biome format --write .",
-    "format:check": "biome format ."
+    "format:check": "biome format .",
+    "changeset": "changeset",
+    "version-packages": "changeset version && pnpm install --lockfile-only",
+    "release": "pnpm check && pnpm test:ci && pnpm build && changeset publish"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.12"
+    "@biomejs/biome": "^2.5.12",
+    "@changesets/cli": "^2.31.1"
   }
 }

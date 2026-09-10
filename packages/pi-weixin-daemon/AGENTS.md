@@ -33,10 +33,10 @@ Weixin iLink → account monitor → AccountManager → ProjectManager
 在 monorepo 根目录运行：
 
 ```bash
-pnpm --filter @BYKWP/pi-weixin-daemon typecheck
+pnpm --filter @bykwp/pi-weixin-daemon typecheck
 pnpm exec biome lint packages/pi-weixin-daemon
-pnpm --filter @BYKWP/pi-weixin-daemon test
-pnpm --filter @BYKWP/pi-weixin-daemon build
+pnpm --filter @bykwp/pi-weixin-daemon test
+pnpm --filter @bykwp/pi-weixin-daemon build
 ```
 
 运行环境要求 Node.js `>=22.19.0`、pnpm `11.x`；版本和依赖以 `package.json` 为准。
