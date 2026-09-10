@@ -7,6 +7,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/) and [Semantic Ver
 
 ---
 
+## [0.6.8]
+
+### Fixed
+
+- 修复包名改为 `@BYKWP/pi-weixin-daemon` 后 `pi-wx --version` 错误显示 `0.0.0` 的问题。
+
 ## [0.6.7]
 
 ### Changed

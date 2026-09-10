@@ -14,7 +14,11 @@ function readPackageVersion(): string {
           name?: string;
           version?: string;
         };
-        if (parsed && parsed.name === "pi-weixin-daemon" && typeof parsed.version === "string")
+        if (
+          parsed &&
+          parsed.name === "@BYKWP/pi-weixin-daemon" &&
+          typeof parsed.version === "string"
+        )
           return parsed.version;
       } catch {
         // keep walking up
