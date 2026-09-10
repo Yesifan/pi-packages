@@ -43,14 +43,6 @@ pnpm --filter @BYKWP/pi-weixin-daemon build
 
 ---
 
-## 版本管理
-- 无 **BREAKING** 变更（仅新增/修复/行为增强）→ 只更新 `package.json`的 **`z`（patch）**，例如 `0.5.0 → 0.5.1`。
-- 有破坏性的变更（标记 `BREAKING`）→ 升 **`minor`**（`x.y`），必要时 **`major`**（`x`）。
-- `src/version.ts` 动态读 `package.json` 作为**唯一版本源**，改版只改 `package.json`。
-- 每次改版同步在 `CHANGELOG.md` 顶部新增对应版本条目（Keep a Changelog）。
-
----
-
 ## 项目文档索引
 
 本项目的机制 / 领域模型文档在 [`docs/README.md`](docs/README.md)，建议按以下顺序阅读：

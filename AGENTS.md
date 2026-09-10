@@ -9,7 +9,7 @@
 - `@BYKWP/pi-weixin-daemon`：连接微信 iLink Bot 与 Pi Coding Agent 的 TypeScript 守护进程及 `pi-wx` CLI。
 - `@BYKWP/pi-system-prompt`：提供 `/system-prompt` 命令，显示当前会话实际发送给模型的系统提示词和工具定义。
 
-根目录是默认工作目录。除非命令本身有明确要求，不要通过 `cd packages/<pkg>` 切换目录；应从根目录使用 pnpm filter：
+在根目录使用 pnpm filter 运行子 package 的命令：
 
 ```bash
 pnpm --filter @BYKWP/<pkg> run <script>
@@ -17,25 +17,17 @@ pnpm --filter @BYKWP/<pkg> run <script>
 pnpm -C packages/<pkg> run <script>
 ```
 
-处理某个子包前，先阅读该目录下的 README、`package.json` 和已有的 `AGENTS.md`。更具体目录中的 `AGENTS.md` 优先于本文件。
+处理某个子包前，先阅读该目录下的 README、`package.json` 和已有的 `AGENTS.md`。
+更具体目录中的 `AGENTS.md` 优先于本文件。
 
 ## 目录结构
 
 ```text
-docs/                       # Monorepo 全局文档与外部参考代码规则
+docs/                       # Monorepo 全局文档
 .refer/                     # 被 Git 忽略的外部源码快照，只供调研
 packages/
-├── pi-weixin-daemon/
-│   ├── src/               # 守护进程、CLI、微信 transport 与 Pi SDK 适配
-│   ├── test/              # Vitest 单元和集成测试
-│   ├── docs/              # 架构、协议、需求与 ADR
-│   └── AGENTS.md          # 该子包的领域约束和文档索引
-└── pi-system-prompt/
-    ├── extensions/        # Pi 扩展源码
-    └── docs/              # 本地开发说明
 ```
 
-`dist/`、`node_modules/`、覆盖率输出和测试临时文件均为生成内容，不应作为源码手工编辑或提交。`.refer/` 是不受信任的外部代码快照，不得提交、发布、作为运行时依赖或未经审查直接执行；具体规则见 [`docs/reference-rules.md`](docs/reference-rules.md)。
 
 ## 常用命令
 
@@ -90,6 +82,13 @@ pnpm --filter @BYKWP/pi-system-prompt typecheck
 
 跨包依赖应显式声明。只有确实需要引用本仓库兄弟包时才使用 `workspace:` 协议，不要依赖隐式链接。
 
+## 版本管理
+
+- 无 **BREAKING** 变更（仅新增、修复或行为增强）时，只更新包版本的 **patch** 位，例如 `0.5.0 → 0.5.1`。
+- 有破坏性变更（标记 `BREAKING`）时，升级 **minor**，必要时升级 **major**。
+- 每个包的 `package.json` 是其唯一版本源，不要在源码中重复维护版本号。
+- 每次改版都应在对应包的 `CHANGELOG.md` 顶部新增版本条目，格式遵循 Keep a Changelog。
+
 ## 发布内容约定
 
 每个可发布包必须在 `package.json` 中使用 `files` allowlist，不使用 `.npmignore` 反向排除。发布包应包含：
@@ -118,4 +117,13 @@ pnpm --filter @BYKWP/<pkg> pack --pack-destination /tmp
 
 代码、命令、包名、安装方式或公开行为发生变化时，同步更新相关 README 和用户文档。文档应描述当前真实行为，不把临时计划、历史设想或未实现能力写成现状。
 
-`pi-weixin-daemon` 的领域模型、路由、iLink 协议及 ADR 位于 `packages/pi-weixin-daemon/docs/`；涉及这些机制的改动应先阅读对应文档，并在行为变化后同步更新。
+### 文档索引
+
+具体 package 的包查看package 目录下的 AGENTS.md 和 docs/*
+
+- ./docs/local-install.md 指导如何本地安装开发版本
+- ./docs/reference-rules.md 指导如何管理参考项目
+
+### ADR 约定
+
+影响系统结构、关键质量属性或难以撤销的决策，应记录到 `packages/*/docs/adr/`。普通实现细节不需要 ADR。决策变更时应新增 ADR 并关联旧记录，不要覆盖原有理由。
