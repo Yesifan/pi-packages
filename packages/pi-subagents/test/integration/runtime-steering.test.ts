@@ -2,13 +2,15 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import type {
-  AgentSession,
-  ExtensionContext,
-  SessionManager,
+import {
+  type AgentSession,
+  type ExtensionContext,
+  ProjectTrustStore,
+  type SessionManager,
 } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenedChild } from "../../src/child-session.js";
+import { initializeProjectSubagents } from "../../src/project-storage.js";
 import { RootRuntime } from "../../src/runtime.js";
 import { PersistentSubagentStore } from "../../src/store.js";
 import type {
@@ -40,6 +42,58 @@ function generalAgent(): AgentDefinitionSnapshot {
 }
 
 describe("runtime steering", () => {
+  it("requires trust for an external project even when only subagent settings exist", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pi-subagents-runtime-trust-"));
+    temporaryDirectories.push(root);
+    const cwd = path.join(root, "project");
+    const external = path.join(root, "external");
+    const rootSessionFile = path.join(root, "root.jsonl");
+    await Promise.all([
+      mkdir(cwd),
+      mkdir(path.join(external, ".pi", "subagents"), { recursive: true }),
+      writeFile(rootSessionFile, ""),
+    ]);
+    await writeFile(path.join(external, ".pi", "subagents", "setting.json"), "{}\n");
+    const agentDir = path.join(root, "agent");
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    const storage = await initializeProjectSubagents(cwd);
+    const runtime = new RootRuntime(path.join(root, "extension.js"));
+    await runtime.initialize(
+      {
+        rootSessionId: "root-session",
+        rootSessionFile,
+        ctx: {
+          cwd,
+          ui: {},
+          hasUI: false,
+          isProjectTrusted: () => true,
+        } as unknown as ExtensionContext,
+        sendReport: () => undefined,
+      },
+      {
+        externalDirectories: [external],
+        maxDepth: 4,
+        maxLiveAgents: 8,
+        uiTimeoutMs: 100,
+        projectRoot: cwd,
+        storageDirectory: storage.directory,
+      },
+    );
+    const resolveTrust = Reflect.get(runtime, "resolveTrust") as (
+      target: string,
+    ) => Promise<boolean>;
+    await expect(resolveTrust.call(runtime, external)).resolves.toBe(false);
+
+    const allowedRoot = path.join(root, "allowed-external");
+    const deniedChild = path.join(allowedRoot, "denied-child");
+    await mkdir(deniedChild, { recursive: true });
+    const trustStore = new ProjectTrustStore(agentDir);
+    trustStore.set(allowedRoot, true);
+    trustStore.set(deniedChild, false);
+    await expect(resolveTrust.call(runtime, deniedChild)).resolves.toBe(false);
+    await runtime.shutdown();
+  });
+
   it("rejects a normal busy ask and steers the current run without creating another run", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pi-subagents-runtime-"));
     temporaryDirectories.push(root);
@@ -51,18 +105,24 @@ describe("runtime steering", () => {
     process.env.PI_CODING_AGENT_DIR = agentDir;
 
     const runtime = new RootRuntime(path.join(root, "extension.js"));
+    const storage = await initializeProjectSubagents(cwd);
     const config: SubagentsConfig = {
       externalDirectories: [],
       maxDepth: 4,
       maxLiveAgents: 8,
       uiTimeoutMs: 100,
       projectRoot: cwd,
+      storageDirectory: storage.directory,
     };
     await runtime.initialize(
       {
         rootSessionId: "root-session",
         rootSessionFile,
-        ctx: { ui: {} } as ExtensionContext,
+        ctx: {
+          cwd,
+          ui: {},
+          isProjectTrusted: () => true,
+        } as unknown as ExtensionContext,
         sendReport: () => undefined,
       },
       config,
@@ -70,8 +130,9 @@ describe("runtime steering", () => {
 
     const promptOptions: Array<{ streamingBehavior?: string }> = [];
     let aborted = false;
+    let childSessionFile = "";
     const fakeSessionManager = {
-      getSessionFile: () => path.join(root, "child.jsonl"),
+      getSessionFile: () => childSessionFile,
       getSessionId: () => "child-session",
       getLeafId: () => null,
       getBranch: () => [],
@@ -97,7 +158,11 @@ describe("runtime steering", () => {
       dispose: () => undefined,
     } as unknown as AgentSession;
     const fakeFactory = {
-      createSessionManager: async () => fakeSessionManager,
+      createSessionManager: async (_cwd: string, sessionsDirectory: string) => {
+        childSessionFile = path.join(sessionsDirectory, "child.jsonl");
+        await writeFile(childSessionFile, "");
+        return fakeSessionManager;
+      },
       open: async (options: { stored: StoredSubagent }): Promise<OpenedChild> => ({
         session: fakeSession,
         actualThinking: options.stored.thinking,
@@ -135,6 +200,11 @@ describe("runtime steering", () => {
       context,
       undefined,
     );
+    const runtimeStore = Reflect.get(runtime, "store") as PersistentSubagentStore;
+    await expect(runtimeStore.readRun(started.id, started.run_id)).resolves.toMatchObject({
+      state: "accepted",
+      acceptedAt: expect.any(String),
+    });
     await expect(
       runtime.askSubagent(caller, { id: started.id, prompt: "normal" }, context, undefined),
     ).rejects.toMatchObject({ code: "SUBAGENT_BUSY" });
@@ -158,7 +228,12 @@ describe("runtime steering", () => {
     await runtime.shutdown();
     expect(aborted).toBe(true);
 
-    const reopened = new PersistentSubagentStore(agentDir, "root-session", rootSessionFile);
+    const reopened = new PersistentSubagentStore(
+      cwd,
+      storage.directory,
+      "root-session",
+      rootSessionFile,
+    );
     const agents = await reopened.open();
     expect(agents[0]).toMatchObject({ id: started.id, interrupted: true });
     await expect(reopened.readRun(started.id, started.run_id)).resolves.toMatchObject({

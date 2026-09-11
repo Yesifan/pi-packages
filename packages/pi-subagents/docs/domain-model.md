@@ -49,7 +49,7 @@ logical subagent 是可恢复身份；AgentSession instance 是一次加载到�
 - `rootSessionId`：Pi SessionManager 的 session ID；
 - `rootSessionFile`：该 file-backed session 的规范化文件路径。
 
-两者共同派生 `rootKey`。复制、导入、fork 或新建出来的 root session 不得凭相同内容接管原树。没有 file-backed session 的 root 不能启用可恢复 subagent。
+两者共同派生 `rootKey`。`rootProjectRoot` 是 root session 初始化时确定的 canonical project root，承载整棵树唯一的权威 store；它不是 root identity，同一项目中的不同 root 仍由不同 `rootKey` 隔离。复制、导入、fork 或新建出来的 root session 不得凭相同内容接管原树。没有 file-backed session 的 root 不能启用可恢复 subagent。
 
 ### 2.2 RootRuntime
 
@@ -58,8 +58,8 @@ logical subagent 是可恢复身份；AgentSession instance 是一次加载到�
 - logical subagent 与 active mount 索引；
 - direct ownership 校验；
 - logical run ID、parent run dependency 和报告路由；
-- `max_depth`、`max_live_agents`、cycle 和 root shutdown；
-- root-scoped store writer lock；
+- root project 配置的 `max_depth`、`max_live_agents`、cycle 和 root shutdown；
+- 固定 `rootProjectRoot` 及其 `<rootKey>` store writer lock；
 - 所有后代共享的 UI broker。
 
 RootRuntime 可以看见整棵树以便统一清理，但不能把全树合并成一个 agent registry 或 cwd allowlist。
@@ -82,15 +82,15 @@ RootRuntime 可以看见整棵树以便统一清理，但不能把全树合并�
 | `depth` | 在 root 树中的深度 | 否 |
 | `model` | 固定的 provider/model identity | 否 |
 | `thinking` | 实际生效的 thinking level | 否 |
-| `sessionId` / `sessionFile` | child Pi history identity | 否 |
+| `sessionId` / `sessionPath` | child Pi history identity；路径相对于 root scope | 否 |
 
 `lastRunId`、`activeRunId`、`interrupted` 和时间戳属于可变生命周期元数据。
 
-logical subagent 完成一项任务后仍存在，但其 AgentSession instance 会释放；下一次普通 ask 从 `sessionFile` 恢复历史。
+logical subagent 完成一项任务后仍存在，但其 AgentSession instance 会释放；下一次普通 ask 从 root scope 安全解析 `sessionPath` 后恢复历史。
 
 ### 2.4 LogicalRun（Delegation）
 
-一次被成功接受的 `subagent` 或普通 `ask_subagent` 请求。标识为 `runId`，外部格式为 `run_*`。
+一次被成功接受的 `subagent` 或普通 `ask_subagent` 请求。标识为 `runId`，外部格式为 `run_*`。为跨越持久化与 Pi preflight 边界，磁盘可短暂存在 `state = "opening"` 的 prepared run record；它尚不是 LogicalRun，恢复时必须清除而不是标记 interrupted。preflight 成功后状态变为 `accepted`，终结后变为 `completed`。
 
 一个 run 固定关联：
 
@@ -108,7 +108,7 @@ logical subagent 当前加载到内存中的 Pi `AgentSession`。同一 logical 
 
 mount 负责承载：
 
-- 从 child `sessionFile` 恢复的 Pi history；
+- 从 child scope-relative `sessionPath` 恢复的 Pi history；
 - target cwd 当前加载的 Pi resources、extensions 和 tools；
 - snapshot-backed current role system prompt；
 - 当前 mount 独立的 ModelRuntime 与 UI proxy；
@@ -160,7 +160,7 @@ AgentTypeRegistry
 canonical externalDirectories
 ```
 
-它回答“这个 caller 现在能创建什么 child”，不是整棵树的全局配置。父 session 不预读 external 项目的下一层配置。
+它回答“这个 caller 现在能创建什么 child”，不是整棵树的全局配置。`externalDirectories` 来自 caller project 的 `.pi/subagents/setting.json`；父 session 不预读 external 项目的下一层配置。`max_depth`、`max_live_agents` 和 `ui_timeout_ms` 则由 root project 固定，不接受 descendant caller-local 覆盖。任何项目配置都必须在该项目通过 trust 后才能读取。
 
 例如：
 
@@ -305,29 +305,34 @@ steering input 不改变 logical identity、snapshot、cwd、model、thinking �
 
 ## 6. 持久化模型
 
-每个 root scope 使用单 writer lock，并包含：
+项目通过 trust 后按需初始化本地目录。每个 root scope 使用单 writer lock，并包含：
 
 ```text
-<agentDir>/.bykwp-pi-subagents/roots/<rootKey>/
-  root.json
-  agents/<agentId>/
-    agent.json
-    runs/<runId>.json
-    sessions/<pi-session-file>.jsonl
+<rootProjectRoot>/.pi/subagents/
+  setting.json
+  .gitignore
+  sessions/<rootKey>/
+    root.json
+    agents/<agentId>/
+      agent.json
+      runs/<runId>.json
+      sessions/<pi-session-file>.jsonl
 ```
+
+root project 是整棵 delegation tree 的唯一事实来源。对于 `A → B → C`，B、C 不保存 branch、ledger、mirror 或 child history。`sessions/` 必须被 Git ignore 且不得已 tracked，局部 `.gitignore` 的 `/sessions/` 必须是最后一条有效规则；初始化或写入遇到权限、unsafe symlink、path escape、Git 暴露或 lock 冲突时 fail closed，不回退到 agentDir。
 
 | 数据 | 持久化 | 恢复策略 |
 |---|---|---|
 | logical identity / ownership | 是 | 原样恢复 |
 | role snapshot/hash | 是 | 原样恢复，不重解析替换 |
-| child Pi history | 是，SessionManager JSONL | 从原 session file 打开 |
+| child Pi history | 是，SessionManager JSONL | 验证 scope-relative path 后打开 |
 | run result/outcome/delivery | 是 | 用于审计和恢复状态 |
 | active mount / SDK object | 否 | 普通 ask 时重新创建 |
 | DelegationContext | 否 | 根据 target cwd 当前配置重建 |
 | tools/extensions/ModelRuntime/UI proxy | 否 | 每个 mount 重新加载/绑定 |
 | 未完成 tool 副作用 | 否 | 不自动重放 |
 
-恢复发现 `activeRunId` 时，将对应 run 标记为 `interrupted` 并清除 active identity；用户可以再次普通 ask，但旧 run 不会继续执行。
+metadata 使用 `0600` 与原子 rename，生成目录在 POSIX 上使用 `0700`。已初始化 scope 在运行中消失后不得递归重建。`root.json` 必须与当前 root identity 一致。恢复发现 `activeRunId` 时，将对应 run 标记为 `interrupted` 并清除 active identity；用户可以再次普通 ask，但旧 run 不会继续执行。旧 agentDir store 不迁移也不作为 fallback。
 
 ---
 
@@ -337,10 +342,11 @@ steering input 不改变 logical identity、snapshot、cwd、model、thinking �
 
 ```text
 caller tool
+  → root/caller project trust 后初始化或验证 `.pi/subagents`
   → 从 caller AgentTypeRegistry 解析角色 snapshot
   → 按 caller AllowedCwdSet 校验 canonical target cwd
   → 校验 depth/live/cycle/trust
-  → 创建 logical identity 与 child SessionManager
+  → 在 root project scope 创建 logical identity 与私有 child SessionManager
   → 从 target cwd 加载当前 Pi resources
   → 创建独立 ModelRuntime、工具集、UI proxy 和 AgentSession
   → Pi preflight 接受 prompt
@@ -356,7 +362,7 @@ caller tool
 direct owner
   → 验证 logical subagent 存在且无 live mount
   → 用 caller 当前 AllowedCwdSet 重新验证 stored cwd
-  → 打开原 child SessionManager/history
+  → 验证 relative/containment/symlink/session identity 后打开原 child SessionManager/history
   → current role 使用 stored snapshot
   → target resources/tools/delegation config 使用当前状态
   → 创建新 runId 并执行
@@ -378,27 +384,30 @@ child SDK settled
 
 shutdown 使 runtime epoch 失效，取消 UI、abort 和 dispose 全部 live mounts，把未完成 run 标记为 interrupted，最后释放 root writer lock。
 
-同一 file-backed root resume 后恢复 logical identities 和 histories，但不恢复旧 SDK objects，不自动重放 interrupted prompts 或工具调用。
+同一 file-backed root 从同一 project-local scope resume 后恢复 logical identities 和 histories，但不恢复旧 SDK objects，不自动重放 interrupted prompts 或工具调用。项目移动不自动重定位 canonical cwd，也不搜索 agentDir 或其他项目作为 fallback。
 
 ---
 
 ## 8. 关键不变量
 
 1. **Root isolation**：不同 root scope 不共享 logical identity、writer ownership 或 ask 权限。
-2. **Direct ownership**：caller 只能 ask 自己的直接 child。
-3. **Session-local delegation**：每个 caller 只暴露自己的 agents 与 cwd allowlist。
-4. **Snapshot identity**：已有 logical subagent 的 current role 永远来自创建时 snapshot。
-5. **Current resources**：每次 mount 使用 target cwd 当前 Pi resources/tools；不复用旧 mutable registry。
-6. **Exact cwd admission**：canonical 精确匹配，不继承子目录或前缀。
-7. **Acyclic cwd chain**：external delegation 不得重复 canonical ancestor cwd。
-8. **Single active run**：同一 logical subagent 同时最多一个 logical run；普通 busy ask 不排队。
-9. **Steering is not delegation**：steering 复用 run 和 Pi queue，不产生新 run/report。
-10. **Run-bound dependencies**：child completion 只能解除创建它的 parent run dependency。
-11. **One final report**：每个 accepted logical run 最终至多生成一个业务 report envelope。
-12. **No early release**：等待 child/report 的 parent mount 不得释放。
-13. **No replay**：interrupted work 和工具副作用不得自动重放。
-14. **Fresh mutable runtime**：ModelRuntime、tools、extensions、DelegationContext 和 UI proxy 按 mount 隔离。
-15. **Acceptance boundary**：接受前取消/失败要 rollback；接受后工具返回成功对象，最终执行错误走 report。
+2. **Single authoritative project store**：整棵 tree 只存在于 root project scope，external descendants 不保存副本。
+3. **Trust before storage**：读取 project-local config、agents 或写入 store 之前必须完成对应 project trust。
+4. **Relative session containment**：child session path 必须相对 root scope 且绑定自己的 agent sessions 目录。
+5. **Direct ownership**：caller 只能 ask 自己的直接 child。
+6. **Session-local delegation**：每个 caller 只暴露自己的 agents 与 cwd allowlist。
+7. **Snapshot identity**：已有 logical subagent 的 current role 永远来自创建时 snapshot。
+8. **Current resources**：每次 mount 使用 target cwd 当前 Pi resources/tools；不复用旧 mutable registry。
+9. **Exact cwd admission**：canonical 精确匹配，不继承子目录或前缀。
+10. **Acyclic cwd chain**：external delegation 不得重复 canonical ancestor cwd。
+11. **Single active run**：同一 logical subagent 同时最多一个 logical run；普通 busy ask 不排队。
+12. **Steering is not delegation**：steering 复用 run 和 Pi queue，不产生新 run/report。
+13. **Run-bound dependencies**：child completion 只能解除创建它的 parent run dependency。
+14. **One final report**：每个 accepted logical run 最终至多生成一个业务 report envelope。
+15. **No early release**：等待 child/report 的 parent mount 不得释放。
+16. **No replay**：interrupted work 和工具副作用不得自动重放。
+17. **Fresh mutable runtime**：ModelRuntime、tools、extensions、DelegationContext 和 UI proxy 按 mount 隔离。
+18. **Acceptance boundary**：接受前取消/失败要 rollback；接受后工具返回成功对象，最终执行错误走 report。
 
 ---
 
@@ -407,7 +416,9 @@ shutdown 使 runtime epoch 失效，取消 UI、abort 和 dispose 全部 live mo
 | 领域术语 | 主要代码类型 / 字段 |
 |---|---|
 | RootRuntime | `RootRuntime` |
-| Root Store Scope | `PersistentSubagentStore.rootKey/rootDirectory` |
+| Project-local Root Store Scope | `SubagentsConfig.storageDirectory`, `PersistentSubagentStore.rootKey/rootDirectory` |
+| Root project identity | `SubagentsConfig.projectRoot` |
+| Child history path | `StoredSubagent.sessionPath` |
 | LogicalSubagent | `StoredSubagent` |
 | LogicalRun | `StoredRun` |
 | live mount | `LiveAgent` + `OpenedChild` |

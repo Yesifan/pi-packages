@@ -6,12 +6,13 @@ import type { DelegationContext, SubagentsConfig } from "./types.js";
 export async function buildDelegationContext(
   cwdInput: string,
   agentDir: string,
+  options: { initializeStorage?: boolean } = {},
 ): Promise<{ context: DelegationContext; config: SubagentsConfig }> {
   const cwd = await canonicalizeDirectory(cwdInput, {
     missing: "CWD_NOT_FOUND",
     notDirectory: "CWD_NOT_DIRECTORY",
   });
-  const config = await loadSubagentsConfig(cwd, agentDir);
+  const config = await loadSubagentsConfig(cwd, options);
   const agentTypes = await loadAgentTypeRegistry(agentDir, config.projectRoot);
   return {
     config,

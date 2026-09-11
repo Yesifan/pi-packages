@@ -1,9 +1,13 @@
-import { readFile } from "node:fs/promises";
+import { lstat, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 import { SubagentError } from "./errors.js";
 import { canonicalizeDirectory, findProjectRoot } from "./paths.js";
+import {
+  assertProjectStorageAvailable,
+  getProjectSubagentsStorage,
+  initializeProjectSubagents,
+} from "./project-storage.js";
 import type { SubagentsConfig } from "./types.js";
 
 const DEFAULTS = {
@@ -32,9 +36,14 @@ const CONFIG_KEYS = new Set([
 async function readConfigFile(file: string): Promise<RawConfig | undefined> {
   let text: string;
   try {
+    const info = await lstat(file);
+    if (info.isSymbolicLink() || !info.isFile()) {
+      throw new SubagentError("INVALID_CONFIG", `Config must be a non-symlink file: ${file}`);
+    }
     text = await readFile(file, "utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    if (error instanceof SubagentError) throw error;
     throw new SubagentError("INVALID_CONFIG", `Cannot read config ${file}`, undefined, {
       cause: error,
     });
@@ -109,33 +118,33 @@ async function normalizeExternalDirectories(values: readonly string[]): Promise<
 
 export async function loadSubagentsConfig(
   cwdInput: string,
-  agentDir: string,
+  options: { initializeStorage?: boolean } = {},
 ): Promise<SubagentsConfig> {
   const cwd = await canonicalizeDirectory(cwdInput, {
     missing: "CWD_NOT_FOUND",
     notDirectory: "CWD_NOT_DIRECTORY",
   });
   const projectRoot = await findProjectRoot(cwd);
-  const globalFile = path.join(agentDir, "extensions", "pi-subagents.json");
-  const projectFile = path.join(projectRoot, CONFIG_DIR_NAME, "extensions", "pi-subagents.json");
-  const globalConfig = (await readConfigFile(globalFile)) ?? {};
-  const projectConfig = (await readConfigFile(projectFile)) ?? {};
-  const merged: Required<RawConfig> = {
-    external_directory:
-      projectConfig.external_directory ??
-      globalConfig.external_directory ??
-      DEFAULTS.external_directory,
-    max_depth: projectConfig.max_depth ?? globalConfig.max_depth ?? DEFAULTS.max_depth,
-    max_live_agents:
-      projectConfig.max_live_agents ?? globalConfig.max_live_agents ?? DEFAULTS.max_live_agents,
-    ui_timeout_ms:
-      projectConfig.ui_timeout_ms ?? globalConfig.ui_timeout_ms ?? DEFAULTS.ui_timeout_ms,
+  const storage =
+    options.initializeStorage === false
+      ? await getProjectSubagentsStorage(projectRoot)
+      : await initializeProjectSubagents(projectRoot);
+  if (options.initializeStorage === false) {
+    await assertProjectStorageAvailable(storage.projectRoot, storage.directory);
+  }
+  const projectConfig = (await readConfigFile(storage.settingsFile)) ?? {};
+  const effective: Required<RawConfig> = {
+    external_directory: projectConfig.external_directory ?? DEFAULTS.external_directory,
+    max_depth: projectConfig.max_depth ?? DEFAULTS.max_depth,
+    max_live_agents: projectConfig.max_live_agents ?? DEFAULTS.max_live_agents,
+    ui_timeout_ms: projectConfig.ui_timeout_ms ?? DEFAULTS.ui_timeout_ms,
   };
   return {
-    externalDirectories: await normalizeExternalDirectories(merged.external_directory),
-    maxDepth: merged.max_depth,
-    maxLiveAgents: merged.max_live_agents,
-    uiTimeoutMs: merged.ui_timeout_ms,
-    projectRoot,
+    externalDirectories: await normalizeExternalDirectories(effective.external_directory),
+    maxDepth: effective.max_depth,
+    maxLiveAgents: effective.max_live_agents,
+    uiTimeoutMs: effective.ui_timeout_ms,
+    projectRoot: storage.projectRoot,
+    storageDirectory: storage.directory,
   };
 }

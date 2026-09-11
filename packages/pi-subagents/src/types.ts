@@ -22,6 +22,7 @@ export interface SubagentsConfig {
   maxLiveAgents: number;
   uiTimeoutMs: number;
   projectRoot: string;
+  storageDirectory: string;
 }
 
 export interface DelegationContext {
@@ -43,7 +44,8 @@ export interface StoredRun {
   id: string;
   agentId: string;
   parentRunId: string | null;
-  acceptedAt: string;
+  state: "opening" | "accepted" | "completed";
+  acceptedAt?: string;
   completedAt?: string;
   outcome?: RunOutcome;
   result?: string;
@@ -53,7 +55,7 @@ export interface StoredRun {
 }
 
 export interface StoredSubagent {
-  schemaVersion: 1;
+  schemaVersion: 2;
   id: string;
   rootSessionId: string;
   parentAgentId: string | null;
@@ -66,7 +68,7 @@ export interface StoredSubagent {
   model: ModelIdentity;
   thinking: ThinkingLevel;
   sessionId: string;
-  sessionFile: string;
+  sessionPath: string;
   lastRunId?: string;
   activeRunId?: string;
   interrupted?: boolean;

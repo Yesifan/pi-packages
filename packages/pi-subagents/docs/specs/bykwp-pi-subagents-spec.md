@@ -1,7 +1,7 @@
 # @bykwp/pi-subagents — 实现规格
 
-**文档版本：** 1.1  
-**状态：** v1 实现基线（已合并 session-local delegation patch）  
+**文档版本：** 1.2
+**状态：** v1 实现基线（已合并 session-local delegation 与 project-local storage patch）
 **目标包名：** `@bykwp/pi-subagents`  
 **目标宿主：** Pi CLI / TUI  
 **SDK 验证基线：** `@earendil-works/pi-coding-agent@0.85.1`  
@@ -34,7 +34,9 @@
 | cwd 默认值 | caller 当前 cwd |
 | cwd 显式输入 | 只允许绝对路径 |
 | cwd 授权 | 必须精确等于 caller cwd 或 caller 配置的某个 `external_directory` |
-| `external_directory` 配置 | 允许 `~` / `$HOME` / `${HOME}`，展开后必须绝对；精确目录匹配 |
+| `external_directory` 配置 | `<callerProjectRoot>/.pi/subagents/setting.json`；允许 home 展开；精确目录匹配 |
+| root runtime 配置 | `max_depth`、`max_live_agents`、`ui_timeout_ms` 只由 root project 决定 |
+| 持久化 | root project 的 `.pi/subagents/sessions/<rootKey>/` 保存整棵树唯一权威副本 |
 | 运行模式 | 始终后台；工具不等待委派任务最终完成 |
 | same-cwd child | 不提供 delegation tools |
 | external child | 在角色与 depth 允许时可以继续委派，并加载自己的 delegation config |
@@ -86,7 +88,7 @@ RootRuntime 在内存中管理所有后代，但工具调用权限是按调用�
 
 ### 2.3 Session-local delegation configuration
 
-每个具有 `subagent` 工具的 session 都拥有由自身 cwd 决定的 delegation configuration：
+每个具有 `subagent` 工具的 session 都拥有由自身 cwd 决定的 delegation configuration。项目通过 trust 后从 `<currentProjectRoot>/.pi/subagents/setting.json` 读取 caller-local `external_directory`：
 
 ```text
 Agent types:
@@ -109,7 +111,7 @@ CurrentRole(child) != DelegationAgentRegistry(child)
 
 child 当前角色来自 caller 创建时解析并保存的 snapshot；child 后续创建下一层 child 时使用由 child 自己 cwd 构建的 registry。两者不同是合法且正常的状态。
 
-RootRuntime 只负责 logical ownership、parent/child 关系、run ID、`max_depth`、`max_live_agents`、UI broker、报告路由、shutdown、持久化与 active instances；它不得维护全局共享的 AgentTypeRegistry 或所有 descendant 共用的 cwd allowlist。
+RootRuntime 只负责 logical ownership、parent/child 关系、run ID、root project 固定的 `max_depth`/`max_live_agents`/`ui_timeout_ms`、UI broker、报告路由、shutdown、持久化与 active instances；它不得维护全局共享的 AgentTypeRegistry 或所有 descendant 共用的 cwd allowlist。root project 的 `.pi/subagents/sessions/<rootKey>/` 是整棵树唯一权威 store；external descendants 不保存副本。
 
 ## 3. 外部工具契约
 
@@ -288,12 +290,13 @@ steering 在 idle、实例已释放、opening、closing/finalizing、恢复中�
 
 本节定义的是**本包配置**，不是 Pi 内置配置字段。
 
-配置文件：
+配置文件只有项目级位置：
 
 ```text
-用户级：<getAgentDir()>/extensions/pi-subagents.json
-项目级：<currentProjectRoot>/.pi/extensions/pi-subagents.json
+<currentProjectRoot>/.pi/subagents/setting.json
 ```
+
+文件不存在时使用内置默认值；不读取 global config，也不读取旧 `.pi/extensions/pi-subagents.json`。读取配置或初始化目录之前必须先完成该 project 的 Pi trust。
 
 v1 schema：
 
@@ -310,9 +313,11 @@ v1 schema：
 }
 ```
 
-默认值：`external_directory: []`，其他三个字段使用示例值。这些是本规格选定的实现默认值，不是 Pi SDK 默认值。用户级与 session 当前项目级配置合并时，项目级同名字段替换用户级字段，数组不做隐式 union；畸形配置不得静默回退。
+默认值：`external_directory: []`，其他三个字段使用示例值。这些是本规格选定的实现默认值，不是 Pi SDK 默认值。畸形配置不得静默回退。
 
 `external_directory` 是精确 external cwd 列表，不是目录树 root。每个具有委派能力的 session 都根据自己的 cwd/current project 加载这一字段；父 session 不加载 external cwd 内部项目的本包配置。B 可以通过自己的配置允许 C，即使 root/A 未配置 C。
+
+`max_depth`、`max_live_agents`、`ui_timeout_ms` 只使用 root project 的值并约束整棵树。descendant 项目中的这些字段不会修改当前外层 RootRuntime，只在该项目自身成为 root 时生效。
 
 每一项只允许展开 `~`、`$HOME`、`${HOME}`。除此之外不得执行通用环境变量展开、shell expansion、glob 或命令替换。加载顺序固定为：
 
@@ -336,7 +341,7 @@ canonicalTarget === canonicalConfiguredDirectory
 
 不得使用 `startsWith()` 或子树包含判断。配置 `/workspace/backend` 只允许该目录本身；`/workspace/backend/src`、`/workspace/backend/packages/foo`、`/workspace`、`/workspace/backend-other` 均拒绝。尾分隔符与指向同一目录的 symlink 经 canonicalization 后可以匹配；需要允许子目录时必须逐项显式配置。
 
-RootRuntime 继续统一执行 `max_depth`、`max_live_agents`、root ownership、shutdown、UI 与报告约束，但不保存全树共享 cwd allowlist。每次 `subagent()` 只由直接 caller 的 DelegationContext 判断目标 cwd。`max_live_agents` 计数包括正在初始化、执行、等待子任务和清理中的实例，不包括已经释放实例的持久化记录和用户 root session；达到限制立即拒绝，不建立队列。
+RootRuntime 继续统一执行 root project 配置的 `max_depth`、`max_live_agents`、root ownership、shutdown、UI 与报告约束，但不保存全树共享 cwd allowlist。每次 `subagent()` 只由直接 caller 的 DelegationContext 判断目标 cwd。`max_live_agents` 计数包括正在初始化、执行、等待子任务和清理中的实例，不包括已经释放实例的持久化记录和用户 root session；达到限制立即拒绝，不建立队列。
 
 ## 5. Agent type
 
@@ -436,7 +441,7 @@ interface AgentDefinitionSnapshot {
 
 ### 6.2 Project root 的有限用途
 
-Git/project root 仍可用于定位 caller 当前项目的 `.pi/agents`、项目 trust 和 Pi 普通资源发现，但不参与 cwd allowlist 精确匹配、delegation capability 或 cycle detection。识别到更大的 Git root 不得扩大 cwd 准入。
+Git/project root 用于定位 caller 当前项目的 `.pi/agents`、`.pi/subagents/setting.json`、项目 trust 和 Pi 普通资源；root session 的 project root 还用于固定整棵树的权威 store。project root 不参与 cwd allowlist 精确匹配、delegation capability 或 cycle detection。识别到更大的 Git root 不得扩大 cwd 准入。
 
 ### 6.3 委派能力与循环
 
@@ -475,7 +480,7 @@ caller 的授权只约束它的下一跳。A 仅配置 B、B 仅配置 C 时允�
 
 Pi 普通资源发现可能加载目标 cwd 的祖先项目指令、用户级资源和已配置资源；普通 Bash、第三方工具和扩展代码也不受本包 cwd 白名单自动约束。Pi 包中的扩展可执行代码。[P5][P8]
 
-外部目录可用不等于外部项目代码已被信任。必须保留 Pi 的项目 trust 语义：不可信的项目扩展不能先执行、之后才弹框。通过官方 trust/bootstrap 路径或本包在加载前的原生确认适配实现，不能把所有目标直接标记 trusted。[P5]
+外部目录可用不等于外部项目代码已被信任。必须保留 Pi 的项目 trust 语义：不可信项目的 `.pi/subagents/setting.json`、`.pi/agents` 和普通项目资源不能先读取，项目目录也不能先创建/修改、之后才弹框。即使该项目唯一的项目资源是本包自己的 setting，也必须通过 saved trust、global-only default policy 或 root UI 确认；不能用 Pi 的“没有已知 trust-requiring resources”捷径直接允许。通过官方 trust/bootstrap 路径或本包在加载前的原生确认适配实现，不能把所有目标直接标记 trusted。[P5]
 
 本包不实现一套新的命令权限引擎。子会话的权限扩展使用其自身策略，通过 UI proxy 询问用户；不能把用户拒绝转为自动允许。
 
@@ -489,7 +494,8 @@ Pi 普通资源发现可能加载目标 cwd 的祖先项目指令、用户级资
 → 创建时从 caller AgentTypeRegistry 解析并保存 current-role snapshot；恢复时读取已存 snapshot
 → 用 caller 当前 DelegationContext 校验/分类 target cwd，并检查 depth/cycle
 → 完成必要的项目准入和 trust
-→ 打开或创建文件型 SessionManager
+→ 初始化/验证 caller project 配置目录与 root project 权威 store
+→ 打开或创建 `0600` 文件型 SessionManager
 → 创建 target cwd 的 SettingsManager 和 DefaultResourceLoader
 → 若为可委派 external child，从 target cwd 构建 child DelegationContext
 → 正常发现 target cwd 资源，追加 runtime prompt + role snapshot，绑定正确的工具
@@ -594,7 +600,7 @@ ask 恢复时，角色 prompt 必须重新参与 **system prompt construction**�
 type RunOutcome = "completed" | "failed" | "aborted" | "interrupted" | "incomplete";
 
 interface StoredSubagent {
-  schemaVersion: 1;
+  schemaVersion: 2;
   id: string;
   rootSessionId: string;
   parentAgentId: string | null;
@@ -607,7 +613,7 @@ interface StoredSubagent {
   model: { provider: string; id: string };
   thinking: ThinkingLevel;
   sessionId: string;
-  sessionFile: string;
+  sessionPath: string; // relative to the root store scope
   lastRunId?: string;
   createdAt: string;
   updatedAt: string;
@@ -636,6 +642,8 @@ interface LiveAgent {
 字段可合并或改名，但必须能区分稳定身份、逻辑 run、SDK 实例和 root runtime 实例。不得只用一个 `status = completed` 覆盖所有含义。Persistent Store 不得保存整个 AgentTypeRegistry、`external_directory` 展开结果或 `subagent` tool description；这些是 session-local runtime resources，只随 AgentSession instance 存活并在恢复时重建。
 
 `waitingForChildren` 是派生状态：SDK 暂时 idle，同时有未完成的 child run 或未处理报告。它不是需要单独持久化调度器的“冷状态”。
+
+调用 Pi prompt 前，store 先写入 `state = "opening"` 的 prepared run；Pi 的同步 preflight success callback 返回前必须将其原子提交为 `state = "accepted"`，终结时写为 `state = "completed"`。恢复时只把遗留的 accepted run 标记 interrupted；opening run 代表 Pi 尚未确认接受，必须清除，不能制造 phantom accepted run。preflight 后的提交写失败属于已接受任务的存储失败：立即 abort/dispose，并按失败报告处理，而不是返回“未接受”并静默回滚。
 
 普通 ask 的并发占用必须在第一个异步等待前原子完成。per-agent try-acquire 或同步状态转换都可以；不得通过“等待 mutex”把第二次普通 ask 变成隐式 delegation 队列。`isSteer: true` 不获取新的 run 执行权，只在同一临界区验证当前 mount/run 仍可 steering，再交给 Pi steering queue。不同 agent 可以并发运行。
 
@@ -860,11 +868,13 @@ notify 和带命名空间的 status 不进入 blocking queue。多个确认不�
 
 ### 12.1 存储位置
 
-建议布局：
+强制布局：
 
 ```text
-<getAgentDir()>/.bykwp-pi-subagents/
-  roots/<rootKey>/
+<rootProjectRoot>/.pi/subagents/
+  setting.json
+  .gitignore
+  sessions/<rootKey>/
     root.json
     agents/<agentId>/
       agent.json
@@ -874,9 +884,11 @@ notify 和带命名空间的 status 不进入 blocking queue。多个确认不�
 
 `rootKey` 由 parent session 的稳定 ID 和规范化 session 文件身份派生，不使用会话显示名或 cwd 作为唯一键。exact original session 恢复时应得到相同 rootKey；新建、fork 或导入产生的独立会话不得误接管旧 children。
 
-存储路径由代码生成，不能由模型参数直接给出；标签不得参与路径拼接。数据默认位于用户私有目录，不写入项目版本控制目录。
+root project 保存整棵 delegation tree 的唯一权威副本。对于 `A → B → C`，B/C 不保存 branch、ledger、mirror 或 child history。external child cwd 不改变 store 位置。
 
-v1 的跨重启恢复要求 root 是文件型持久会话。非持久 root 不承诺此能力；为保持实现单一，v1 工具可以明确返回 `ROOT_SESSION_NOT_PERSISTENT`，不得偷偷生成以后无法定位的“可恢复 agent”。
+项目通过 trust 后自动初始化 `.pi/subagents`。局部 `.gitignore` 默认忽略 `/sessions/`；已有 ignore 文件不覆盖，但 `/sessions/` 必须是最后一条有效规则，避免后续 negation 暴露历史。Git 项目中 session data 未被 ignore 或已经 tracked 时 fail closed。存储路径由代码生成，不能由模型参数直接给出；标签不得参与路径拼接。session 数据可能包含敏感 prompt、回复和工具结果。
+
+v1 的跨重启恢复要求 root 是文件型持久会话。非持久 root 不承诺此能力；为保持实现单一，v1 工具明确返回 `ROOT_SESSION_NOT_PERSISTENT`，不得偷偷生成以后无法定位的“可恢复 agent”。旧 `<getAgentDir()>/.bykwp-pi-subagents/` 数据不迁移也不作为 fallback。
 
 ### 12.2 持久化内容和一致性
 
@@ -884,11 +896,13 @@ v1 的跨重启恢复要求 root 是文件型持久会话。非持久 root 不�
 
 不得持久化 delegation AgentTypeRegistry、`external_directory`、展开后的 cwd list 或旧 `subagent` tool description。它们不属于 logical identity；持久化它们会让恢复后的 tools 与 child cwd 当前配置脱节。
 
-元数据采用同目录临时文件加原子替换，并串行化同一记录的更新。初次接受任务前必须具备可用存储；磁盘错误不能伪装成已持久化成功。
+元数据采用 `0600`、同目录临时文件加原子替换，并串行化同一记录的更新；生成目录在 POSIX 上使用 `0700`。初次接受任务前必须具备可用存储；权限、read-only、unsafe symlink、path escape、Git 暴露或其他磁盘错误不能伪装成已持久化成功，也不能触发 agentDir fallback。已初始化 scope 在运行中消失后不得递归重建项目结构。`root.json` 的已存 identity 必须先校验，不能无条件覆盖。
 
 只允许一个活跃 root writer 操作同一存储 scope。至少实现明确的冲突检测，防止两个 CLI 同时 resume 同一个 root 并写同一 child 历史；使用成熟文件锁或经过测试的等价方案，不把 PID 存在检查当作充分证明。
 
-`dispose()` 不是通用 flush API。必须确认目标版本的实际会话落盘时机，并测试“第一条 assistant 之前被取消”和“失败没有生成回复”两种情况。若没有有效历史文件，保存这一事实并在恢复时给出明确诊断，不静默创建同 ID 的空白历史并声称完整恢复。
+child session metadata 保存相对于 `<rootKey>` scope、且绑定该 agent `sessions/` 目录的 path。恢复时必须拒绝 absolute、`..`、sibling-agent 和 symlink escape，并确认文件存在、非空、session ID 与 canonical cwd 匹配。
+
+`dispose()` 不是通用 flush API。必须确认目标版本的实际会话落盘时机，并测试“第一条 assistant 之前被取消”和“失败没有生成回复”两种情况。创建 child history 时应先以 `0600` 建立有效 header；若没有有效历史文件，恢复时给出明确诊断，不静默创建同 ID 的空白历史并声称完整恢复。
 
 不要在持久化记录中保存 API key、provider secret、UI 对象、函数、Promise、AbortController 或 SDK 实例。
 
@@ -899,7 +913,8 @@ v1 的跨重启恢复要求 root 是文件型持久会话。非持久 root 不�
 → 原子保留 run 执行权
 → 用直接 caller 当前 DelegationContext 重新验证保存的 cwd
 → 重新验证 cwd 存在性/canonical identity/trust/model
-→ SessionManager.open(sessionFile)
+→ 在 root scope 内验证并解析 stored sessionPath
+→ SessionManager.open(resolvedSessionFile)
 → 为 child cwd 创建当前 SettingsManager / DefaultResourceLoader
 → 正常重新加载当前 Pi tools/resources
 → 若 child 可委派，按 child cwd 重建 DelegationContext 和 tool description
@@ -909,7 +924,7 @@ v1 的跨重启恢复要求 root 是文件型持久会话。非持久 root 不�
 → prompt(new task)
 ```
 
-必须显式打开保存的文件，不使用“最近 session”推测身份。[P1][P7] 角色 prompt 只参与 system prompt construction，不得向恢复后的 conversation history 再插入一条角色消息。恢复时不重新读取同名角色定义；但 child 自己未来可使用的 agent types、external cwd 与 tool description 必须从 child 当前 cwd/config 重新加载。
+必须显式打开验证后的相对路径，不使用“最近 session”推测身份。[P1][P7] `SessionManager.open()` 前必须确认文件存在、非空、未通过 symlink 逃逸；打开后必须核对 session ID 和 canonical cwd。角色 prompt 只参与 system prompt construction，不得向恢复后的 conversation history 再插入一条角色消息。恢复时不重新读取同名角色定义；但 child 自己未来可使用的 agent types、external cwd 与 tool description 必须从 child 当前 cwd/config 重新加载。
 
 恢复对话上下文不等于恢复旧 Promise、旧进程状态或未结束的外部工具。文件系统和外部系统副作用不回滚、不自动重放。
 
@@ -959,7 +974,7 @@ root 标记 closing，失效当前 runtime epoch
 
 ### 13.4 root resume 后
 
-恢复同一持久 root 时只加载轻量索引，不批量创建 SDK session，不自动重跑记录为 running 的旧任务。非正常退出留下的 active run 标记为 interrupted。
+恢复同一持久 root 时从同一 root project 的 `.pi/subagents/sessions/<rootKey>` 只加载轻量索引，不批量创建 SDK session，不自动重跑记录为 running 的旧任务。非正常退出留下的 active run 标记为 interrupted。项目移动不自动重定位 canonical cwd，也不搜索 agentDir 或其他项目作为 fallback。
 
 旧的 subagent ID 仍可被直接 parent ask。模型与 current role 按已存 model/snapshot 恢复；cwd 用直接 caller 当前 DelegationContext 重新授权，并重新校验路径与 trust；delegation registry/tools 按 child 当前 cwd 重建。
 
@@ -999,6 +1014,7 @@ fork/clone/import 默认不继承旧 scope 的 child 写权限，即使新父历
     index.ts             # Pi extension 入口，root 生命周期与工具注册
     types.ts             # 业务契约
     config.ts            # 本包配置
+    project-storage.ts   # project-local 初始化、Git/路径安全
     agents.ts            # agent type 加载、校验、快照
     paths.ts             # absolute cwd、精确授权、canonical cycle 规则
     runtime.ts           # root 管理、依赖、busy 判定、终结
@@ -1011,7 +1027,7 @@ fork/clone/import 默认不继承旧 scope 的 child 写权限，即使新父历
     integration/
     fixtures/
   examples/
-    pi-subagents.json
+    setting.json
     agents/security-review.md
 ```
 
@@ -1168,6 +1184,14 @@ Node 下限与 0.85.1 宿主一致。[P9] 编译和测试安装精确固定 Pi 0
 | S10 | 清理幂等；扩展 shutdown 被执行；超时不会被当成真正终止证明 |
 | S11 | 反复创建/ask/完成不增长本包监听器、timer、UI listener 或长消息镜像 |
 | S12 | 从 npm pack 的 tarball 安装成功，包内角色文件可被读取 |
+| S13 | trust 前不读 project-local setting/agents、不创建 `.pi/subagents` |
+| S14 | 只读取 `.pi/subagents/setting.json`；root limits 与 caller-local `external_directory` 作用域正确 |
+| S15 | 自动初始化局部 ignore；未 ignore、已 tracked、read-only、symlink/escape 路径 fail closed |
+| S16 | A→B→C 的全部记录只存在 A 的 root scope，B/C 不产生镜像 |
+| S17 | 同项目不同 rootKey 隔离；root.json identity mismatch 被拒绝 |
+| S18 | relative sessionPath 正常恢复；absolute、`..`、sibling-agent、symlink、空文件、sessionId/cwd mismatch 被拒绝 |
+| S19 | 初始化后的 scope 被删除时不递归重建；不读取旧 agentDir store/config fallback |
+| S20 | child JSONL 创建即为有效 session，POSIX mode 为 `0600` |
 
 ## 18. Coding agent 的实现顺序
 
@@ -1189,9 +1213,9 @@ Node 下限与 0.85.1 宿主一致。[P9] 编译和测试安装精确固定 Pi 0
 
 实现 same-cwd/external 精确规则、canonical cwd cycle、session-local DelegationContext、root 统一生命周期所有权、B idle 保留、子报告驱动 B 继续和整项委派完成判断。首先完成 L03–L08 与 DEL01–DEL05，不先增加更多功能。
 
-### 阶段 5：故障与分发
+### 阶段 5：项目本地持久化、故障与分发
 
-完成关闭/resume、迟到回调、防重复投递、磁盘故障、清理和 tarball 安装。编写 README 与示例。
+完成 trust-gated `.pi/subagents` 初始化、配置作用域、root project 单一权威 store、relative child history、Git/路径安全、关闭/resume、迟到回调、防重复投递、磁盘故障、清理和 tarball 安装。编写 README 与示例。
 
 实现中发现 0.85.1 公开 API 不支持某项适配时，应提供具体类型/源码依据和最小兼容修改；不得静默扩大 scope、改成 subprocess 架构、使用私有字段或把未实现能力写成完成。
 
@@ -1199,7 +1223,7 @@ Node 下限与 0.85.1 宿主一致。[P9] 编译和测试安装精确固定 Pi 0
 
 交付可安装 package、源码、严格类型检查、自动测试、CLI smoke test 记录、内置角色、配置和自定义角色示例、README，以及本 SPEC。
 
-README 必须包含：两个工具的语义、安装与本地测试、角色格式与三层加载顺序、tool cwd 只接受绝对路径、配置中 home expansion、`external_directory` 精确匹配、same-cwd/external 委派、session-local delegation、后台 Stop 与 quit 的区别、idle B 保留策略、busy 错误、原生 UI 支持矩阵、resume 前提、非 sandbox 声明、同进程扩展兼容限制和故障排查。
+README 必须包含：两个工具的语义、安装与本地测试、角色格式与三层加载顺序、`.pi/subagents/setting.json`、root-only 与 caller-local 配置字段、trust-gated 自动初始化、Git ignore 与敏感数据、root project 单一权威副本、relative history、fail-closed、read-only/project move/no-migration 限制、tool cwd 只接受绝对路径、配置中 home expansion、`external_directory` 精确匹配、same-cwd/external 委派、session-local delegation、后台 Stop 与 quit 的区别、idle B 保留策略、busy 错误、原生 UI 支持矩阵、resume 前提、非 sandbox 声明、同进程扩展兼容限制和故障排查。
 
 完成报告必须列出实际运行的命令及结果；未运行的真实模型或 CLI 测试要标为未验证。不能以 mock 测试通过替代“已在真实 CLI 验证”的声明。
 
@@ -1209,7 +1233,7 @@ README 必须包含：两个工具的语义、安装与本地测试、角色格�
 
 ## 附录 A：最高优先级实现不变量
 
-以下十二条是实现 review 的最高优先级判断标准：
+以下十八条是实现 review 的最高优先级判断标准：
 
 1. caller 只知道自己的 agents 和自己的 cwd 配置。
 2. caller 不扫描 external directory 的 delegation configuration。
@@ -1223,6 +1247,12 @@ README 必须包含：两个工具的语义、安装与本地测试、角色格�
 10. ask 恢复 current role 时使用 snapshot。
 11. ask 恢复 tools 和 `subagent` tool description 时使用 Pi 当前资源加载机制。
 12. delegation tool description 只暴露当前 caller 自己可用的 agent 和 cwd，不递归暴露下一层配置。
+13. root project 的 `.pi/subagents/sessions/<rootKey>` 是整棵 tree 的唯一权威 store。
+14. external descendants 不保存 branch、ledger、mirror 或 child history。
+15. project trust 早于本包 setting/agents 读取和 storage 初始化。
+16. child session path 相对 root scope、绑定自己的 agent sessions 目录并通过 containment 校验。
+17. runtime limits 来自 root project，descendant 只提供 caller-local `external_directory`。
+18. 不读取、迁移或 fallback 到旧 agentDir config/store。
 
 此外继续遵守运行时不变量：同一 logical subagent 同时最多接受一项 delegation；依赖和报告绑定具体 run；等待后代的 idle session 不释放；只有整项 delegation 结束后才向直接 parent 报告；已释放实例和旧 callback 不能影响新 mount/run/root；UI 拒绝/取消不变成允许；root shutdown 保留稳定身份与历史；cwd 准入不等于文件系统沙箱。
 

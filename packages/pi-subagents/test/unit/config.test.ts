@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -30,18 +30,79 @@ describe("external_directory config", () => {
     expect(expandConfiguredHome("$OTHER/code", "/home/test")).toBe("$OTHER/code");
   });
 
-  it("rejects relative configured directories", async () => {
+  it("initializes project-local storage and uses defaults without setting.json", async () => {
     const cwd = await temporaryDirectory();
-    const agentDir = await temporaryDirectory();
-    const configDirectory = path.join(cwd, ".pi", "extensions");
+    const config = await loadSubagentsConfig(cwd);
+    expect(config).toMatchObject({
+      externalDirectories: [],
+      maxDepth: 4,
+      maxLiveAgents: 8,
+      uiTimeoutMs: 120_000,
+      projectRoot: cwd,
+      storageDirectory: path.join(cwd, ".pi", "subagents"),
+    });
+    await expect(readFile(path.join(config.storageDirectory, ".gitignore"), "utf8")).resolves.toBe(
+      "/sessions/\n",
+    );
+  });
+
+  it("reads only project-local setting.json and rejects relative configured directories", async () => {
+    const cwd = await temporaryDirectory();
+    const configDirectory = path.join(cwd, ".pi", "subagents");
     await mkdir(configDirectory, { recursive: true });
     await writeFile(
-      path.join(configDirectory, "pi-subagents.json"),
+      path.join(configDirectory, "setting.json"),
       JSON.stringify({ external_directory: ["../other"] }),
     );
-    await expect(loadSubagentsConfig(cwd, agentDir)).rejects.toMatchObject({
+    await expect(loadSubagentsConfig(cwd)).rejects.toMatchObject({
       code: "INVALID_CONFIG",
     });
+  });
+
+  it("loads project settings from .pi/subagents/setting.json", async () => {
+    const cwd = await temporaryDirectory();
+    const external = await temporaryDirectory();
+    const configDirectory = path.join(cwd, ".pi", "subagents");
+    await mkdir(configDirectory, { recursive: true });
+    await writeFile(
+      path.join(configDirectory, "setting.json"),
+      JSON.stringify({
+        external_directory: [external],
+        max_depth: 6,
+        max_live_agents: 3,
+        ui_timeout_ms: 500,
+      }),
+    );
+    await expect(loadSubagentsConfig(cwd)).resolves.toMatchObject({
+      externalDirectories: [external],
+      maxDepth: 6,
+      maxLiveAgents: 3,
+      uiTimeoutMs: 500,
+    });
+  });
+
+  it("rejects a symlinked project setting", async () => {
+    const cwd = await temporaryDirectory();
+    const outside = await temporaryDirectory();
+    const configDirectory = path.join(cwd, ".pi", "subagents");
+    await mkdir(configDirectory, { recursive: true });
+    const target = path.join(outside, "setting.json");
+    await writeFile(target, "{}\n");
+    await symlink(target, path.join(configDirectory, "setting.json"));
+    await expect(loadSubagentsConfig(cwd)).rejects.toMatchObject({
+      code: "INVALID_CONFIG",
+    });
+  });
+
+  it("does not read the legacy project config path", async () => {
+    const cwd = await temporaryDirectory();
+    const legacyDirectory = path.join(cwd, ".pi", "extensions");
+    await mkdir(legacyDirectory, { recursive: true });
+    await writeFile(
+      path.join(legacyDirectory, "pi-subagents.json"),
+      JSON.stringify({ max_depth: 99 }),
+    );
+    await expect(loadSubagentsConfig(cwd)).resolves.toMatchObject({ maxDepth: 4 });
   });
 });
 

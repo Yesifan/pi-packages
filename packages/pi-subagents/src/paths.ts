@@ -59,6 +59,7 @@ export async function findProjectRoot(cwd: string): Promise<string> {
   try {
     const { stdout } = await execFileAsync("git", ["-C", cwd, "rev-parse", "--show-toplevel"], {
       encoding: "utf8",
+      env: { ...process.env, LC_ALL: "C" },
       timeout: 5_000,
       windowsHide: true,
     });
@@ -69,8 +70,15 @@ export async function findProjectRoot(cwd: string): Promise<string> {
         notDirectory: "INVALID_CONFIG",
       });
     }
-  } catch {
-    // A non-Git directory is its own project root for this package's resources.
+  } catch (error) {
+    const failure = error as NodeJS.ErrnoException & { stderr?: string };
+    if (typeof failure.stderr === "string" && failure.stderr.includes("not a git repository")) {
+      // A non-Git directory is its own project root for this package's resources.
+      return cwd;
+    }
+    throw new SubagentError("STORE_ERROR", `Cannot determine project root for: ${cwd}`, undefined, {
+      cause: error,
+    });
   }
   return cwd;
 }

@@ -7,7 +7,6 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import {
   getAgentDir,
-  hasTrustRequiringProjectResources,
   ModelRuntime,
   ProjectTrustStore,
   SettingsManager,
@@ -16,7 +15,13 @@ import { resolveAgentDefinition } from "./agents.js";
 import { ChildSessionFactory, type OpenedChild } from "./child-session.js";
 import { buildDelegationContext } from "./delegation.js";
 import { asSubagentError, SubagentError } from "./errors.js";
-import { assertNoDelegationCycle, resolveToolCwd } from "./paths.js";
+import {
+  assertNoDelegationCycle,
+  canonicalizeDirectory,
+  findProjectRoot,
+  resolveToolCwd,
+} from "./paths.js";
+import { initializeProjectSubagents } from "./project-storage.js";
 import { PersistentSubagentStore } from "./store.js";
 import type { DelegationRuntimeApi } from "./tools.js";
 import type {
@@ -98,6 +103,7 @@ export class RootRuntime implements DelegationRuntimeApi {
   private readonly opened = new Map<string, OpenedChild>();
   private readonly runs = new Map<string, StoredRun>();
   private readonly trustDecisions = new Map<string, boolean>();
+  private readonly initializedProjectScopes = new Set<string>();
   private closing = false;
   private epoch = randomUUID();
 
@@ -108,13 +114,21 @@ export class RootRuntime implements DelegationRuntimeApi {
       throw new SubagentError("INVALID_CONFIG", "RootRuntime is already initialized");
     this.host = host;
     this.rootConfig = config;
+    this.initializedProjectScopes.add(config.projectRoot);
+    this.trustDecisions.set(config.projectRoot, true);
+    const rootCwd = await canonicalizeDirectory(host.ctx.cwd, {
+      missing: "CWD_NOT_FOUND",
+      notDirectory: "CWD_NOT_DIRECTORY",
+    });
+    this.trustDecisions.set(rootCwd, host.ctx.isProjectTrusted());
     this.uiBroker = new RootUiBroker(host.ctx.ui, host.ctx.hasUI, config.uiTimeoutMs);
     this.modelRuntime = await ModelRuntime.create({
       authPath: path.join(this.agentDir, "auth.json"),
       modelsPath: path.join(this.agentDir, "models.json"),
     });
     this.store = new PersistentSubagentStore(
-      this.agentDir,
+      config.projectRoot,
+      config.storageDirectory,
       host.rootSessionId,
       host.rootSessionFile,
     );
@@ -179,7 +193,7 @@ export class RootRuntime implements DelegationRuntimeApi {
           ? definition.tools.includes("subagent")
           : target.kind === "external" && depth < this.rootConfig.maxDepth;
       const delegation = canDelegate
-        ? (await buildDelegationContext(target.cwd, this.agentDir)).context
+        ? await this.buildChildDelegationContext(target.cwd)
         : undefined;
       const model = ctx.model;
       if (!model) throw new SubagentError("PARENT_MODEL_UNAVAILABLE", "Caller has no active model");
@@ -188,6 +202,7 @@ export class RootRuntime implements DelegationRuntimeApi {
         definition.thinking ??
         (ctx.thinkingLevel as ThinkingLevel | undefined) ??
         "off";
+      await this.store.prepareAgent(agentId);
       const sessionManager = await this.childFactory.createSessionManager(
         target.cwd,
         this.store.sessionsDirectory(agentId),
@@ -201,7 +216,7 @@ export class RootRuntime implements DelegationRuntimeApi {
       }
       const timestamp = now();
       const stored: StoredSubagent = {
-        schemaVersion: 1,
+        schemaVersion: 2,
         id: agentId,
         rootSessionId: this.host.rootSessionId,
         parentAgentId: caller.agentId,
@@ -214,7 +229,7 @@ export class RootRuntime implements DelegationRuntimeApi {
         model: { provider: model.provider, id: model.id },
         thinking: requestedThinking,
         sessionId: sessionManager.getSessionId(),
-        sessionFile,
+        sessionPath: this.store.toSessionPath(agentId, sessionFile),
         createdAt: timestamp,
         updatedAt: timestamp,
       };
@@ -283,10 +298,11 @@ export class RootRuntime implements DelegationRuntimeApi {
         stored.depth < this.rootConfig.maxDepth &&
         roleAllowsDelegation(stored);
       const delegation = canDelegate
-        ? (await buildDelegationContext(stored.cwd, this.agentDir)).context
+        ? await this.buildChildDelegationContext(stored.cwd)
         : undefined;
       const model = this.resolveStoredModel(stored, ctx);
-      const sessionManager = this.childFactory.openSessionManager(stored);
+      const sessionFile = await this.store.resolveSessionPath(stored.id, stored.sessionPath);
+      const sessionManager = this.childFactory.openSessionManager(stored, sessionFile);
       const opened = await this.childFactory.open({
         stored,
         runId,
@@ -368,7 +384,36 @@ export class RootRuntime implements DelegationRuntimeApi {
       id: live.runId,
       agentId: stored.id,
       parentRunId,
-      acceptedAt: now(),
+      state: "opening",
+    };
+    const previousLastRunId = stored.lastRunId;
+    const previousInterrupted = stored.interrupted;
+    this.runs.set(run.id, run);
+    stored.activeRunId = run.id;
+    stored.lastRunId = run.id;
+    stored.interrupted = false;
+    stored.updatedAt = now();
+    try {
+      await this.store.saveRun(run);
+      await this.store.saveAgent(stored);
+    } catch (error) {
+      this.runs.delete(run.id);
+      stored.activeRunId = undefined;
+      stored.lastRunId = previousLastRunId;
+      stored.interrupted = previousInterrupted;
+      stored.updatedAt = now();
+      await this.store.deleteRun(stored.id, run.id).catch(() => undefined);
+      await this.store.saveAgent(stored).catch(() => undefined);
+      throw error;
+    }
+    const rollbackPrepared = async () => {
+      this.runs.delete(run.id);
+      stored.activeRunId = undefined;
+      stored.lastRunId = previousLastRunId;
+      stored.interrupted = previousInterrupted;
+      stored.updatedAt = now();
+      await this.store.deleteRun(stored.id, run.id);
+      await this.store.saveAgent(stored);
     };
     let acceptedResolve!: () => void;
     let acceptedReject!: (error: unknown) => void;
@@ -380,28 +425,38 @@ export class RootRuntime implements DelegationRuntimeApi {
     const mountId = live.mountId;
     let promptFailed = false;
     let promptFailure: unknown;
-    const task = session.prompt(prompt, {
-      expandPromptTemplates: false,
-      preflightResult: (success) => {
-        if (success) acceptedResolve();
-        else acceptedReject(new SubagentError("INVALID_ARGUMENT", "Pi rejected the task prompt"));
-      },
-    });
+    let task: Promise<void>;
+    try {
+      task = session.prompt(prompt, {
+        expandPromptTemplates: false,
+        preflightResult: (success) => {
+          if (!success) {
+            acceptedReject(new SubagentError("INVALID_ARGUMENT", "Pi rejected the task prompt"));
+            return;
+          }
+          run.state = "accepted";
+          run.acceptedAt = now();
+          this.store.commitAcceptedRun(run);
+          live.accepted = true;
+          acceptedResolve();
+        },
+      });
+    } catch (error) {
+      await rollbackPrepared();
+      throw error;
+    }
     void task.catch((error) => {
       promptFailed = true;
       promptFailure = error;
       acceptedReject(error);
       if (live.accepted && this.isCurrent(epoch, live, mountId)) void this.failRun(live, error);
     });
-    await awaitPreflight(accepted, signal, () => session.abort());
-    this.runs.set(run.id, run);
-    stored.activeRunId = run.id;
-    stored.lastRunId = run.id;
-    stored.interrupted = false;
-    stored.updatedAt = now();
-    await this.store.saveRun(run);
-    await this.store.saveAgent(stored);
-    live.accepted = true;
+    try {
+      await awaitPreflight(accepted, signal, () => session.abort());
+    } catch (error) {
+      await rollbackPrepared();
+      throw error;
+    }
     if (promptFailed) void this.failRun(live, promptFailure);
     else void this.maybeFinalize(live);
     return this.acceptedResult(stored, run.id, "started");
@@ -430,13 +485,21 @@ export class RootRuntime implements DelegationRuntimeApi {
       return;
     }
     live.finalizing = true;
-    await this.finalizeRun(live);
+    try {
+      await this.finalizeRun(live);
+    } catch (error) {
+      await this.emergencyFinalize(live, error);
+    }
   }
 
   private async failRun(live: LiveAgent, error: unknown): Promise<void> {
     if (!live.accepted || live.finalizing) return;
     live.finalizing = true;
-    await this.finalizeRun(live, asSubagentError(error, "SUBAGENT_RUN_FAILED"));
+    try {
+      await this.finalizeRun(live, asSubagentError(error, "SUBAGENT_RUN_FAILED"));
+    } catch (finalizeError) {
+      await this.emergencyFinalize(live, finalizeError);
+    }
   }
 
   private extractResult(live: LiveAgent): {
@@ -516,6 +579,7 @@ export class RootRuntime implements DelegationRuntimeApi {
       ...(extracted.error ? { error: extracted.error } : {}),
       completedAt,
     };
+    run.state = "completed";
     run.completedAt = completedAt;
     run.outcome = report.outcome;
     run.result = report.result;
@@ -529,7 +593,80 @@ export class RootRuntime implements DelegationRuntimeApi {
     await this.disposeMount(live.id);
     this.live.delete(live.id);
     this.runs.delete(run.id);
-    if (!this.closing) await this.routeReport(stored, run, report);
+    if (!this.closing) {
+      try {
+        await this.routeReport(stored, run, report);
+      } catch (error) {
+        this.notifyRuntimeError(error);
+      }
+    }
+  }
+
+  private async emergencyFinalize(live: LiveAgent, error: unknown): Promise<void> {
+    const stored = this.agents.get(live.id);
+    const run = this.runs.get(live.runId);
+    const failure = asSubagentError(error, "STORE_ERROR");
+    this.notifyRuntimeError(failure);
+    await this.disposeMount(live.id).catch((disposeError) => this.notifyRuntimeError(disposeError));
+    this.live.delete(live.id);
+    if (!stored || !run || this.closing) {
+      if (run) this.runs.delete(run.id);
+      return;
+    }
+    this.runs.delete(run.id);
+    stored.activeRunId = undefined;
+    const report: SubagentReport = {
+      schemaVersion: 1,
+      reportId: id("report"),
+      rootSessionId: stored.rootSessionId,
+      agentId: stored.id,
+      runId: run.id,
+      parentAgentId: stored.parentAgentId,
+      parentRunId: run.parentRunId,
+      name: stored.name,
+      agentType: stored.agentType,
+      cwd: stored.cwd,
+      outcome: "failed",
+      result: "",
+      error: { code: failure.code, message: failure.message },
+      completedAt: now(),
+    };
+    if (stored.parentAgentId === null) {
+      try {
+        this.host.sendReport(report);
+      } catch (deliveryError) {
+        this.notifyRuntimeError(deliveryError);
+      }
+      return;
+    }
+    const parent = this.live.get(stored.parentAgentId);
+    if (!parent || parent.runId !== run.parentRunId || !parent.session) return;
+    parent.pendingChildRuns.delete(run.id);
+    parent.pendingReportIds.add(report.reportId);
+    parent.sdkSettled = false;
+    parent.phase = "executing";
+    const epoch = this.epoch;
+    const mountId = parent.mountId;
+    void parent.session
+      .sendCustomMessage(
+        {
+          customType: "bykwp-subagent-report",
+          content: formatReport(report),
+          display: true,
+          details: report,
+        },
+        { deliverAs: "steer", triggerTurn: true },
+      )
+      .then(
+        () => {
+          if (!this.isCurrent(epoch, parent, mountId)) return;
+          parent.pendingReportIds.delete(report.reportId);
+          void this.maybeFinalize(parent);
+        },
+        (deliveryError) => {
+          if (this.isCurrent(epoch, parent, mountId)) void this.failRun(parent, deliveryError);
+        },
+      );
   }
 
   private async routeReport(
@@ -567,7 +704,11 @@ export class RootRuntime implements DelegationRuntimeApi {
         if (!this.isCurrent(epoch, parent, mountId)) return;
         parent.pendingReportIds.delete(report.reportId);
         run.delivery = "recorded";
-        await this.store?.saveRun(run);
+        try {
+          await this.store?.saveRun(run);
+        } catch (error) {
+          this.notifyRuntimeError(error);
+        }
         void this.maybeFinalize(parent);
       },
       (error) => {
@@ -617,6 +758,8 @@ export class RootRuntime implements DelegationRuntimeApi {
   ): Promise<void> {
     const parent = parentAgentId ? this.live.get(parentAgentId) : undefined;
     parent?.pendingChildRuns.delete(runId);
+    const live = this.live.get(agentId);
+    if (live?.session?.isStreaming) await live.session.abort().catch(() => undefined);
     await this.disposeMount(agentId);
     this.live.delete(agentId);
     this.runs.delete(runId);
@@ -680,14 +823,29 @@ export class RootRuntime implements DelegationRuntimeApi {
     };
   }
 
+  private async buildChildDelegationContext(cwd: string): Promise<CallerBinding["delegation"]> {
+    const projectRoot = await findProjectRoot(cwd);
+    if (!(await this.resolveTrust(projectRoot))) {
+      throw new SubagentError(
+        "PROJECT_NOT_TRUSTED",
+        `Git project root must be trusted before pi-subagents can initialize: ${projectRoot}`,
+      );
+    }
+    if (!this.initializedProjectScopes.has(projectRoot)) {
+      await initializeProjectSubagents(projectRoot);
+      this.initializedProjectScopes.add(projectRoot);
+    }
+    return (
+      await buildDelegationContext(cwd, this.agentDir, {
+        initializeStorage: false,
+      })
+    ).context;
+  }
+
   private async resolveTrust(cwd: string): Promise<boolean> {
     const known = this.trustDecisions.get(cwd);
     if (known !== undefined) return known;
-    if (!hasTrustRequiringProjectResources(cwd)) {
-      this.trustDecisions.set(cwd, true);
-      return true;
-    }
-    if (cwd === this.host?.ctx.cwd && this.host.ctx.isProjectTrusted()) {
+    if (path.resolve(cwd) === path.resolve(this.host.ctx.cwd) && this.host.ctx.isProjectTrusted()) {
       this.trustDecisions.set(cwd, true);
       return true;
     }
@@ -696,28 +854,36 @@ export class RootRuntime implements DelegationRuntimeApi {
       this.trustDecisions.set(cwd, saved);
       return saved;
     }
-    const policy = SettingsManager.create(cwd, this.agentDir).getDefaultProjectTrust();
+    const policy = SettingsManager.create(cwd, this.agentDir, {
+      projectTrusted: false,
+    }).getDefaultProjectTrust();
     if (policy === "always") {
       this.trustDecisions.set(cwd, true);
       return true;
     }
-    if (policy === "never" || !this.host?.ctx.hasUI || !this.uiBroker) {
+    if (policy === "never" || !this.host.ctx.hasUI || !this.uiBroker) {
       this.trustDecisions.set(cwd, false);
       return false;
     }
-    const trusted = await this.uiBroker.enqueue(
-      `trust:${cwd}`,
-      false,
-      undefined,
-      (options) =>
-        this.host?.ctx.ui.confirm(
-          "Trust external project?",
-          `Allow this subagent session to load project resources from ${cwd}?`,
-          options,
-        ) ?? Promise.resolve(false),
+    const projectRoot = await findProjectRoot(cwd);
+    const trusted = await this.uiBroker.enqueue(`trust:${cwd}`, false, undefined, (options) =>
+      this.host.ctx.ui.confirm(
+        "Trust external project?",
+        `Allow this subagent session to read configuration from ${projectRoot} and load project resources for ${cwd}?`,
+        options,
+      ),
     );
     this.trustDecisions.set(cwd, trusted);
     return trusted;
+  }
+
+  private notifyRuntimeError(error: unknown): void {
+    const failure = asSubagentError(error, "STORE_ERROR");
+    try {
+      this.host.ctx.ui.notify(`pi-subagents: ${failure.code}: ${failure.message}`, "error");
+    } catch {
+      // A failing diagnostic UI must not prevent runtime cleanup.
+    }
   }
 
   private isCurrent(epoch: string, live: LiveAgent, mountId: string): boolean {
@@ -749,6 +915,7 @@ export class RootRuntime implements DelegationRuntimeApi {
       const interruptedAt = now();
       const run = this.runs.get(live.runId);
       if (run && !run.completedAt) {
+        run.state = "completed";
         run.completedAt = interruptedAt;
         run.outcome = "interrupted";
         run.result = run.result ?? "";
@@ -756,18 +923,18 @@ export class RootRuntime implements DelegationRuntimeApi {
           code: "INTERRUPTED",
           message: "The root session ended before this run completed; it was not replayed.",
         };
-        await this.store.saveRun(run);
+        await this.store.saveRun(run).catch((error) => this.notifyRuntimeError(error));
       }
       if (stored?.activeRunId) {
         stored.activeRunId = undefined;
         stored.interrupted = true;
         stored.updatedAt = interruptedAt;
-        await this.store.saveAgent(stored);
+        await this.store.saveAgent(stored).catch((error) => this.notifyRuntimeError(error));
       }
-      await this.disposeMount(live.id);
+      await this.disposeMount(live.id).catch((error) => this.notifyRuntimeError(error));
     }
     this.live.clear();
     this.runs.clear();
-    await this.store.close();
+    await this.store.close().catch((error) => this.notifyRuntimeError(error));
   }
 }

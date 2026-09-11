@@ -1,4 +1,5 @@
-import { mkdir } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import {
@@ -80,16 +81,41 @@ export class ChildSessionFactory {
   ) {}
 
   async createSessionManager(cwd: string, sessionsDirectory: string): Promise<SessionManager> {
-    await mkdir(sessionsDirectory, { recursive: true, mode: 0o700 });
-    return SessionManager.create(cwd, sessionsDirectory);
+    // Warning Cache Broke: SessionManager must create the canonical header/history prefix;
+    // the pre-created empty file only guarantees private permissions and a fixed safe path.
+    const sessionFile = path.join(sessionsDirectory, `${Date.now()}_${randomUUID()}.jsonl`);
+    try {
+      await writeFile(sessionFile, "", { flag: "wx", mode: 0o600 });
+      return SessionManager.open(sessionFile, sessionsDirectory, cwd);
+    } catch (error) {
+      throw new SubagentError(
+        "STORE_ERROR",
+        `Cannot create child session history: ${sessionFile}`,
+        undefined,
+        error instanceof Error ? { cause: error } : undefined,
+      );
+    }
   }
 
-  openSessionManager(stored: StoredSubagent): SessionManager {
-    const sessionManager = SessionManager.open(stored.sessionFile);
-    if (path.resolve(sessionManager.getCwd()) !== path.resolve(stored.cwd)) {
+  openSessionManager(stored: StoredSubagent, sessionFile: string): SessionManager {
+    let sessionManager: SessionManager;
+    try {
+      sessionManager = SessionManager.open(sessionFile);
+    } catch (error) {
       throw new SubagentError(
         "SESSION_HISTORY_UNAVAILABLE",
-        `Stored session cwd does not match subagent cwd: ${stored.sessionFile}`,
+        `Cannot open stored child session: ${sessionFile}`,
+        stored.id,
+        error instanceof Error ? { cause: error } : undefined,
+      );
+    }
+    if (
+      path.resolve(sessionManager.getCwd()) !== path.resolve(stored.cwd) ||
+      sessionManager.getSessionId() !== stored.sessionId
+    ) {
+      throw new SubagentError(
+        "SESSION_HISTORY_UNAVAILABLE",
+        `Stored session identity does not match subagent ${stored.id}: ${sessionFile}`,
         stored.id,
       );
     }

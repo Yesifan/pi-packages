@@ -11,7 +11,7 @@ AgentSession，并提供 `subagent` 与 `ask_subagent` 工具。实现基线为
 
 ## 核心模型与不变量
 
-- 每个 root Pi session 对应一个 `RootRuntime`，并独占自己的持久化 scope。
+- 每个 root Pi session 对应一个 `RootRuntime`，并独占 root project 下 `.pi/subagents/sessions/<rootKey>/` 持久化 scope；external descendants 不保存副本。
 - logical subagent 身份可跨 ask 和 root 恢复保留，但每次活动 mount 使用独立 AgentSession。
 - caller 只使用自己的 session-local `DelegationContext`：自己的 cwd、agent registry 和 external cwd 配置。
 - child 角色在创建时从 caller registry 解析并保存完整 snapshot；后续 ask 不得重新解析同名角色替换 snapshot。
@@ -32,7 +32,7 @@ AgentSession，并提供 `subagent` 与 `ask_subagent` 工具。实现基线为
 - `src/runtime.ts`：logical agent/run 状态机、普通 ask、steering、报告和 shutdown。
 - `src/child-session.ts`：目标 cwd AgentSession 创建/恢复、资源隔离、工具白名单和角色 prompt。
 - `src/delegation.ts`：session-local delegation context 与动态 tool description。
-- `src/config.ts`、`src/paths.ts`：分层配置、project root、canonical cwd 授权和 cycle 检查。
+- `src/config.ts`、`src/project-storage.ts`、`src/paths.ts`：项目本地配置、trust 后存储初始化、Git/路径安全、project root、canonical cwd 授权和 cycle 检查。
 - `src/agents.ts`：内置/global/project agent registry、frontmatter 校验和 snapshot/hash。
 - `src/store.ts`：root-scoped 原子 JSON 持久化和单 writer lock。
 - `src/ui.ts`：所有 descendants 共用的 blocking UI FIFO 与受限 UI proxy。
