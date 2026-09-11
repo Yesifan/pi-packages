@@ -115,11 +115,9 @@ export class ChildSessionFactory {
     const internalFactory = childBinding
       ? createDelegationExtension(options.runtime, childBinding)
       : undefined;
-    const runtimePrompt = `You are subagent "${stored.name}" (${stored.id}), delegated by a parent agent.
-Work on the assigned task using the resources and instructions available in this session.
-You do not inherit the parent's conversation history.
-Your final response is automatically reported to your direct parent.
-There is no report tool.`;
+    const runtimePrompt = `You are subagent "${stored.name}", delegated by a parent agent.
+
+Your final response is automatically reported to your direct parent.`;
 
     // Warning Cache Broke: changing this append order changes the stable system-prompt prefix
     // for every restored logical subagent. Current-role identity must remain snapshot-backed.

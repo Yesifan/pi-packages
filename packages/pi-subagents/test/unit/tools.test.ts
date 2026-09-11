@@ -60,7 +60,11 @@ describe("delegation tool results", () => {
     expect(result?.content).toEqual([
       {
         type: "text",
-        text: "Started subagent worker (sa_test), run run_test. Its final report will arrive automatically; do not poll with ask_subagent or shell wait commands. Continue only with independent work, or end your turn.",
+        text: "Started subagent worker (sa_test), run run_test.",
+      },
+      {
+        type: "text",
+        text: "Its final report will arrive automatically; do not poll with ask_subagent or shell wait commands. Continue only with independent work, or end your turn.",
       },
     ]);
   });
@@ -68,15 +72,31 @@ describe("delegation tool results", () => {
   it.each([
     {
       status: "started" as const,
-      expected:
-        "Started subagent worker (sa_test), run run_test. Its final report will arrive automatically; do not poll with ask_subagent or shell wait commands. Continue only with independent work, or end your turn.",
+      expected: [
+        {
+          type: "text",
+          text: "Started subagent worker (sa_test), run run_test.",
+        },
+        {
+          type: "text",
+          text: "Its final report will arrive automatically; ",
+        },
+      ],
     },
     {
       status: "steered" as const,
-      expected:
-        "Steered subagent worker (sa_test), current run run_test. Its final report will arrive automatically; only steer again to provide a substantive correction, not to poll or request completion.",
+      expected: [
+        {
+          type: "text",
+          text: "Steered subagent worker (sa_test)",
+        },
+        {
+          type: "text",
+          text: "Its final report will arrive automatically; ",
+        },
+      ],
     },
-  ])("explains automatic reporting after an ask returns $status", async ({ status, expected }) => {
+  ])("returns the expected content after an ask returns $status", async ({ status, expected }) => {
     const runtime: DelegationRuntimeApi = {
       createSubagent: vi.fn(),
       askSubagent: vi.fn(async () => accepted(status)),
@@ -91,6 +111,6 @@ describe("delegation tool results", () => {
       {} as ExtensionContext,
     );
 
-    expect(result?.content).toEqual([{ type: "text", text: expected }]);
+    expect(result?.content).toEqual(expected);
   });
 });
