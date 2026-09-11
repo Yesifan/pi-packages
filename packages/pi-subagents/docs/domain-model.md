@@ -60,7 +60,8 @@ logical subagent 是可恢复身份；AgentSession instance 是一次加载到�
 - logical run ID、parent run dependency 和报告路由；
 - `max_depth`、`max_live_agents`、cycle 和 root shutdown；
 - root-scoped store writer lock；
-- 所有后代共享的 UI broker。
+- 所有后代共享的 UI broker；
+- 活动 logical run 最新进度的聚合与 root 原生 widget 生命周期。
 
 RootRuntime 可以看见整棵树以便统一清理，但不能把全树合并成一个 agent registry 或 cwd allowlist。
 
@@ -112,7 +113,8 @@ mount 负责承载：
 - target cwd 当前加载的 Pi resources、extensions 和 tools；
 - snapshot-backed current role system prompt；
 - 当前 mount 独立的 ModelRuntime 与 UI proxy；
-- 当前 run 及其等待中的 child/report 状态。
+- 当前 run 及其等待中的 child/report 状态；
+- 当前 run 的模型调用计数和一条最新 thinking/tool 活动摘要。
 
 mount 是临时运行态，不持久化。run 真正完成后必须 dispose；parent 已从 SDK settled 但仍等待 child/report 时必须继续保留。
 
@@ -323,6 +325,7 @@ steering input 不改变 logical identity、snapshot、cwd、model、thinking �
 | child Pi history | 是，SessionManager JSONL | 从原 session file 打开 |
 | run result/outcome/delivery | 是 | 用于审计和恢复状态 |
 | active mount / SDK object | 否 | 普通 ask 时重新创建 |
+| run-local progress / root widget | 否 | 新 run 从零开始；只展示当前活动状态 |
 | DelegationContext | 否 | 根据 target cwd 当前配置重建 |
 | tools/extensions/ModelRuntime/UI proxy | 否 | 每个 mount 重新加载/绑定 |
 | 未完成 tool 副作用 | 否 | 不自动重放 |
@@ -411,6 +414,7 @@ shutdown 使 runtime epoch 失效，取消 UI、abort 和 dispose 全部 live mo
 | LogicalSubagent | `StoredSubagent` |
 | LogicalRun | `StoredRun` |
 | live mount | `LiveAgent` + `OpenedChild` |
+| run-local progress | `LiveAgent.progress` |
 | AgentSession Instance | `OpenedChild.session` |
 | CurrentRole snapshot | `StoredSubagent.agentDefinitionSnapshot` |
 | AgentTypeRegistry | `AgentTypeRegistry` |

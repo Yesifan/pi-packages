@@ -121,10 +121,16 @@ All descendants share one FIFO for blocking UI:
 | --- | --- |
 | `confirm`, `select`, `input` | Forwarded to root UI with source label, cancellation, and timeout |
 | `notify`, `setStatus` | Forwarded; status keys are namespaced and cleaned up |
+| Background progress | Root-owned native string widget below the editor |
 | theme reads | Forwarded read-only |
 | `editor` | Returns `undefined` |
 | `custom` | Rejected as unsupported |
 | widgets/header/footer/editor mutation/raw terminal input | Not forwarded |
+
+The progress widget shows one latest line per active subagent, such as
+`worker[3]：bash pnpm test`. The number counts model calls in the current logical run. Thinking
+content and tool output are not copied into the widget, and the widget is cleared when no runs remain.
+Child extensions still cannot create or mutate root widgets.
 
 ## Security and compatibility
 

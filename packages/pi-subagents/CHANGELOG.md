@@ -2,6 +2,12 @@
 
 All notable changes to this package are documented here. The format follows Keep a Changelog.
 
+## [0.1.1] - 2026-09-11
+
+### Added
+
+- A root-owned native Pi widget showing the latest activity and current-run model call count for each active subagent.
+
 ## [0.1.0] - 2026-09-11
 
 ### Added

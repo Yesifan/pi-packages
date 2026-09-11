@@ -42,9 +42,38 @@ describe("RootUiBroker", () => {
     broker.shutdown();
   });
 
+  it("updates and clears the root native progress widget", () => {
+    const widgetCalls: Array<{
+      key: string;
+      lines: string[] | undefined;
+      placement: string | undefined;
+    }> = [];
+    const rootUi = {
+      setWidget: (key: string, lines: string[] | undefined, options?: { placement?: string }) =>
+        widgetCalls.push({ key, lines, placement: options?.placement }),
+    } as unknown as ExtensionUIContext;
+    const broker = new RootUiBroker(rootUi, true, 1_000);
+
+    broker.setProgressWidget(["worker[2]：bash pnpm test", "reviewer[1]：thinking"]);
+    broker.setProgressWidget([]);
+
+    expect(widgetCalls).toEqual([
+      {
+        key: "pi-subagents-progress",
+        lines: ["worker[2]：bash pnpm test", "reviewer[1]：thinking"],
+        placement: "belowEditor",
+      },
+      { key: "pi-subagents-progress", lines: undefined, placement: "belowEditor" },
+    ]);
+    broker.shutdown();
+    expect(widgetCalls).toHaveLength(2);
+  });
+
   it("uses deterministic fallbacks when no interactive UI exists", async () => {
     const rootUi = { setStatus: () => undefined } as unknown as ExtensionUIContext;
-    const proxy = new RootUiBroker(rootUi, false, 100).proxy("sa", "worker");
+    const broker = new RootUiBroker(rootUi, false, 100);
+    broker.setProgressWidget(["worker[1]：thinking"]);
+    const proxy = broker.proxy("sa", "worker");
     await expect(proxy.confirm("title", "message")).resolves.toBe(false);
     await expect(proxy.select("title", ["one"])).resolves.toBeUndefined();
     await expect(proxy.input("title")).resolves.toBeUndefined();

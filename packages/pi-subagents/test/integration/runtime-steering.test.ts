@@ -4,6 +4,7 @@ import path from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type {
   AgentSession,
+  AgentSessionEvent,
   ExtensionContext,
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
@@ -50,6 +51,7 @@ describe("runtime steering", () => {
     const agentDir = path.join(root, "agent");
     process.env.PI_CODING_AGENT_DIR = agentDir;
 
+    const widgetCalls: Array<string[] | undefined> = [];
     const runtime = new RootRuntime(path.join(root, "extension.js"));
     const config: SubagentsConfig = {
       externalDirectories: [],
@@ -62,13 +64,19 @@ describe("runtime steering", () => {
       {
         rootSessionId: "root-session",
         rootSessionFile,
-        ctx: { ui: {} } as ExtensionContext,
+        ctx: {
+          hasUI: true,
+          ui: {
+            setWidget: (_key: string, lines: string[] | undefined) => widgetCalls.push(lines),
+          },
+        } as unknown as ExtensionContext,
         sendReport: () => undefined,
       },
       config,
     );
 
     const promptOptions: Array<{ streamingBehavior?: string }> = [];
+    let sessionListener: ((event: AgentSessionEvent) => void) | undefined;
     let aborted = false;
     const fakeSessionManager = {
       getSessionFile: () => path.join(root, "child.jsonl"),
@@ -90,7 +98,12 @@ describe("runtime steering", () => {
         options.preflightResult?.(true);
         await new Promise<void>(() => undefined);
       },
-      subscribe: () => () => undefined,
+      subscribe: (listener: (event: AgentSessionEvent) => void) => {
+        sessionListener = listener;
+        return () => {
+          sessionListener = undefined;
+        };
+      },
       abort: async () => {
         aborted = true;
       },
@@ -135,6 +148,15 @@ describe("runtime steering", () => {
       context,
       undefined,
     );
+    sessionListener?.({ type: "turn_start" });
+    sessionListener?.({
+      type: "tool_execution_start",
+      toolCallId: "tool-1",
+      toolName: "bash",
+      args: { command: "pnpm test" },
+    });
+    expect(widgetCalls.at(-1)).toEqual(["worker[1]：bash pnpm test"]);
+
     await expect(
       runtime.askSubagent(caller, { id: started.id, prompt: "normal" }, context, undefined),
     ).rejects.toMatchObject({ code: "SUBAGENT_BUSY" });

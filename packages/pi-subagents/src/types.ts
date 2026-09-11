@@ -1,4 +1,5 @@
 import type { AgentSession, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { SubagentProgressState } from "./progress.js";
 
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
@@ -127,6 +128,7 @@ export interface RootHostBinding {
 
 export interface LiveAgent {
   id: string;
+  name: string;
   runId: string;
   mountId: string;
   phase: "opening" | "executing" | "idle" | "closing";
@@ -138,5 +140,6 @@ export interface LiveAgent {
   sdkSettled: boolean;
   accepted: boolean;
   finalizing: boolean;
+  progress: SubagentProgressState;
   unsubscribe?: () => void;
 }

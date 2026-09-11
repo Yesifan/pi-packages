@@ -1,7 +1,7 @@
 # @bykwp/pi-subagents — 实现规格
 
-**文档版本：** 1.1  
-**状态：** v1 实现基线（已合并 session-local delegation patch）  
+**文档版本：** 1.2
+**状态：** v1 实现基线（已合并 session-local delegation 与原生进度 widget 决策）
 **目标包名：** `@bykwp/pi-subagents`  
 **目标宿主：** Pi CLI / TUI  
 **SDK 验证基线：** `@earendil-works/pi-coding-agent@0.85.1`  
@@ -44,7 +44,7 @@
 | report tool | 不存在，不注入给模型 |
 | 结果报告 | 运行时自动提取本次逻辑任务的最终 assistant 回复，交给直接 parent |
 | 报告投递 | 使用 Pi custom message 的 `steer` 模式，并在 parent 空闲时触发处理 |
-| UI | 代理受支持的官方 `ctx.ui` 方法到 root CLI；所有后代共享一个对话框队列 |
+| UI | 代理受支持的官方 `ctx.ui` 方法到 root CLI；所有后代共享一个对话框队列；root 使用原生字符串 widget 聚合活动 subagent 的最新进度 |
 | 忙碌时 ask | 普通 ask 立即失败；仅 `isSteer: true` 可向当前可 steering 的 executing run 追加输入 |
 | 等待子任务 | 保留 idle AgentSession；不做冷释放、冷唤醒或离线父节点调度 |
 | 真正完成 | 保存结果、完成必要清理后 dispose；保留身份与历史 |
@@ -53,7 +53,9 @@
 
 **明确不做：** 前台模式、`report()`、`get_subagent_result()`、`abort_subagent()`、新的 delegation 任务队列、工作窃取、工作区/worktree 管理、独立进程隔离、dashboard、自定义组件、聊天渠道适配、自动总结模型、跨 root 的 agent 共享、自动重放工具副作用。`isSteer: true` 只复用 Pi 已有 steering queue，不属于新的 delegation 队列。
 
-Pi extension 是 package 的接入形式。“不使用自定义 UI”不等于“不使用 extension API”。
+Pi extension 是 package 的接入形式。“不使用自定义 UI”不等于“不使用 extension API”。根据
+[ADR-0002](../adr/0002-native-widget-for-background-progress.md)，用途受限、只读且由 root 持有的
+Pi 原生字符串进度 widget 不属于 dashboard 或自定义组件。
 
 ## 2. 概念和所有权
 
@@ -834,6 +836,23 @@ child 没有独立终端。绑定 UI proxy 时 CLI 使用 `mode: "tui"`，不能
 
 `editor(title, prefill)` 在 0.85.1 没有与 confirm/select/input 相同的 signal/options，因此不把它勉强纳入可取消队列。未来支持它需要独立解决原生组件关闭和取消问题。[P4]
 
+#### 11.2.1 Root 持有的进度 widget
+
+上述 `setWidget` 不转发约束针对 child `ExtensionUIContext`。本包自己的 `RootRuntime` 使用固定
+namespaced key 调用 root `ctx.ui.setWidget()`，在编辑器下方显示每个活动 subagent 的一条最新信息：
+
+```text
+worker[3]：bash pnpm test
+reviewer[2]：thinking
+```
+
+方括号内是当前 logical run 的 `turn_start` 次数。thinking 只显示阶段标签；工具只显示 allowlist
+内的关键参数并单行化、截断，不显示 reasoning 正文、tool output 或完整任意参数。每个 subagent
+只有一行，后续事件替换该行，不累计历史快照。活动 subagent 超过 Pi 原生 10 行限制时，最后一行
+必须明确显示省略数量。最后一个活动 run 结束或 root shutdown 时清除 widget。
+
+该 widget 是瞬时 root UI，不持久化、不进入模型上下文，也不允许 child extension 直接修改。
+
 ### 11.3 来源与排队
 
 标题示例：`[subagent: backend-review / sa_123] Permission required`。嵌套时可以显示简短路径，但不要把原选项值或用户答案改写。
@@ -1151,6 +1170,8 @@ Node 下限与 0.85.1 宿主一致。[P9] 编译和测试安装精确固定 Pi 0
 | U08 | unsupported editor/custom 不遗留 Promise；完整 UI 接口类型检查通过 |
 | U09 | parent 当前模型运行结束后，child UI 仍能使用当前 root CLI |
 | U10 | root UI replacement 后旧 proxy 不工作；测试并记录 parent 自身并发弹框的边界 |
+| U11 | 原生进度 widget 每个活动 subagent 只显示一条最新 thinking/tool 信息，并累计当前 run 的模型调用次数 |
+| U12 | 多 subagent 聚合、10 行溢出、finalize/rollback/shutdown 清理和旧 mount 事件隔离正确 |
 
 ### 17.6 持久化、恢复和清理
 
