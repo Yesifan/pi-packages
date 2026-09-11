@@ -1,0 +1,6 @@
+{
+  "external_directory": ["/workspace/backend", "~/projects/frontend"],
+  "max_depth": 4,
+  "max_live_agents": 8,
+  "ui_timeout_ms": 120000
+}
