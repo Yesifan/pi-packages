@@ -21,6 +21,11 @@ import {
   findProjectRoot,
   resolveToolCwd,
 } from "./paths.js";
+import {
+  applyProgressEvent,
+  buildProgressWidgetLines,
+  createSubagentProgressState,
+} from "./progress.js";
 import { initializeProjectSubagents } from "./project-storage.js";
 import { PersistentSubagentStore } from "./store.js";
 import type { DelegationRuntimeApi } from "./tools.js";
@@ -179,9 +184,10 @@ export class RootRuntime implements DelegationRuntimeApi {
 
     const agentId = id("sa");
     const runId = id("run");
-    const placeholder = this.reserveLive(agentId, runId);
+    const placeholder = this.reserveLive(agentId, input.name.trim(), runId);
     this.reserveParentDependency(caller.agentId, runId);
     try {
+      this.refreshProgressWidget();
       signal?.throwIfAborted();
       if (!(await this.resolveTrust(target.cwd))) {
         throw new SubagentError("PROJECT_NOT_TRUSTED", `Project is not trusted: ${target.cwd}`);
@@ -286,9 +292,10 @@ export class RootRuntime implements DelegationRuntimeApi {
     const target = await resolveToolCwd(stored.cwd, caller.delegation);
     const parentRunId = this.captureParentRun(caller);
     const runId = id("run");
-    const live = this.reserveLive(stored.id, runId);
+    const live = this.reserveLive(stored.id, stored.name, runId);
     this.reserveParentDependency(caller.agentId, runId);
     try {
+      this.refreshProgressWidget();
       signal?.throwIfAborted();
       if (!(await this.resolveTrust(stored.cwd))) {
         throw new SubagentError("PROJECT_NOT_TRUSTED", `Project is not trusted: ${stored.cwd}`);
@@ -464,13 +471,31 @@ export class RootRuntime implements DelegationRuntimeApi {
 
   private subscribe(live: LiveAgent): void {
     live.unsubscribe = live.session?.subscribe((event) => {
-      if (event.type !== "agent_settled") return;
       const current = this.live.get(live.id);
-      if (current !== live || current.mountId !== live.mountId) return;
+      if (
+        current !== live ||
+        current.mountId !== live.mountId ||
+        live.finalizing ||
+        live.phase === "closing"
+      )
+        return;
+      if (applyProgressEvent(live.progress, event)) this.refreshProgressWidget();
+      if (event.type !== "agent_settled") return;
       live.sdkSettled = true;
       live.phase = "idle";
+      const pending = live.pendingChildRuns.size + live.pendingReportIds.size;
+      live.progress.latestActivity = pending > 0 ? `waiting for ${pending} subagents` : "finishing";
+      this.refreshProgressWidget();
       void this.maybeFinalize(live);
     });
+  }
+
+  private refreshProgressWidget(): void {
+    const entries = [...this.live.values()].map((live) => ({
+      name: live.name,
+      progress: live.progress,
+    }));
+    this.uiBroker.setProgressWidget(buildProgressWidgetLines(entries));
   }
 
   private async maybeFinalize(live: LiveAgent): Promise<void> {
@@ -592,6 +617,7 @@ export class RootRuntime implements DelegationRuntimeApi {
     await this.store.saveAgent(stored);
     await this.disposeMount(live.id);
     this.live.delete(live.id);
+    this.refreshProgressWidget();
     this.runs.delete(run.id);
     if (!this.closing) {
       try {
@@ -609,6 +635,7 @@ export class RootRuntime implements DelegationRuntimeApi {
     this.notifyRuntimeError(failure);
     await this.disposeMount(live.id).catch((disposeError) => this.notifyRuntimeError(disposeError));
     this.live.delete(live.id);
+    this.refreshProgressWidget();
     if (!stored || !run || this.closing) {
       if (run) this.runs.delete(run.id);
       return;
@@ -717,9 +744,10 @@ export class RootRuntime implements DelegationRuntimeApi {
     );
   }
 
-  private reserveLive(agentId: string, runId: string): LiveAgent {
+  private reserveLive(agentId: string, name: string, runId: string): LiveAgent {
     const live: LiveAgent = {
       id: agentId,
+      name,
       runId,
       mountId: id("mount"),
       phase: "opening",
@@ -729,6 +757,7 @@ export class RootRuntime implements DelegationRuntimeApi {
       sdkSettled: false,
       accepted: false,
       finalizing: false,
+      progress: createSubagentProgressState(),
     };
     this.live.set(agentId, live);
     return live;
@@ -762,6 +791,7 @@ export class RootRuntime implements DelegationRuntimeApi {
     if (live?.session?.isStreaming) await live.session.abort().catch(() => undefined);
     await this.disposeMount(agentId);
     this.live.delete(agentId);
+    this.refreshProgressWidget();
     this.runs.delete(runId);
     if (deleteIdentity) {
       this.agents.delete(agentId);

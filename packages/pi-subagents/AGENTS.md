@@ -35,7 +35,8 @@ AgentSession，并提供 `subagent` 与 `ask_subagent` 工具。实现基线为
 - `src/config.ts`、`src/project-storage.ts`、`src/paths.ts`：项目本地配置、trust 后存储初始化、Git/路径安全、project root、canonical cwd 授权和 cycle 检查。
 - `src/agents.ts`：内置/global/project agent registry、frontmatter 校验和 snapshot/hash。
 - `src/store.ts`：root-scoped 原子 JSON 持久化和单 writer lock。
-- `src/ui.ts`：所有 descendants 共用的 blocking UI FIFO 与受限 UI proxy。
+- `src/progress.ts`：run-local 活动摘要与 root 原生 widget 行格式化。
+- `src/ui.ts`：所有 descendants 共用的 blocking UI FIFO、root progress widget 与受限 UI proxy。
 - `src/tools.ts`：`subagent` / `ask_subagent` schema 和结构化结果。
 - `agents/`：发布的内置 agent definitions；`explore` 默认必须保持只读。
 - `test/unit/`、`test/integration/`：Vitest 测试。

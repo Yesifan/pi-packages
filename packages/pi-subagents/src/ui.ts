@@ -1,5 +1,7 @@
 import type { ExtensionUIContext, ExtensionUIDialogOptions } from "@earendil-works/pi-coding-agent";
 
+const PROGRESS_WIDGET_KEY = "pi-subagents-progress";
+
 type QueueItem<T> = {
   ownerId: string;
   fallback: T;
@@ -15,6 +17,7 @@ export class RootUiBroker {
   private queue: QueueItem<unknown>[] = [];
   private active?: QueueItem<unknown>;
   private closing = false;
+  private progressWidgetVisible = false;
 
   constructor(
     private readonly rootUi: ExtensionUIContext,
@@ -24,6 +27,14 @@ export class RootUiBroker {
 
   proxy(agentId: string, name: string): SubagentUiProxy {
     return new SubagentUiProxy(this, this.rootUi, this.hasUi, agentId, name);
+  }
+
+  setProgressWidget(lines: string[]): void {
+    if (this.closing || !this.hasUi) return;
+    this.rootUi.setWidget(PROGRESS_WIDGET_KEY, lines.length > 0 ? lines : undefined, {
+      placement: "belowEditor",
+    });
+    this.progressWidgetVisible = lines.length > 0;
   }
 
   enqueue<T>(
@@ -114,6 +125,11 @@ export class RootUiBroker {
   }
 
   shutdown(): void {
+    if (this.closing) return;
+    if (this.hasUi && this.progressWidgetVisible) {
+      this.rootUi.setWidget(PROGRESS_WIDGET_KEY, undefined);
+      this.progressWidgetVisible = false;
+    }
     this.closing = true;
     this.active?.controller.abort();
     if (this.active) this.active.resolve(this.active.fallback);

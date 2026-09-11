@@ -1,6 +1,6 @@
 {
   "name": "@BYKWP/pi-subagents",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Persistent in-process background subagents for Pi Coding Agent",
   "keywords": [
     "pi-package",
