@@ -28,7 +28,7 @@ const subagentParameters = Type.Object({
   cwd: Type.Optional(
     Type.String({
       description:
-        "Absolute working directory for the subagent. Omit to use the caller's current cwd. When specified, it must exactly match the current cwd or one of the external cwd paths listed in this tool's description after canonical path resolution. ",
+        "Absolute working directory for the subagent. Omit to use the caller's current cwd. When specified, it must exactly match one of the external cwd paths listed in this tool's description after canonical path resolution. ",
     }),
   ),
 });
@@ -87,7 +87,7 @@ export function createDelegationExtension(
               content: [
                 {
                   type: "text",
-                  text: `Started subagent ${result.name} (${result.id}), run ${result.run_id}.`,
+                  text: `Started subagent ${result.name} (${result.id}), run ${result.run_id}. Its final report will arrive automatically; do not poll with ask_subagent or shell wait commands. Continue only with independent work, or end your turn.`,
                 },
               ],
               details: result,
@@ -116,8 +116,8 @@ export function createDelegationExtension(
                   type: "text",
                   text:
                     result.status === "steered"
-                      ? `Steered subagent ${result.name} (${result.id}), current run ${result.run_id}.`
-                      : `Started subagent ${result.name} (${result.id}), run ${result.run_id}.`,
+                      ? `Steered subagent ${result.name} (${result.id}), current run ${result.run_id}. Its final report will arrive automatically; only steer again to provide a substantive correction, not to poll or request completion.`
+                      : `Started subagent ${result.name} (${result.id}), run ${result.run_id}. Its final report will arrive automatically; do not poll with ask_subagent or shell wait commands. Continue only with independent work, or end your turn.`,
                 },
               ],
               details: result,
