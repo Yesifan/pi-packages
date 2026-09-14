@@ -275,28 +275,12 @@ export class RootRuntime implements DelegationRuntimeApi {
     }
     const stored = this.getOwnedAgent(caller, input.id);
     if (input.isSteer === true) return this.steer(stored, input.prompt, signal);
-    if (this.live.has(stored.id)) {
-      throw new SubagentError(
-        "SUBAGENT_BUSY",
-        `${stored.name} still has an active delegation`,
-        stored.id,
-      );
-    }
     signal?.throwIfAborted();
-    if (this.live.size >= this.rootConfig.maxLiveAgents) {
-      throw new SubagentError(
-        "LIVE_AGENT_LIMIT",
-        `Maximum live subagents is ${this.rootConfig.maxLiveAgents}`,
-      );
-    }
-    const target = await resolveToolCwd(stored.cwd, caller.delegation);
-    const parentRunId = this.captureParentRun(caller);
-    const runId = id("run");
-    const live = this.reserveLive(stored.id, stored.name, runId);
-    this.reserveParentDependency(caller.agentId, runId);
+    const { live, parentRunId, runId } = this.reserveNormalAsk(caller, stored);
     try {
       this.refreshProgressWidget();
       signal?.throwIfAborted();
+      const target = await resolveToolCwd(stored.cwd, caller.delegation);
       if (!(await this.resolveTrust(stored.cwd))) {
         throw new SubagentError("PROJECT_NOT_TRUSTED", `Project is not trusted: ${stored.cwd}`);
       }
@@ -742,6 +726,32 @@ export class RootRuntime implements DelegationRuntimeApi {
         if (this.isCurrent(epoch, parent, mountId)) void this.failRun(parent, error);
       },
     );
+  }
+
+  // Keep the busy/budget checks and opening reservation in one synchronous section.
+  // A normal ask must not yield before it owns the logical agent and live slot.
+  private reserveNormalAsk(
+    caller: CallerBinding,
+    stored: StoredSubagent,
+  ): { live: LiveAgent; parentRunId: string | null; runId: string } {
+    if (this.live.has(stored.id)) {
+      throw new SubagentError(
+        "SUBAGENT_BUSY",
+        `${stored.name} still has an active delegation`,
+        stored.id,
+      );
+    }
+    if (this.live.size >= this.rootConfig.maxLiveAgents) {
+      throw new SubagentError(
+        "LIVE_AGENT_LIMIT",
+        `Maximum live subagents is ${this.rootConfig.maxLiveAgents}`,
+      );
+    }
+    const parentRunId = this.captureParentRun(caller);
+    const runId = id("run");
+    const live = this.reserveLive(stored.id, stored.name, runId);
+    this.reserveParentDependency(caller.agentId, runId);
+    return { live, parentRunId, runId };
   }
 
   private reserveLive(agentId: string, name: string, runId: string): LiveAgent {

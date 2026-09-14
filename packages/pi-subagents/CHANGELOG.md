@@ -2,6 +2,12 @@
 
 All notable changes to this package are documented here. The format follows Keep a Changelog.
 
+## [0.2.2] - 2026-09-14
+
+### Fixed
+
+- Atomically reserve idle subagents and the shared live-agent budget before asynchronous normal-ask initialization, preventing concurrent `ask_subagent` calls from accepting duplicate or over-limit runs.
+
 ## [0.2.1] - 2026-09-11
 
 ### Added
