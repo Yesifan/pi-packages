@@ -25,7 +25,10 @@ export async function buildDelegationContext(
   };
 }
 
-export function formatSubagentToolDescription(context: DelegationContext): string {
+export function formatSubagentToolDescription(
+  context: DelegationContext,
+  maxLiveAgents?: number,
+): string {
   const agents = [...context.agentTypes.values()]
     .sort((a, b) => a.id.localeCompare(b.id))
     .map((agent) => `- ${agent.id}: ${agent.description ?? "No description."}`)
@@ -34,9 +37,21 @@ export function formatSubagentToolDescription(context: DelegationContext): strin
     context.externalDirectories.length > 0
       ? context.externalDirectories.map((cwd) => `- ${cwd}`).join("\n")
       : "- (none)";
-  return `Create a background subagent. The call returns immediately after the
-subagent has been accepted. Its final response is automatically reported
-back to this agent.
+  const liveLimit =
+    maxLiveAgents === undefined
+      ? "Parallel work is subject to the configured shared live-subagent limit."
+      : `The configured shared limit is ${maxLiveAgents} live subagents across the entire root session tree.`;
+  return `Create a background subagent. The call returns once accepted; the subagent
+runs asynchronously and reports back to this agent automatically when done.
+
+Start multiple independent tasks in parallel by issuing multiple subagent calls
+in the same assistant turn. ${liveLimit} Give parallel subagents non-overlapping
+tasks. Parallel editing tasks must have mutually exclusive boundaries.
+
+Do not poll, redo, or re-delegate accepted work. If any relevant subagent report
+is still pending, give only a brief progress update that identifies the active
+subagents, then end your turn. Give the final answer only after all relevant
+reports arrive.
 
 Available agent types:
 ${agents}

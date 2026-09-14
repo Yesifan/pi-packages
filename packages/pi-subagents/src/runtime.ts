@@ -27,11 +27,14 @@ import {
   createSubagentProgressState,
 } from "./progress.js";
 import { initializeProjectSubagents } from "./project-storage.js";
+import { createDelegationStatusSnapshot, formatDelegationStatus } from "./status.js";
 import { PersistentSubagentStore } from "./store.js";
 import type { DelegationRuntimeApi } from "./tools.js";
 import type {
   AcceptedResult,
   CallerBinding,
+  DelegationStatusSnapshot,
+  DeliveredSubagentReport,
   LiveAgent,
   RootHostBinding,
   StoredRun,
@@ -57,9 +60,10 @@ function isNonEmpty(value: string): boolean {
 async function awaitPreflight(
   accepted: Promise<void>,
   signal: AbortSignal | undefined,
+  isAccepted: () => boolean,
   onAbort?: () => void | Promise<void>,
 ): Promise<void> {
-  if (!signal) return accepted;
+  if (!signal || isAccepted()) return accepted;
   signal.throwIfAborted();
   return new Promise<void>((resolve, reject) => {
     let settled = false;
@@ -70,6 +74,10 @@ async function awaitPreflight(
       callback();
     };
     const abort = (): void => {
+      if (isAccepted()) {
+        finish(resolve);
+        return;
+      }
       finish(() => {
         void onAbort?.();
         reject(new SubagentError("ABORTED", "Tool call was aborted before Pi accepted the prompt"));
@@ -88,10 +96,17 @@ function roleAllowsDelegation(stored: StoredSubagent): boolean {
   return tools === undefined || tools.includes("subagent");
 }
 
-function formatReport(report: SubagentReport): string {
+function deliveredReport(
+  report: SubagentReport,
+  status: DelegationStatusSnapshot,
+): DeliveredSubagentReport {
+  return { ...report, delegation_status: status };
+}
+
+function formatReport(report: SubagentReport, status: DelegationStatusSnapshot): string {
   const heading = `[Subagent ${report.name} (${report.agentId}) ${report.outcome}]`;
   const error = report.error ? `\n${report.error.code}: ${report.error.message}` : "";
-  return `${heading}\nrun: ${report.runId}\ncwd: ${report.cwd}${error}\n\n${report.result}`;
+  return `${heading}\ncwd: ${report.cwd}${error}\n\n${report.result}\n\n${formatDelegationStatus(status)}`;
 }
 
 export class RootRuntime implements DelegationRuntimeApi {
@@ -147,6 +162,10 @@ export class RootRuntime implements DelegationRuntimeApi {
     this.initialized = true;
   }
 
+  getMaxLiveAgents(): number | undefined {
+    return this.initialized ? this.rootConfig.maxLiveAgents : undefined;
+  }
+
   async createSubagent(
     caller: CallerBinding,
     input: {
@@ -179,12 +198,14 @@ export class RootRuntime implements DelegationRuntimeApi {
       throw new SubagentError(
         "LIVE_AGENT_LIMIT",
         `Maximum live subagents is ${this.rootConfig.maxLiveAgents}`,
+        undefined,
+        { delegationStatus: this.delegationStatusFor(caller.agentId) },
       );
     }
 
     const agentId = id("sa");
     const runId = id("run");
-    const placeholder = this.reserveLive(agentId, input.name.trim(), runId);
+    const placeholder = this.reserveLive(agentId, input.name.trim(), runId, caller.agentId);
     this.reserveParentDependency(caller.agentId, runId);
     try {
       this.refreshProgressWidget();
@@ -335,6 +356,7 @@ export class RootRuntime implements DelegationRuntimeApi {
         stored.id,
       );
     }
+    let acceptedStatus: DelegationStatusSnapshot | undefined;
     let acceptedResolve!: () => void;
     let acceptedReject!: (error: unknown) => void;
     const accepted = new Promise<void>((resolve, reject) => {
@@ -347,15 +369,22 @@ export class RootRuntime implements DelegationRuntimeApi {
       streamingBehavior: "steer",
       expandPromptTemplates: false,
       preflightResult: (success) => {
-        if (success) acceptedResolve();
-        else acceptedReject(new SubagentError("SUBAGENT_NOT_STEERABLE", "Pi rejected steering"));
+        if (success) {
+          acceptedStatus = this.delegationStatusFor(stored.parentAgentId);
+          acceptedResolve();
+        } else {
+          acceptedReject(new SubagentError("SUBAGENT_NOT_STEERABLE", "Pi rejected steering"));
+        }
       },
     });
     void task.catch((error) => {
       acceptedReject(error);
     });
-    await awaitPreflight(accepted, signal);
-    return this.acceptedResult(stored, live.runId, "steered");
+    await awaitPreflight(accepted, signal, () => acceptedStatus !== undefined);
+    if (!acceptedStatus) {
+      throw new SubagentError("INTERNAL_ERROR", "Steering was accepted without a status snapshot");
+    }
+    return this.acceptedResult(stored, live.runId, "steered", acceptedStatus);
   }
 
   private async startRun(
@@ -406,6 +435,7 @@ export class RootRuntime implements DelegationRuntimeApi {
       await this.store.deleteRun(stored.id, run.id);
       await this.store.saveAgent(stored);
     };
+    let acceptedStatus: DelegationStatusSnapshot | undefined;
     let acceptedResolve!: () => void;
     let acceptedReject!: (error: unknown) => void;
     const accepted = new Promise<void>((resolve, reject) => {
@@ -429,6 +459,7 @@ export class RootRuntime implements DelegationRuntimeApi {
           run.acceptedAt = now();
           this.store.commitAcceptedRun(run);
           live.accepted = true;
+          acceptedStatus = this.delegationStatusFor(stored.parentAgentId);
           acceptedResolve();
         },
       });
@@ -443,14 +474,22 @@ export class RootRuntime implements DelegationRuntimeApi {
       if (live.accepted && this.isCurrent(epoch, live, mountId)) void this.failRun(live, error);
     });
     try {
-      await awaitPreflight(accepted, signal, () => session.abort());
+      await awaitPreflight(
+        accepted,
+        signal,
+        () => acceptedStatus !== undefined,
+        () => session.abort(),
+      );
     } catch (error) {
       await rollbackPrepared();
       throw error;
     }
+    if (!acceptedStatus) {
+      throw new SubagentError("INTERNAL_ERROR", "Run was accepted without a status snapshot");
+    }
     if (promptFailed) void this.failRun(live, promptFailure);
     else void this.maybeFinalize(live);
-    return this.acceptedResult(stored, run.id, "started");
+    return this.acceptedResult(stored, run.id, "started", acceptedStatus);
   }
 
   private subscribe(live: LiveAgent): void {
@@ -644,7 +683,7 @@ export class RootRuntime implements DelegationRuntimeApi {
     };
     if (stored.parentAgentId === null) {
       try {
-        this.host.sendReport(report);
+        this.host.sendReport(report, this.delegationStatusFor(stored.parentAgentId));
       } catch (deliveryError) {
         this.notifyRuntimeError(deliveryError);
       }
@@ -658,13 +697,14 @@ export class RootRuntime implements DelegationRuntimeApi {
     parent.phase = "executing";
     const epoch = this.epoch;
     const mountId = parent.mountId;
+    const status = this.delegationStatusFor(stored.parentAgentId);
     void parent.session
       .sendCustomMessage(
         {
           customType: "bykwp-subagent-report",
-          content: formatReport(report),
+          content: formatReport(report, status),
           display: true,
-          details: report,
+          details: deliveredReport(report, status),
         },
         { deliverAs: "steer", triggerTurn: true },
       )
@@ -686,7 +726,7 @@ export class RootRuntime implements DelegationRuntimeApi {
     report: SubagentReport,
   ): Promise<void> {
     if (stored.parentAgentId === null) {
-      this.host?.sendReport(report);
+      this.host?.sendReport(report, this.delegationStatusFor(stored.parentAgentId));
       run.delivery = "submitted";
       await this.store?.saveRun(run);
       return;
@@ -699,12 +739,13 @@ export class RootRuntime implements DelegationRuntimeApi {
     parent.phase = "executing";
     const epoch = this.epoch;
     const mountId = parent.mountId;
+    const status = this.delegationStatusFor(stored.parentAgentId);
     const delivery = parent.session.sendCustomMessage(
       {
         customType: "bykwp-subagent-report",
-        content: formatReport(report),
+        content: formatReport(report, status),
         display: true,
-        details: report,
+        details: deliveredReport(report, status),
       },
       { deliverAs: "steer", triggerTurn: true },
     );
@@ -739,25 +780,34 @@ export class RootRuntime implements DelegationRuntimeApi {
         "SUBAGENT_BUSY",
         `${stored.name} still has an active delegation`,
         stored.id,
+        { delegationStatus: this.delegationStatusFor(caller.agentId) },
       );
     }
     if (this.live.size >= this.rootConfig.maxLiveAgents) {
       throw new SubagentError(
         "LIVE_AGENT_LIMIT",
         `Maximum live subagents is ${this.rootConfig.maxLiveAgents}`,
+        undefined,
+        { delegationStatus: this.delegationStatusFor(caller.agentId) },
       );
     }
     const parentRunId = this.captureParentRun(caller);
     const runId = id("run");
-    const live = this.reserveLive(stored.id, stored.name, runId);
+    const live = this.reserveLive(stored.id, stored.name, runId, caller.agentId);
     this.reserveParentDependency(caller.agentId, runId);
     return { live, parentRunId, runId };
   }
 
-  private reserveLive(agentId: string, name: string, runId: string): LiveAgent {
+  private reserveLive(
+    agentId: string,
+    name: string,
+    runId: string,
+    parentAgentId: string | null,
+  ): LiveAgent {
     const live: LiveAgent = {
       id: agentId,
       name,
+      parentAgentId,
       runId,
       mountId: id("mount"),
       phase: "opening",
@@ -771,6 +821,18 @@ export class RootRuntime implements DelegationRuntimeApi {
     };
     this.live.set(agentId, live);
     return live;
+  }
+
+  private delegationStatusFor(parentAgentId: string | null): DelegationStatusSnapshot {
+    const liveAgents = [...this.live.values()];
+    const activeDirectSubagents = liveAgents
+      .filter((live) => live.parentAgentId === parentAgentId)
+      .map(({ id: agentId, name }) => ({ id: agentId, name }));
+    return createDelegationStatusSnapshot(
+      activeDirectSubagents,
+      liveAgents.length,
+      this.rootConfig.maxLiveAgents,
+    );
   }
 
   private captureParentRun(caller: CallerBinding): string | null {
@@ -850,6 +912,7 @@ export class RootRuntime implements DelegationRuntimeApi {
     stored: StoredSubagent,
     runId: string,
     status: "started" | "steered",
+    delegationStatus: DelegationStatusSnapshot,
   ): AcceptedResult {
     return {
       ok: true,
@@ -860,6 +923,7 @@ export class RootRuntime implements DelegationRuntimeApi {
       cwd: stored.cwd,
       status,
       thinking: stored.thinking,
+      delegation_status: delegationStatus,
     };
   }
 

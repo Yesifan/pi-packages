@@ -255,11 +255,29 @@ describe("normal ask concurrency", () => {
     expect(immediateReservation).toMatchObject({ phase: "opening", accepted: false });
     expect(firstOutcome).toMatchObject({
       status: "fulfilled",
-      value: { id: agentId, status: "started" },
+      value: {
+        id: agentId,
+        status: "started",
+        delegation_status: {
+          activeDirectSubagents: [{ id: agentId, name: "worker" }],
+          activeDirectSubagentCount: 1,
+          liveAgents: 1,
+          maxLiveAgents: 8,
+        },
+      },
     });
     expect(secondOutcome).toMatchObject({
       status: "rejected",
-      reason: { code: "SUBAGENT_BUSY", agentId },
+      reason: {
+        code: "SUBAGENT_BUSY",
+        agentId,
+        delegationStatus: {
+          activeDirectSubagents: [{ id: agentId, name: "worker" }],
+          activeDirectSubagentCount: 1,
+          liveAgents: 1,
+          maxLiveAgents: 8,
+        },
+      },
     });
   });
 
@@ -287,11 +305,28 @@ describe("normal ask concurrency", () => {
     expect(immediateLiveCount).toBe(1);
     expect(firstOutcome).toMatchObject({
       status: "fulfilled",
-      value: { id: firstAgentId, status: "started" },
+      value: {
+        id: firstAgentId,
+        status: "started",
+        delegation_status: {
+          activeDirectSubagents: [{ id: firstAgentId, name: "first" }],
+          activeDirectSubagentCount: 1,
+          liveAgents: 1,
+          maxLiveAgents: 1,
+        },
+      },
     });
     expect(secondOutcome).toMatchObject({
       status: "rejected",
-      reason: { code: "LIVE_AGENT_LIMIT" },
+      reason: {
+        code: "LIVE_AGENT_LIMIT",
+        delegationStatus: {
+          activeDirectSubagents: [{ id: firstAgentId, name: "first" }],
+          activeDirectSubagentCount: 1,
+          liveAgents: 1,
+          maxLiveAgents: 1,
+        },
+      },
     });
     expect(live.size).toBe(1);
   });

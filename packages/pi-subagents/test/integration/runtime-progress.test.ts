@@ -15,6 +15,7 @@ import { RootRuntime } from "../../src/runtime.js";
 import type {
   AgentDefinitionSnapshot,
   CallerBinding,
+  DelegationStatusSnapshot,
   StoredSubagent,
   SubagentReport,
   SubagentsConfig,
@@ -37,6 +38,11 @@ interface FakeChild {
   listener?: (event: AgentSessionEvent) => void;
   streaming: boolean;
   branch: unknown[];
+  customMessages: Array<{
+    customType: string;
+    content: string;
+    details?: unknown;
+  }>;
 }
 
 function agentDefinition(): AgentDefinitionSnapshot {
@@ -65,7 +71,7 @@ function complete(child: FakeChild, text: string): void {
 }
 
 describe("runtime progress widget", () => {
-  it("shows one latest line per active subagent and removes lines as runs finish", async () => {
+  it("tracks active widgets and routes filtered nested report snapshots", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pi-subagents-progress-"));
     temporaryDirectories.push(root);
     const cwd = path.join(root, "project");
@@ -77,6 +83,7 @@ describe("runtime progress widget", () => {
 
     const widgetCalls: Array<string[] | undefined> = [];
     const reports: SubagentReport[] = [];
+    const reportStatuses: DelegationStatusSnapshot[] = [];
     const runtime = new RootRuntime(path.join(root, "extension.js"));
     const storage = await initializeProjectSubagents(cwd);
     const config: SubagentsConfig = {
@@ -99,7 +106,10 @@ describe("runtime progress widget", () => {
           },
           isProjectTrusted: () => true,
         } as unknown as ExtensionContext,
-        sendReport: (report) => reports.push(report),
+        sendReport: (report, status) => {
+          reports.push(report);
+          reportStatuses.push(status);
+        },
       },
       config,
     );
@@ -117,6 +127,7 @@ describe("runtime progress widget", () => {
         const child = {
           streaming: true,
           branch: [],
+          customMessages: [],
         } as unknown as FakeChild;
         const sessionManager = {
           getSessionFile: () => sessionFile,
@@ -140,6 +151,9 @@ describe("runtime progress widget", () => {
             return () => {
               child.listener = undefined;
             };
+          },
+          sendCustomMessage: async (message: FakeChild["customMessages"][number]) => {
+            child.customMessages.push(message);
           },
           abort: async () => undefined,
           dispose: () => undefined,
@@ -206,17 +220,77 @@ describe("runtime progress widget", () => {
     complete(children[0]!, "worker done");
     await vi.waitFor(() => {
       expect(widgetCalls.at(-1)).toEqual(["reviewer[1]：thinking"]);
+      expect(reportStatuses[0]).toEqual({
+        activeDirectSubagents: [{ id: expect.any(String), name: "reviewer" }],
+        activeDirectSubagentCount: 1,
+        liveAgents: 1,
+        maxLiveAgents: 8,
+      });
     });
     const staleListener = children[1]!.listener;
     complete(children[1]!, "reviewer done");
     await vi.waitFor(() => {
       expect(widgetCalls.at(-1)).toBeUndefined();
       expect(reports).toHaveLength(2);
+      expect(reportStatuses[1]).toEqual({
+        activeDirectSubagents: [],
+        activeDirectSubagentCount: 0,
+        liveAgents: 0,
+        maxLiveAgents: 8,
+      });
     });
 
     staleListener?.({ type: "turn_start" });
     expect(widgetCalls.at(-1)).toBeUndefined();
 
+    const parent = await runtime.createSubagent(
+      caller,
+      { name: "parent", prompt: "coordinate" },
+      context,
+      undefined,
+    );
+    const sibling = await runtime.createSubagent(
+      caller,
+      { name: "root-sibling", prompt: "independent" },
+      context,
+      undefined,
+    );
+    const childCaller: CallerBinding = { ...caller, agentId: parent.id, depth: 1 };
+    const nestedWorker = await runtime.createSubagent(
+      childCaller,
+      { name: "nested-worker", prompt: "work" },
+      context,
+      undefined,
+    );
+    const nestedReviewer = await runtime.createSubagent(
+      childCaller,
+      { name: "nested-reviewer", prompt: "review" },
+      context,
+      undefined,
+    );
+
+    complete(children[4]!, "nested worker done");
+    await vi.waitFor(() => {
+      expect(children[2]!.customMessages).toHaveLength(1);
+    });
+    const nestedMessage = children[2]!.customMessages[0]!;
+    expect(nestedMessage.content).toContain(
+      `Active direct subagents (1): nested-reviewer (${nestedReviewer.id}).`,
+    );
+    expect(nestedMessage.content).toContain("Shared live usage: 3/8.");
+    expect(nestedMessage.content).not.toContain(`root-sibling (${sibling.id})`);
+    expect(nestedMessage.content).not.toContain(nestedWorker.run_id);
+    expect(nestedMessage.details).toMatchObject({
+      runId: nestedWorker.run_id,
+      delegation_status: {
+        activeDirectSubagents: [{ id: nestedReviewer.id, name: "nested-reviewer" }],
+        activeDirectSubagentCount: 1,
+        liveAgents: 3,
+        maxLiveAgents: 8,
+      },
+    });
+
+    const widgetBeforeFailedOpen = widgetCalls.at(-1);
     failNextOpen = true;
     await expect(
       runtime.createSubagent(
@@ -226,7 +300,7 @@ describe("runtime progress widget", () => {
         undefined,
       ),
     ).rejects.toThrow("open failed");
-    expect(widgetCalls.at(-1)).toBeUndefined();
+    expect(widgetCalls.at(-1)).toEqual(widgetBeforeFailedOpen);
 
     await runtime.shutdown();
   });

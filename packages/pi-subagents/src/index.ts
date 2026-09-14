@@ -5,8 +5,14 @@ import { buildDelegationContext } from "./delegation.js";
 import { asSubagentError, SubagentError } from "./errors.js";
 import { canonicalizeDirectory, findProjectRoot } from "./paths.js";
 import { RootRuntime } from "./runtime.js";
+import { formatDelegationStatus } from "./status.js";
 import { createDelegationExtension, type DelegationRuntimeApi } from "./tools.js";
-import type { CallerBinding, SubagentReport } from "./types.js";
+import type {
+  CallerBinding,
+  DelegationStatusSnapshot,
+  DeliveredSubagentReport,
+  SubagentReport,
+} from "./types.js";
 
 const OWN_EXTENSION_PATH = fileURLToPath(import.meta.url);
 
@@ -58,6 +64,9 @@ function failedRuntime(error: unknown): DelegationRuntimeApi {
     },
     async askSubagent() {
       throw failure;
+    },
+    getMaxLiveAgents() {
+      return undefined;
     },
   };
 }
@@ -111,13 +120,13 @@ export default function piSubagents(pi: ExtensionAPI): void {
           rootSessionId: ctx.sessionManager.getSessionId(),
           rootSessionFile,
           ctx,
-          sendReport: (report: SubagentReport) => {
+          sendReport: (report: SubagentReport, status: DelegationStatusSnapshot) => {
             pi.sendMessage(
               {
                 customType: "bykwp-subagent-report",
-                content: formatRootReport(report),
+                content: formatRootReport(report, status),
                 display: true,
-                details: report,
+                details: deliveredReport(report, status),
               },
               { deliverAs: "steer", triggerTurn: true },
             );
@@ -137,13 +146,21 @@ export default function piSubagents(pi: ExtensionAPI): void {
   });
 }
 
-function formatRootReport(report: SubagentReport): string {
+function deliveredReport(
+  report: SubagentReport,
+  status: DelegationStatusSnapshot,
+): DeliveredSubagentReport {
+  return { ...report, delegation_status: status };
+}
+
+function formatRootReport(report: SubagentReport, status: DelegationStatusSnapshot): string {
   const error = report.error ? `\n${report.error.code}: ${report.error.message}` : "";
   return `[Subagent ${report.name} (${report.agentId}) ${report.outcome}]
-run: ${report.runId}
 cwd: ${report.cwd}${error}
 
-${report.result}`;
+${report.result}
+
+${formatDelegationStatus(status)}`;
 }
 
 export type { ExtensionContext };

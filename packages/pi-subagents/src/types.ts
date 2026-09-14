@@ -94,6 +94,18 @@ export interface SubagentReport {
   completedAt: string;
 }
 
+export interface ActiveSubagentSummary {
+  id: string;
+  name: string;
+}
+
+export interface DelegationStatusSnapshot {
+  activeDirectSubagents: ActiveSubagentSummary[];
+  activeDirectSubagentCount: number;
+  liveAgents: number;
+  maxLiveAgents: number;
+}
+
 export interface AcceptedResult {
   ok: true;
   id: string;
@@ -103,6 +115,7 @@ export interface AcceptedResult {
   cwd: string;
   status: "started" | "steered";
   thinking: ThinkingLevel;
+  delegation_status: DelegationStatusSnapshot;
 }
 
 export interface ErrorResult {
@@ -112,6 +125,7 @@ export interface ErrorResult {
     message: string;
     id?: string;
   };
+  delegation_status?: DelegationStatusSnapshot;
 }
 
 export interface CallerBinding {
@@ -121,16 +135,21 @@ export interface CallerBinding {
   delegation: DelegationContext;
 }
 
+export interface DeliveredSubagentReport extends SubagentReport {
+  delegation_status: DelegationStatusSnapshot;
+}
+
 export interface RootHostBinding {
   rootSessionId: string;
   rootSessionFile: string;
   ctx: ExtensionContext;
-  sendReport(report: SubagentReport): void;
+  sendReport(report: SubagentReport, status: DelegationStatusSnapshot): void;
 }
 
 export interface LiveAgent {
   id: string;
   name: string;
+  parentAgentId: string | null;
   runId: string;
   mountId: string;
   phase: "opening" | "executing" | "idle" | "closing";

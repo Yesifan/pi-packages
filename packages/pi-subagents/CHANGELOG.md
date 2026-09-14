@@ -2,6 +2,23 @@
 
 All notable changes to this package are documented here. The format follows Keep a Changelog.
 
+## [0.2.3] - 2026-09-14
+
+### Added
+
+- Model-visible snapshots of active direct subagents and shared live usage in successful delegation results, busy/limit errors, and automatic reports.
+
+### Changed
+
+- Clarified asynchronous parallel delegation, non-overlapping task ownership, automatic reporting, and interim-only responses while relevant reports remain pending.
+- Kept tool descriptions fixed during execution while deriving their configured live-agent limit when each session registers its tools.
+- Removed run IDs from model-visible startup and report text while retaining them in structured details and persistent records.
+
+### Fixed
+
+- Corrected the explicit `cwd` parameter description and replaced the incomplete normal-ask and steering result guidance.
+- Prevented a tool abort observed after Pi's successful preflight from rolling back an accepted start or reporting accepted steering as failed.
+
 ## [0.2.2] - 2026-09-14
 
 ### Fixed

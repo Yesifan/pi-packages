@@ -95,7 +95,7 @@ describe("runtime steering", () => {
     await runtime.shutdown();
   });
 
-  it("rejects a normal busy ask and steers the current run without creating another run", async () => {
+  it("preserves post-preflight starts and steering while rejecting busy normal asks", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pi-subagents-runtime-"));
     temporaryDirectories.push(root);
     const cwd = path.join(root, "project");
@@ -134,6 +134,7 @@ describe("runtime steering", () => {
     );
 
     const promptOptions: Array<{ streamingBehavior?: string }> = [];
+    let abortAfterPreflight: AbortController | undefined;
     let sessionListener: ((event: AgentSessionEvent) => void) | undefined;
     let aborted = false;
     let childSessionFile = "";
@@ -155,6 +156,8 @@ describe("runtime steering", () => {
       ) => {
         promptOptions.push(options);
         options.preflightResult?.(true);
+        abortAfterPreflight?.abort();
+        abortAfterPreflight = undefined;
         await new Promise<void>(() => undefined);
       },
       subscribe: (listener: (event: AgentSessionEvent) => void) => {
@@ -205,12 +208,16 @@ describe("runtime steering", () => {
     } as Model<Api>;
     const context = { model, thinkingLevel: "off" } as ExtensionContext;
 
+    const startController = new AbortController();
+    abortAfterPreflight = startController;
     const started = await runtime.createSubagent(
       caller,
       { name: "worker", prompt: "start" },
       context,
-      undefined,
+      startController.signal,
     );
+    expect(startController.signal.aborted).toBe(true);
+    expect(aborted).toBe(false);
     const runtimeStore = Reflect.get(runtime, "store") as PersistentSubagentStore;
     await expect(runtimeStore.readRun(started.id, started.run_id)).resolves.toMatchObject({
       state: "accepted",
@@ -229,12 +236,16 @@ describe("runtime steering", () => {
       runtime.askSubagent(caller, { id: started.id, prompt: "normal" }, context, undefined),
     ).rejects.toMatchObject({ code: "SUBAGENT_BUSY" });
 
+    const steerController = new AbortController();
+    abortAfterPreflight = steerController;
     const steered = await runtime.askSubagent(
       caller,
       { id: started.id, prompt: "focus", isSteer: true },
       context,
-      undefined,
+      steerController.signal,
     );
+    expect(steerController.signal.aborted).toBe(true);
+    expect(aborted).toBe(false);
     expect(steered).toMatchObject({
       ok: true,
       id: started.id,

@@ -1,15 +1,23 @@
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
-import type { ErrorResult } from "./types.js";
+import { formatDelegationStatus } from "./status.js";
+import type { DelegationStatusSnapshot, ErrorResult } from "./types.js";
+
+interface SubagentErrorOptions extends ErrorOptions {
+  delegationStatus?: DelegationStatusSnapshot;
+}
 
 export class SubagentError extends Error {
+  readonly delegationStatus?: DelegationStatusSnapshot;
+
   constructor(
     readonly code: string,
     message: string,
     readonly agentId?: string,
-    options?: ErrorOptions,
+    options?: SubagentErrorOptions,
   ) {
     super(message, options);
     this.name = "SubagentError";
+    this.delegationStatus = options?.delegationStatus;
   }
 }
 
@@ -32,9 +40,15 @@ export function errorToolResult(error: unknown): AgentToolResult<ErrorResult> {
       message: normalized.message,
       ...(normalized.agentId ? { id: normalized.agentId } : {}),
     },
+    ...(normalized.delegationStatus ? { delegation_status: normalized.delegationStatus } : {}),
   };
   return {
-    content: [{ type: "text", text: `${normalized.code}: ${normalized.message}` }],
+    content: [
+      { type: "text", text: `${normalized.code}: ${normalized.message}` },
+      ...(normalized.delegationStatus
+        ? [{ type: "text" as const, text: formatDelegationStatus(normalized.delegationStatus) }]
+        : []),
+    ],
     details,
   };
 }

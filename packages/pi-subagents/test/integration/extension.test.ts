@@ -63,7 +63,9 @@ describe("Pi extension integration", () => {
       expect(subagent?.description).toContain(`Current cwd:\n- ${cwd}`);
       expect(subagent?.description).toContain("- general: General-purpose task execution.");
       expect(subagent?.description).toContain("- explore: Read-only code exploration.");
-      expect(ask).toBeDefined();
+      expect(subagent?.description).toContain("configured shared limit is 8 live subagents");
+      expect(subagent?.description).toContain("same assistant turn");
+      expect(ask?.description).toContain("not a status or result-polling tool");
     } finally {
       await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
       session.dispose();

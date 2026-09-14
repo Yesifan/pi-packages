@@ -8,7 +8,14 @@ import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { formatSubagentToolDescription } from "./delegation.js";
 import { errorToolResult } from "./errors.js";
-import type { AcceptedResult, CallerBinding, ErrorResult, ThinkingLevel } from "./types.js";
+import { formatDelegationStatus } from "./status.js";
+import type {
+  AcceptedResult,
+  CallerBinding,
+  DelegationStatusSnapshot,
+  ErrorResult,
+  ThinkingLevel,
+} from "./types.js";
 
 const thinkingSchema = StringEnum(
   ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const,
@@ -28,7 +35,8 @@ const subagentParameters = Type.Object({
   cwd: Type.Optional(
     Type.String({
       description:
-        "Absolute working directory for the subagent. Omit to use the caller's current cwd. When specified, it must exactly match one of the external cwd paths listed in this tool's description after canonical path resolution. ",
+        "Absolute working directory for the subagent. Omit to use the caller's current cwd. When specified, it must exactly match the current cwd or one of the external cwd paths listed in this tool's description after canonical path resolution. Relative paths, ~, $HOME, and $" +
+        "{HOME} are not accepted here.",
     }),
   ),
 });
@@ -46,6 +54,7 @@ const askParameters = Type.Object({
 });
 
 export interface DelegationRuntimeApi {
+  getMaxLiveAgents(): number | undefined;
   createSubagent(
     caller: CallerBinding,
     input: {
@@ -68,17 +77,29 @@ export interface DelegationRuntimeApi {
 
 type ToolResult = AgentToolResult<AcceptedResult | ErrorResult>;
 
+function statusContent(status: DelegationStatusSnapshot): Array<{
+  type: "text";
+  text: string;
+}> {
+  return [{ type: "text", text: formatDelegationStatus(status) }];
+}
+
+function completionGuidance(): string {
+  return "Its report will arrive automatically. Do not poll, redo, or re-delegate its task. Until all relevant reports arrive, give only a brief progress update that identifies the active subagents, then end your turn.";
+}
+
 export function createDelegationExtension(
   runtime: DelegationRuntimeApi,
   caller: CallerBinding,
 ): ExtensionFactory {
   return (pi) => {
+    const maxLiveAgents = runtime.getMaxLiveAgents();
     pi.registerTool(
       defineTool({
         name: "subagent",
         label: "Subagent",
-        description: formatSubagentToolDescription(caller.delegation),
-        promptSnippet: "Create a background subagent for delegated work",
+        description: formatSubagentToolDescription(caller.delegation, maxLiveAgents),
+        promptSnippet: "Create independent background subagents; parallel calls are allowed",
         parameters: subagentParameters,
         async execute(_toolCallId, params, signal, _onUpdate, ctx): Promise<ToolResult> {
           try {
@@ -87,12 +108,10 @@ export function createDelegationExtension(
               content: [
                 {
                   type: "text",
-                  text: `Started subagent ${result.name} (${result.id}), run ${result.run_id}.`,
+                  text: `Started background subagent ${result.name} (${result.id}).`,
                 },
-                {
-                  type: "text",
-                  text: `Its final report will arrive automatically; do not poll with ask_subagent or shell wait commands. Continue only with independent work, or end your turn.`,
-                },
+                { type: "text", text: completionGuidance() },
+                ...statusContent(result.delegation_status),
               ],
               details: result,
             };
@@ -108,7 +127,7 @@ export function createDelegationExtension(
         name: "ask_subagent",
         label: "Ask Subagent",
         description:
-          "Give a new task to a directly owned idle subagent. Set isSteer to true only to steer a directly owned actively executing run.",
+          "Give a new task to a directly owned idle subagent, or set isSteer to true to steer its active run. Normal asks run asynchronously and report back automatically. This is not a status or result-polling tool.",
         promptSnippet: "Ask an idle subagent again or steer its active run",
         parameters: askParameters,
         async execute(_toolCallId, params, signal, _onUpdate, ctx): Promise<ToolResult> {
@@ -120,13 +139,11 @@ export function createDelegationExtension(
                   type: "text",
                   text:
                     result.status === "steered"
-                      ? `Steered subagent ${result.name} (${result.id})`
-                      : `Started subagent ${result.name} (${result.id}), run ${result.run_id}.`,
+                      ? `Steered background subagent ${result.name} (${result.id}).`
+                      : `Started background subagent ${result.name} (${result.id}).`,
                 },
-                {
-                  type: "text",
-                  text: `Its final report will arrive automatically; `,
-                },
+                { type: "text", text: completionGuidance() },
+                ...statusContent(result.delegation_status),
               ],
               details: result,
             };

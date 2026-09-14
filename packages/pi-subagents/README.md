@@ -16,7 +16,7 @@ Restart Pi or run `/reload` after installation.
 
 ### `subagent`
 
-Starts a background logical subagent and returns as soon as Pi accepts its prompt.
+Starts a background logical subagent and returns as soon as Pi accepts its prompt. Independent `subagent` calls emitted in the same assistant turn run in parallel, subject to the root project's shared `max_live_agents` limit.
 
 ```json
 {
@@ -38,7 +38,7 @@ Starts another run on a directly owned idle logical subagent:
 { "id": "sa_...", "prompt": "Now check the tests." }
 ```
 
-A normal ask against a busy subagent immediately returns `SUBAGENT_BUSY`; requests are not queued.
+A normal ask against a busy subagent immediately returns `SUBAGENT_BUSY`; requests are not queued. `ask_subagent` is not a status or result-polling tool.
 
 To steer an actively streaming run without creating a new run:
 
@@ -119,6 +119,8 @@ The generated local `.gitignore` ignores `/sessions/`. Existing ignore files are
 ## Background lifecycle
 
 - Final responses are reported automatically to the direct parent as Pi custom messages.
+- Tool results show the caller's active direct subagents and current shared live usage. `SUBAGENT_BUSY` and `LIVE_AGENT_LIMIT` results include the same snapshot.
+- Automatic reports show the remaining active direct subagents. While relevant reports are pending, the caller is instructed to provide only a brief progress update and defer its final answer.
 - An idle parent waiting for children remains loaded; it is not cold-released.
 - Stopping only the root model response does not stop accepted background work.
 - Quitting, replacing, forking, or reloading the root session aborts active descendants, cancels proxied UI, and disposes child SDK sessions.

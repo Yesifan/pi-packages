@@ -24,7 +24,10 @@ describe("delegation context", () => {
         ["tester", agent("tester", "Run tests")],
       ]),
     };
-    const description = formatSubagentToolDescription(context);
+    const description = formatSubagentToolDescription(context, 6);
+    expect(description).toContain("issuing multiple subagent calls");
+    expect(description).toContain("configured shared limit is 6 live subagents");
+    expect(description).toMatch(/Give the final answer only after all relevant\s+reports arrive/);
     expect(description).toContain("- general: General work");
     expect(description).toContain("- tester: Run tests");
     expect(description).toContain("- /workspace/B");

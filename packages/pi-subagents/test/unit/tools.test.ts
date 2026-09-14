@@ -4,8 +4,9 @@ import type {
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
+import { SubagentError } from "../../src/errors.js";
 import { createDelegationExtension, type DelegationRuntimeApi } from "../../src/tools.js";
-import type { AcceptedResult, CallerBinding } from "../../src/types.js";
+import type { AcceptedResult, CallerBinding, DelegationStatusSnapshot } from "../../src/types.js";
 
 const caller: CallerBinding = {
   agentId: null,
@@ -19,6 +20,16 @@ const caller: CallerBinding = {
   },
 };
 
+const delegationStatus: DelegationStatusSnapshot = {
+  activeDirectSubagents: [
+    { id: "sa_test", name: "worker" },
+    { id: "sa_scout", name: "scout" },
+  ],
+  activeDirectSubagentCount: 2,
+  liveAgents: 3,
+  maxLiveAgents: 8,
+};
+
 function accepted(status: "started" | "steered"): AcceptedResult {
   return {
     ok: true,
@@ -29,6 +40,7 @@ function accepted(status: "started" | "steered"): AcceptedResult {
     cwd: "/workspace/project",
     status,
     thinking: "off",
+    delegation_status: delegationStatus,
   };
 }
 
@@ -41,13 +53,20 @@ function registerTools(runtime: DelegationRuntimeApi): ToolDefinition[] {
   return tools;
 }
 
+function statusText(): string {
+  return "Active direct subagents (2): worker (sa_test), scout (sa_scout).\nShared live usage: 3/8.";
+}
+
 describe("delegation tool results", () => {
-  it("reminds the caller not to poll a newly created subagent", async () => {
+  it("reports asynchronous startup, completion discipline, and current status", async () => {
+    const getMaxLiveAgents = vi.fn(() => 8);
     const runtime: DelegationRuntimeApi = {
+      getMaxLiveAgents,
       createSubagent: vi.fn(async () => accepted("started")),
       askSubagent: vi.fn(),
     };
     const tool = registerTools(runtime).find(({ name }) => name === "subagent");
+    const registeredDescription = tool?.description;
 
     const result = await tool?.execute(
       "call",
@@ -60,44 +79,33 @@ describe("delegation tool results", () => {
     expect(result?.content).toEqual([
       {
         type: "text",
-        text: "Started subagent worker (sa_test), run run_test.",
+        text: "Started background subagent worker (sa_test).",
       },
       {
         type: "text",
-        text: "Its final report will arrive automatically; do not poll with ask_subagent or shell wait commands. Continue only with independent work, or end your turn.",
+        text: "Its report will arrive automatically. Do not poll, redo, or re-delegate its task. Until all relevant reports arrive, give only a brief progress update that identifies the active subagents, then end your turn.",
       },
+      { type: "text", text: statusText() },
     ]);
+    expect(result?.content).not.toContainEqual(
+      expect.objectContaining({ text: expect.stringContaining("run_test") }),
+    );
+    expect(tool?.description).toBe(registeredDescription);
+    expect(getMaxLiveAgents).toHaveBeenCalledTimes(1);
   });
 
   it.each([
     {
       status: "started" as const,
-      expected: [
-        {
-          type: "text",
-          text: "Started subagent worker (sa_test), run run_test.",
-        },
-        {
-          type: "text",
-          text: "Its final report will arrive automatically; ",
-        },
-      ],
+      firstLine: "Started background subagent worker (sa_test).",
     },
     {
       status: "steered" as const,
-      expected: [
-        {
-          type: "text",
-          text: "Steered subagent worker (sa_test)",
-        },
-        {
-          type: "text",
-          text: "Its final report will arrive automatically; ",
-        },
-      ],
+      firstLine: "Steered background subagent worker (sa_test).",
     },
-  ])("returns the expected content after an ask returns $status", async ({ status, expected }) => {
+  ])("returns status after an ask is $status", async ({ status, firstLine }) => {
     const runtime: DelegationRuntimeApi = {
+      getMaxLiveAgents: () => 8,
       createSubagent: vi.fn(),
       askSubagent: vi.fn(async () => accepted(status)),
     };
@@ -111,6 +119,46 @@ describe("delegation tool results", () => {
       {} as ExtensionContext,
     );
 
-    expect(result?.content).toEqual(expected);
+    expect(result?.content).toEqual([
+      { type: "text", text: firstLine },
+      {
+        type: "text",
+        text: "Its report will arrive automatically. Do not poll, redo, or re-delegate its task. Until all relevant reports arrive, give only a brief progress update that identifies the active subagents, then end your turn.",
+      },
+      { type: "text", text: statusText() },
+    ]);
   });
+
+  it.each(["SUBAGENT_BUSY", "LIVE_AGENT_LIMIT"])(
+    "includes current status with %s errors",
+    async (code) => {
+      const runtime: DelegationRuntimeApi = {
+        getMaxLiveAgents: () => 8,
+        createSubagent: vi.fn(async () => {
+          throw new SubagentError(code, "Cannot start", "sa_test", {
+            delegationStatus,
+          });
+        }),
+        askSubagent: vi.fn(),
+      };
+      const tool = registerTools(runtime).find(({ name }) => name === "subagent");
+
+      const result = await tool?.execute(
+        "call",
+        { name: "worker", prompt: "Investigate" },
+        undefined,
+        undefined,
+        {} as ExtensionContext,
+      );
+
+      expect(result?.content).toEqual([
+        { type: "text", text: `${code}: Cannot start` },
+        { type: "text", text: statusText() },
+      ]);
+      expect(result?.details).toMatchObject({
+        ok: false,
+        delegation_status: delegationStatus,
+      });
+    },
+  );
 });
