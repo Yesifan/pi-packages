@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { SessionController } from "../../src/sessions/session-controller.js";
+import {
+  DEFAULT_TURN_TIMEOUT_MS,
+  SessionController,
+} from "../../src/sessions/session-controller.js";
 import { BUSY_REPLY } from "../../src/sessions/session-state.js";
 import { CurrentTurn } from "../../src/sessions/turn-context.js";
 import { createLogger } from "../../src/util/logger.js";
@@ -168,7 +171,11 @@ describe("M6 session controller (fake transport + fake runtime)", () => {
     expect(transport.textsTo("acct-a")).toEqual(["recovered"]);
   });
 
-  it("watchdog aborts a timed-out turn and returns to ready", async () => {
+  it("disables the turn watchdog by default", () => {
+    expect(DEFAULT_TURN_TIMEOUT_MS).toBe(0);
+  });
+
+  it("watchdog aborts a timed-out turn when explicitly configured and returns to ready", async () => {
     const { transport, session } = setup({ turnTimeoutMs: 10, abortGraceMs: 20 });
     await session.handleUserMessage(msgA("hang"));
     expect(transport.textsTo("acct-a").at(-1)).toContain("运行超时");
