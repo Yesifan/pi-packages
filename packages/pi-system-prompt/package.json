@@ -1,5 +1,5 @@
 {
-  "name": "@bykwp/pi-system-prompt",
+  "name": "@yesifan/pi-system-prompt",
   "version": "0.1.0",
   "description": "Pi extension: /system-prompt prints the real system prompt (with tool & skill context) sent to the model",
   "keywords": [

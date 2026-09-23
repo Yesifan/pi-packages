@@ -1,8 +1,8 @@
-# @bykwp/pi-subagents — 实现规格
+# @yesifan/pi-subagents — 实现规格
 
 **文档版本：** 1.2
 **状态：** v1 实现基线（已合并 session-local delegation、project-local storage 与原生进度 widget 决策）
-**目标包名：** `@bykwp/pi-subagents`  
+**目标包名：** `@yesifan/pi-subagents`
 **目标宿主：** Pi CLI / TUI  
 **SDK 验证基线：** `@earendil-works/pi-coding-agent@0.85.1`  
 **实现语言：** TypeScript，ES modules  
@@ -375,7 +375,7 @@ RootRuntime 继续统一执行 root project 配置的 `max_depth`、`max_live_ag
 每个具有委派能力的 session 根据**自己的 cwd**构建 AgentTypeRegistry，固定加载顺序为：
 
 ```text
-@bykwp/pi-subagents 内置 agents
+@yesifan/pi-subagents 内置 agents
         ↓
 Pi 全局 <getAgentDir()>/agents/*.md
         ↓
@@ -555,7 +555,7 @@ target cwd 普通资源发现得到的可用工具
 
 ### 7.3 避免本包重复注册根管理器
 
-正常资源发现可能再次发现 `@bykwp/pi-subagents`。每个 child 必须绑定到同一 RootRuntime，不能创建自己的独立 root 管理器。
+正常资源发现可能再次发现 `@yesifan/pi-subagents`。每个 child 必须绑定到同一 RootRuntime，不能创建自己的独立 root 管理器。
 
 推荐实现：
 
@@ -590,7 +590,7 @@ thinking 优先级：调用参数 > 角色快照 > parent 当前值。最终值�
 
 ```text
 Pi 针对 target cwd 正常构建的 system prompt
-+ @bykwp/pi-subagents runtime prompt
++ @yesifan/pi-subagents runtime prompt
 + selected AgentDefinitionSnapshot.prompt
 ```
 
@@ -1044,7 +1044,7 @@ fork/clone/import 默认不继承旧 scope 的 child 写权限，即使新父历
 ## 15. 建议代码结构
 
 ```text
-@bykwp/pi-subagents/
+@yesifan/pi-subagents/
   package.json
   tsconfig.json
   README.md
@@ -1083,7 +1083,7 @@ fork/clone/import 默认不继承旧 scope 的 child 写权限，即使新父历
 
 ```json
 {
-  "name": "@bykwp/pi-subagents",
+  "name": "@yesifan/pi-subagents",
   "version": "0.1.0",
   "type": "module",
   "keywords": ["pi-package", "subagents"],

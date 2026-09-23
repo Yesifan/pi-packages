@@ -1,11 +1,11 @@
-# @BYKWP/pi-subagents
+# @yesifan/pi-subagents
 
 Persistent, in-process background subagents for [Pi](https://pi.dev), tested against `@earendil-works/pi-coding-agent@0.85.1`.
 
 ## Install
 
 ```bash
-pi install npm:@BYKWP/pi-subagents
+pi install npm:@yesifan/pi-subagents
 # local checkout
 pi install -l ./packages/pi-subagents
 ```
@@ -160,10 +160,10 @@ Children run in the same Node.js process. This package keeps its own state sessi
 
 ```bash
 pnpm install
-pnpm --filter @BYKWP/pi-subagents typecheck
-pnpm --filter @BYKWP/pi-subagents test
-pnpm --filter @BYKWP/pi-subagents build
-pnpm --filter @BYKWP/pi-subagents pack --pack-destination /tmp
+pnpm --filter @yesifan/pi-subagents typecheck
+pnpm --filter @yesifan/pi-subagents test
+pnpm --filter @yesifan/pi-subagents build
+pnpm --filter @yesifan/pi-subagents pack --pack-destination /tmp
 ```
 
 See [`docs/domain-model.md`](docs/domain-model.md) for the terminology and lifecycle model, and [`docs/specs/bykwp-pi-subagents-spec.md`](docs/specs/bykwp-pi-subagents-spec.md) for the implementation specification.

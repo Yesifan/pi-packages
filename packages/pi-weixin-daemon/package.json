@@ -1,5 +1,5 @@
 {
-  "name": "@BYKWP/pi-weixin-daemon",
+  "name": "@yesifan/pi-weixin-daemon",
   "version": "0.6.9",
   "description": "Connect Weixin iLink Bot with Pi Coding Agent",
   "type": "module",

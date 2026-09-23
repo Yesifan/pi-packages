@@ -27,13 +27,13 @@
 
 ## 2. npm scope 与首次发布
 
-npm 包名必须小写，因此 scope 是 `@bykwp`。npm 账号或组织 `bykwp` 必须已经存在，并且
+npm 包名必须小写，因此 scope 是 `@yesifan`。npm 账号或组织 `yesifan` 必须已经存在，并且
 执行发布的 npm 用户需要拥有该 scope 的发布权限。
 
 Trusted Publisher 通常在包已经存在后才能从包设置页配置。本仓库中的两个小写包首次发布时，
 先使用一次临时 token：
 
-1. 在 npm 创建具有 `@bykwp` 包 **Read and write** 权限的 granular access token；若 npm 要求，
+1. 在 npm 创建具有 `@yesifan` 包 **Read and write** 权限的 granular access token；若 npm 要求，
    为自动发布启用 bypass 2FA。
 2. 在 GitHub **Settings → Secrets and variables → Actions → New repository secret** 中创建
    `NPM_TOKEN`。
@@ -46,8 +46,8 @@ Trusted Publisher 通常在包已经存在后才能从包设置页配置。本�
 
 首次发布成功后，分别打开以下 npm 包的 **Settings → Trusted Publisher**：
 
-- `@bykwp/pi-weixin-daemon`
-- `@bykwp/pi-system-prompt`
+- `@yesifan/pi-weixin-daemon`
+- `@yesifan/pi-system-prompt`
 
 每个包填写同一组、区分大小写的值：
 
@@ -67,7 +67,7 @@ Trusted Publisher 通常在包已经存在后才能从包设置页配置。本�
 3. 不要在仓库或用户 `.npmrc` 中配置发布 token。
 
 如果发布报 `ENEEDAUTH`，优先检查 npm 上的 GitHub owner、仓库名和 workflow 文件名是否完全
-匹配，并确认运行器是 GitHub-hosted runner。如果报 `E404`，检查 `bykwp` scope 的所有权和包名
+匹配，并确认运行器是 GitHub-hosted runner。如果报 `E404`，检查 `yesifan` scope 的所有权和包名
 是否全小写。
 
 ## 4. 日常发版流程
@@ -91,7 +91,7 @@ pnpm changeset
 3. 人工审核并合并 Release PR；
 4. workflow 执行 `pnpm check`、`pnpm test:ci`、`pnpm build`；
 5. 仅发布版本尚未出现在 npm 的 package；
-6. 创建形如 `@bykwp/pi-system-prompt@0.2.0` 的 tag 和 GitHub Release。
+6. 创建形如 `@yesifan/pi-system-prompt@0.2.0` 的 tag 和 GitHub Release。
 
 本地可预检发布内容：
 

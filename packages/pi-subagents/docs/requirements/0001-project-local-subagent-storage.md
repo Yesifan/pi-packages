@@ -179,8 +179,8 @@
 
 ```bash
 pnpm exec biome check --write packages/pi-subagents
-pnpm --filter @BYKWP/pi-subagents typecheck
-pnpm --filter @BYKWP/pi-subagents test
-pnpm --filter @BYKWP/pi-subagents build
-pnpm --filter @BYKWP/pi-subagents pack --pack-destination /tmp
+pnpm --filter @yesifan/pi-subagents typecheck
+pnpm --filter @yesifan/pi-subagents test
+pnpm --filter @yesifan/pi-subagents build
+pnpm --filter @yesifan/pi-subagents pack --pack-destination /tmp
 ```

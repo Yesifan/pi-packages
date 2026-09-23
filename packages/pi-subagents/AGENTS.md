@@ -1,6 +1,6 @@
 # Project Overview
 
-`@BYKWP/pi-subagents` 是一个 Pi 扩展，在同一 Node.js 进程中运行可持久化的后台
+`@yesifan/pi-subagents` 是一个 Pi 扩展，在同一 Node.js 进程中运行可持久化的后台
 AgentSession，并提供 `subagent` 与 `ask_subagent` 工具。实现基线为
 `@earendil-works/pi-coding-agent@0.85.1`；涉及 Pi SDK 行为时，以该锁定版本的类型和源码为准。
 
@@ -69,10 +69,10 @@ AgentSession，并提供 `subagent` 与 `ask_subagent` 工具。实现基线为
 在 monorepo 根目录运行：
 
 ```bash
-pnpm --filter @BYKWP/pi-subagents typecheck
+pnpm --filter @yesifan/pi-subagents typecheck
 pnpm exec biome check packages/pi-subagents
-pnpm --filter @BYKWP/pi-subagents test
-pnpm --filter @BYKWP/pi-subagents build
-pnpm --filter @BYKWP/pi-subagents pack --pack-destination /tmp
+pnpm --filter @yesifan/pi-subagents test
+pnpm --filter @yesifan/pi-subagents build
+pnpm --filter @yesifan/pi-subagents pack --pack-destination /tmp
 ```
 

@@ -1,5 +1,5 @@
 {
-  "name": "@BYKWP/pi-subagents",
+  "name": "@yesifan/pi-subagents",
   "version": "0.2.3",
   "description": "Persistent in-process background subagents for Pi Coding Agent",
   "keywords": [
