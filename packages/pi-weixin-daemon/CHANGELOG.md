@@ -7,6 +7,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/) and [Semantic Ver
 
 ---
 
+## [0.6.10]
+
+### Fixed
+
+- 修复微信会话中扩展的 `ctx.ui.notify`、`onTerminalInput` 等非对话方法在 Pi SDK 包装后丢失的问题；不再向扩展暴露 UI 内部依赖。
+
+### Changed
+
+- 将 Pi SDK（`pi-coding-agent` 与 `pi-ai`）升级至 0.87.1。
+
 ## [0.6.9]
 
 ### Changed

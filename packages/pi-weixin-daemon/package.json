@@ -1,6 +1,6 @@
 {
   "name": "@BYKWP/pi-weixin-daemon",
-  "version": "0.6.9",
+  "version": "0.6.10",
   "description": "Connect Weixin iLink Bot with Pi Coding Agent",
   "type": "module",
   "engines": {
@@ -25,8 +25,8 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@earendil-works/pi-ai": "0.84.4",
-    "@earendil-works/pi-coding-agent": "0.84.4",
+    "@earendil-works/pi-ai": "0.87.1",
+    "@earendil-works/pi-coding-agent": "0.87.1",
     "commander": "^15.0.0",
     "pino": "^10.3.1",
     "qrcode-terminal": "^0.12.0",
