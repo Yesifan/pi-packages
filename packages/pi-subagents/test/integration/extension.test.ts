@@ -12,6 +12,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 import piSubagents from "../../src/index.js";
+import { RootUiBroker } from "../../src/ui.js";
 
 const execFileAsync = promisify(execFile);
 const temporaryDirectories: string[] = [];
@@ -26,6 +27,68 @@ afterEach(async () => {
 });
 
 describe("Pi extension integration", () => {
+  it("retains child UI methods through the real SDK context wrapper", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pi-subagents-ui-sdk-"));
+    temporaryDirectories.push(root);
+    const cwd = path.join(root, "project");
+    const agentDir = path.join(root, "agent");
+    await Promise.all([mkdir(cwd), mkdir(agentDir)]);
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+
+    let started = false;
+    const errors: string[] = [];
+    const settingsManager = SettingsManager.inMemory();
+    const resourceLoader = new DefaultResourceLoader({
+      cwd,
+      agentDir,
+      settingsManager,
+      noSkills: true,
+      noPromptTemplates: true,
+      noThemes: true,
+      noContextFiles: true,
+      extensionFactories: [
+        {
+          name: "test-echo",
+          factory: (pi) => {
+            pi.on("session_start", (_event, ctx) => {
+              const unsubscribe = ctx.ui.onTerminalInput(() => undefined);
+              unsubscribe();
+              ctx.ui.notify("started", "info");
+              started = true;
+            });
+          },
+        },
+      ],
+    });
+    await resourceLoader.reload();
+    const { session } = await createAgentSession({
+      cwd,
+      agentDir,
+      resourceLoader,
+      settingsManager,
+      sessionManager: SessionManager.inMemory(cwd),
+      sessionStartEvent: { type: "session_start", reason: "startup" },
+    });
+    const notifications: string[] = [];
+    const rootUi = {
+      notify: (message: string) => notifications.push(message),
+      theme: {},
+    } as unknown as ConstructorParameters<typeof RootUiBroker>[0];
+    const broker = new RootUiBroker(rootUi, true, 1_000);
+    try {
+      await session.bindExtensions({
+        mode: "tui",
+        uiContext: broker.proxy("sa", "test-echo"),
+        onError: (error) => errors.push(error.error),
+      });
+      expect(errors).toEqual([]);
+      expect(started).toBe(true);
+      expect(notifications).toEqual(["[subagent: test-echo / sa] started"]);
+    } finally {
+      session.dispose();
+      broker.shutdown();
+    }
+  });
   it("registers session-local delegation tools with dynamic cwd and agents", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pi-subagents-sdk-"));
     temporaryDirectories.push(root);

@@ -2,6 +2,38 @@ import type { ExtensionUIContext, ExtensionUIDialogOptions } from "@earendil-wor
 
 const PROGRESS_WIDGET_KEY = "pi-subagents-progress";
 
+// The SDK spreads the UI context before passing it to extensions. Prototype
+// methods are lost in that spread, so expose the whole API as own properties.
+const UI_METHODS = [
+  "select",
+  "confirm",
+  "input",
+  "notify",
+  "onTerminalInput",
+  "setStatus",
+  "setWorkingMessage",
+  "setWorkingVisible",
+  "setWorkingIndicator",
+  "setHiddenThinkingLabel",
+  "setWidget",
+  "setFooter",
+  "setHeader",
+  "setTitle",
+  "custom",
+  "pasteToEditor",
+  "setEditorText",
+  "getEditorText",
+  "editor",
+  "addAutocompleteProvider",
+  "setEditorComponent",
+  "getEditorComponent",
+  "getAllThemes",
+  "getTheme",
+  "setTheme",
+  "getToolsExpanded",
+  "setToolsExpanded",
+] as const satisfies readonly (keyof ExtensionUIContext)[];
+
 type QueueItem<T> = {
   ownerId: string;
   fallback: T;
@@ -149,7 +181,22 @@ export class SubagentUiProxy implements ExtensionUIContext {
     private readonly hasUi: boolean,
     private readonly agentId: string,
     private readonly name: string,
-  ) {}
+  ) {
+    // Do not leak the root UI or broker through the SDK's object spread.
+    for (const key of ["broker", "rootUi", "hasUi", "agentId", "name", "statusKeys"]) {
+      Object.defineProperty(this, key, { enumerable: false });
+    }
+    for (const method of UI_METHODS) {
+      Object.defineProperty(this, method, {
+        value: this[method].bind(this),
+        enumerable: true,
+      });
+    }
+    Object.defineProperty(this, "theme", {
+      get: () => this.rootUi.theme,
+      enumerable: true,
+    });
+  }
 
   private title(title: string): string {
     return `[subagent: ${this.name} / ${this.agentId}] ${title}`;
