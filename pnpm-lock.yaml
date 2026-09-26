@@ -12,6 +12,18 @@ catalogs:
     '@earendil-works/pi-coding-agent':
       specifier: 0.87.1
       version: 0.87.1
+    '@types/node':
+      specifier: ^26.4.0
+      version: 26.5.0
+    typebox:
+      specifier: 1.3.27
+      version: 1.3.27
+    typescript:
+      specifier: ^5.9.3
+      version: 5.9.3
+    vitest:
+      specifier: ^4.1.11
+      version: 4.1.11
 
 importers:
 
@@ -34,19 +46,19 @@ importers:
         specifier: 'catalog:'
         version: 0.87.1(supports-color@7.2.0)(ws@8.21.3)(zod@4.5.4)
       '@types/node':
-        specifier: ^26.4.0
+        specifier: 'catalog:'
         version: 26.5.0
       '@types/proper-lockfile':
         specifier: ^4.1.4
         version: 4.1.4
       typebox:
-        specifier: 1.3.7
-        version: 1.3.7
+        specifier: 'catalog:'
+        version: 1.3.27
       typescript:
-        specifier: ^5.9.3
+        specifier: 'catalog:'
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
+        specifier: 'catalog:'
         version: 4.1.11(@types/node@26.5.0)(vite@8.2.2(@types/node@26.5.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13)(yaml@2.9.0))
 
   packages/pi-system-prompt:
@@ -55,10 +67,10 @@ importers:
         specifier: 'catalog:'
         version: 0.87.1(supports-color@7.2.0)(ws@8.21.3)(zod@4.5.4)
       '@types/node':
-        specifier: ^26.4.0
+        specifier: 'catalog:'
         version: 26.5.0
       typescript:
-        specifier: ^5.9.3
+        specifier: 'catalog:'
         version: 5.9.3
 
   packages/pi-weixin-daemon:
@@ -79,14 +91,14 @@ importers:
         specifier: ^0.12.0
         version: 0.12.0
       typebox:
-        specifier: ^1.3.23
-        version: 1.3.29
+        specifier: 'catalog:'
+        version: 1.3.27
       zod:
         specifier: ^4.5.4
         version: 4.5.4
     devDependencies:
       '@types/node':
-        specifier: ^26.4.0
+        specifier: 'catalog:'
         version: 26.5.0
       '@types/qrcode-terminal':
         specifier: ^0.12.2
@@ -98,10 +110,10 @@ importers:
         specifier: ^4.23.13
         version: 4.23.13
       typescript:
-        specifier: ^5.9.3
+        specifier: 'catalog:'
         version: 5.9.3
       vitest:
-        specifier: ^4.1.11
+        specifier: 'catalog:'
         version: 4.1.11(@types/node@26.5.0)(vite@8.2.2(@types/node@26.5.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13)(yaml@2.9.0))
 
 packages:
@@ -1195,12 +1207,6 @@ packages:
 
   typebox@1.3.27:
     resolution: {integrity: sha512-zu+jc1pcy4UiNThxikUr36f0Rybk9PEeCg/NE6adeWr/SKsdNO4EzZHYRDlv2YCVAfj3Odq3dESSo/jNyoBXzA==}
-
-  typebox@1.3.29:
-    resolution: {integrity: sha512-TeCZPwJRvfv8hI9oEnQy1Rg7x9Ns1y9OeR94LSaND+lQTmhikE5DsZQNM3I5/tGnEEmeQf5XTLJgJBzXJNDUNA==}
-
-  typebox@1.3.7:
-    resolution: {integrity: sha512-meKuifc33Pccx0O6PdIzYMq3Og8zvP4TIi/a+Bw3AEMZMxOD0+RHGQvpglEe6Zdy3wZ8nqn/j95h8LUZLk/6Hg==}
 
   typescript@5.9.3:
     resolution: {integrity: sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw==}
@@ -2403,10 +2409,6 @@ snapshots:
       fsevents: 2.3.3
 
   typebox@1.3.27: {}
-
-  typebox@1.3.29: {}
-
-  typebox@1.3.7: {}
 
   typescript@5.9.3: {}
 
