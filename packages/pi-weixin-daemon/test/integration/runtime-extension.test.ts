@@ -6,17 +6,20 @@ import { createWeixinSendProgressExtension } from "../../src/pi/extensions/weixi
 import { PiSdkHost } from "../../src/pi/sdk-host.js";
 import { createLogger } from "../../src/util/logger.js";
 import { FakeWeixinTransport, makeTurn } from "../helpers/fake-transport.js";
-import { createTmpProject, waitForMarker } from "../helpers/tmp-project.js";
+import { createTmpProject, trustTmpProject } from "../helpers/tmp-project.js";
 
 const logger = createLogger({ level: "warn" });
 const TIMEOUT = 120_000;
 
 describe("M3: daemon runtime weixin extension (real SDK)", () => {
   const runtimes: PiSdkHost[] = [];
+  const restoreTrust: Array<() => void> = [];
 
   afterEach(async () => {
-    for (const r of runtimes.splice(0)) {
-      await r.stop().catch(() => {});
+    try {
+      for (const r of runtimes.splice(0)) await r.stop().catch(() => {});
+    } finally {
+      for (const restore of restoreTrust.splice(0)) restore();
     }
   });
 
@@ -50,6 +53,7 @@ describe("M3: daemon runtime weixin extension (real SDK)", () => {
     "project extension tool and weixin_send_file coexist; agent sends a real file",
     async () => {
       const project = createTmpProject("m3-coexist");
+      restoreTrust.push(trustTmpProject(project));
       fs.writeFileSync(path.join(project.dir, "report.txt"), "report content\n");
 
       const transport = new FakeWeixinTransport();
@@ -59,7 +63,7 @@ describe("M3: daemon runtime weixin extension (real SDK)", () => {
       await runtime.prompt({
         text: "请调用 mark_test_tool 工具，参数 input 的值为 coex111。只调用这个工具。",
       });
-      await waitForMarker(project.markerFile, TIMEOUT);
+      expect(fs.existsSync(project.markerFile), "Agent did not call mark_test_tool").toBe(true);
 
       // 2) Agent uses weixin_send_file with a cwd-relative path.
       await runtime.prompt({
