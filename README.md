@@ -25,3 +25,7 @@ Install a package directly from the workspace during development:
 ```bash
 pi install ./packages/pi-system-prompt
 ```
+
+## Release
+
+Changes to published packages include a changeset. After the feature PR is merged, automation opens a version PR for review; merging that PR triggers verification and publishing of unpublished package versions. Packages are versioned independently. See [CI and release guide](docs/ci-release.md) for the full process.
