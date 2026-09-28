@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { cleanupTestSessions } from "./helpers/session-cleanup.js";
 
 /**
@@ -7,7 +9,7 @@ import { cleanupTestSessions } from "./helpers/session-cleanup.js";
  * Vitest-4-supported hook; there is no globalTeardown config key.
  */
 export function setup(): void {
-  // nothing to prepare up-front
+  fs.mkdirSync(path.join(process.cwd(), "test/.tmp"), { recursive: true });
 }
 
 export function teardown(): void {
