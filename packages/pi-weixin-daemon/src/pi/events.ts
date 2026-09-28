@@ -2,6 +2,8 @@ import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 
 /** Domain event surface consumed outside the Pi SDK boundary. */
 export type PiHostEvent =
+  | { type: "session_bound"; generation: number }
+  | { type: "agent_started" }
   | { type: "text_delta"; delta: string }
   | { type: "assistant_started" }
   | { type: "assistant_finished"; stopReason: string; errorMessage?: string }
@@ -24,6 +26,7 @@ export function toPiHostEvent(event: AgentSessionEvent): PiHostEvent {
       errorMessage: event.message.errorMessage,
     };
   }
+  if (event.type === "agent_start") return { type: "agent_started" };
   if (event.type === "agent_settled") {
     return { type: "agent_settled" };
   }

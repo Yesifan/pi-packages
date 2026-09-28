@@ -7,6 +7,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/) and [Semantic Ver
 
 ---
 
+## [0.6.11]
+
+### Added
+
+- 活动 Pi 会话中由扩展等来源触发的独立 Agent 回合，现在也会将成功的最终文本按项目参与者广播；保留微信发起回合的定向错误和 warning 处理。
+
 ## [0.6.10]
 
 ### Fixed

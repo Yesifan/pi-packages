@@ -7,6 +7,10 @@ function event(value: unknown): AgentSessionEvent {
 }
 
 describe("toPiHostEvent", () => {
+  it("maps the SDK run boundary", () => {
+    expect(toPiHostEvent(event({ type: "agent_start" }))).toEqual({ type: "agent_started" });
+    expect(toPiHostEvent(event({ type: "agent_settled" }))).toEqual({ type: "agent_settled" });
+  });
   it("preserves assistant terminal errors", () => {
     expect(
       toPiHostEvent(

@@ -10,3 +10,5 @@
 - [`adr/0005-weixin-slash-session-controls.md`](adr/0005-weixin-slash-session-controls.md) —— ADR-0005：微信 Slash 会话控制与交互仲裁。**✅ Accepted（`0.6.3`）**
 - [`requirements/0004-weixin-agent-progress-tool.md`](requirements/0004-weixin-agent-progress-tool.md) —— 需求：为长任务提供只回当前发起者的 Agent 中间进度工具。**✅ 已完成（`0.6.4`）**
 - [`requirements/0005-weixin-typing-keepalive-and-broadcast.md`](requirements/0005-weixin-typing-keepalive-and-broadcast.md) —— 需求：Pi turn 期间每 5 秒续发微信正在输入状态，并广播给项目参与者。**✅ 已完成（`0.6.7`）**
+- [`0006-session-wide-agent-replies.md`](0006-session-wide-agent-replies.md) —— 需求：活动 Pi 会话的所有来源 Agent 回合统一广播成功最终文本。**✅ 已完成（`0.6.11`）**
+- [`ADR-0006`](../adr/0006-session-wide-agent-reply-routing.md) —— Pi 会话级统一路由 Agent 最终回复，不依赖具体扩展。**Accepted**

@@ -1,3 +1,4 @@
+import type { PiHostEvent } from "../pi/events.js";
 import type { InteractionPort } from "../pi/ports.js";
 import type { Logger } from "../util/logger.js";
 import { formatUserFacingError } from "../util/user-facing-error.js";
@@ -32,7 +33,10 @@ export interface SessionControllerDeps {
   /** Idle window before the session is disposed (min for tests). */
   sessionIdleMs?: number;
   /** Broadcast a turn's final reply / idle-close notice to all participants. */
-  broadcastText?: (text: string) => Promise<DeliveryReport> | Promise<void>;
+  broadcastText?: (
+    text: string,
+    isCurrent?: () => boolean,
+  ) => Promise<DeliveryReport> | Promise<void>;
   /** Set or clear typing for all authorized project participants. */
   broadcastTyping?: (typing: boolean) => Promise<void>;
   /** Typing refresh interval; primarily configurable for tests. */
@@ -60,8 +64,92 @@ export class SessionController {
   private lastActivityAt = Date.now();
   private idleTimer: NodeJS.Timeout | undefined;
   private selector: SlashSelector | undefined;
+  private generation = 0;
+  private activeRun: AgentRun | undefined;
+  private inboundRun: AgentRun | undefined;
+  private pendingInboundOrigin: TurnContext | undefined;
+  private pendingDeliveries = 0;
+  private delivery = Promise.resolve();
+  private unsubscribe: () => void;
 
-  constructor(private readonly deps: SessionControllerDeps) {}
+  constructor(private readonly deps: SessionControllerDeps) {
+    this.unsubscribe = deps.host.onEvent((event) => this.onHostEvent(event));
+  }
+
+  private invalidateRuns(): void {
+    this.activeRun?.accumulator.handleEvent({ type: "agent_settled" });
+    this.generation++;
+    this.activeRun = undefined;
+    this.inboundRun = undefined;
+    this.pendingInboundOrigin = undefined;
+    this.pendingDeliveries = 0;
+  }
+
+  private onHostEvent(event: PiHostEvent): void {
+    if (event.type === "session_bound") {
+      this.invalidateRuns();
+      if (this.state === "busy" && !this.deps.currentTurn.get()) {
+        this.state = "ready";
+        this.scheduleIdleCheck();
+      }
+      return;
+    }
+    if (!this.deps.host.hasSession() || this.state === "inactive" || this.state === "faulted")
+      return;
+    if (event.type === "agent_started") {
+      // SDK continuations can emit another start before the same settled event.
+      if (!this.activeRun) {
+        this.activeRun = {
+          accumulator: new ResponseAccumulator(),
+          origin: this.pendingInboundOrigin,
+          generation: this.generation,
+        };
+        if (this.pendingInboundOrigin) this.inboundRun = this.activeRun;
+        this.pendingInboundOrigin = undefined;
+      }
+      this.state = "busy";
+      this.scheduleIdleCheck();
+      return;
+    }
+    const run = this.activeRun;
+    if (!run || run.generation !== this.generation) return;
+    run.accumulator.handleEvent(event);
+    if (event.type !== "agent_settled") return;
+    this.activeRun = undefined;
+    this.pendingDeliveries++;
+    const outcome = run.accumulator.getOutcome();
+    const generation = run.generation;
+    const deliver = async () => {
+      if (generation !== this.generation || !this.deps.host.hasSession()) return;
+      try {
+        await this.deliverOutcome(
+          run.origin,
+          outcome,
+          run.messageId,
+          () => generation === this.generation && this.deps.host.hasSession(),
+        );
+      } catch (err) {
+        this.deps.logger.error(
+          { err, project: this.deps.projectId },
+          "agent reply delivery failed",
+        );
+      } finally {
+        if (generation === this.generation) this.pendingDeliveries--;
+        if (
+          generation === this.generation &&
+          this.pendingDeliveries === 0 &&
+          !this.activeRun &&
+          !this.deps.currentTurn.get()
+        ) {
+          this.state = "ready";
+          this.lastActivityAt = Date.now();
+          this.scheduleIdleCheck();
+        }
+      }
+    };
+    run.delivered = this.delivery.then(deliver);
+    this.delivery = run.delivered;
+  }
 
   getState(): SessionState {
     return this.state;
@@ -80,11 +168,16 @@ export class SessionController {
   }
 
   async start(): Promise<void> {
+    // stop() removes the listener; a restarted controller must resubscribe.
+    this.unsubscribe();
+    this.unsubscribe = this.deps.host.onEvent((event) => this.onHostEvent(event));
     await this.deps.host.start();
     this.state = "inactive";
   }
 
   async stop(): Promise<void> {
+    this.invalidateRuns();
+    this.unsubscribe();
     this.clearSelector();
     if (this.idleTimer) {
       clearTimeout(this.idleTimer);
@@ -156,8 +249,8 @@ export class SessionController {
           await this.reply(turn, "当前没有正在执行的任务。");
           return;
         }
-        await this.deps.host.abort();
         await this.reply(turn, "⏹ 已发送中止指令。");
+        await this.deps.host.abort();
         return;
       case "new":
         if (this.state === "busy" || this.state === "replacing") {
@@ -311,27 +404,31 @@ export class SessionController {
     if (this.selector) await this.cancelSelector("Agent 已开始处理新任务，本次选择已取消。");
     const turn = toTurnContext(msg);
     this.deps.currentTurn.set(turn);
+    this.pendingInboundOrigin = turn;
     this.state = "busy";
     let nextState: SessionState = "ready";
 
     const stopTyping = await this.startTyping(turn);
     try {
-      const accumulator = new ResponseAccumulator();
-      const unsubscribe = this.deps.host.onEvent((event) => accumulator.handleEvent(event));
-      let outcome: TurnOutcome;
+      let outcome: TurnOutcome | undefined;
+      let run: AgentRun | undefined;
 
       try {
         const operation = (async () => {
           await this.deps.host.prompt(buildPromptInput(msg, this.deps.resolveSenderLabel?.(msg)));
-          await accumulator.settled;
+          run = this.inboundRun;
+          if (run) await run.accumulator.settled;
         })();
         // Avoid an unhandled rejection if a hard timeout returns before a stuck
         // provider operation eventually rejects.
         void operation.catch(() => undefined);
         await withTimeout(operation, this.turnTimeoutMs(), "turn");
-        outcome = accumulator.getOutcome();
+        // The settlement handler may already have detached the run. Delivery
+        // is serialized on the session-wide chain below.
+        if (run?.delivered) await run.delivered;
       } catch (err) {
         if (err instanceof TurnTimeoutError) {
+          this.invalidateRuns();
           const stopped = await this.abortTimedOutTurn();
           if (!stopped) {
             nextState = "faulted";
@@ -352,24 +449,26 @@ export class SessionController {
             { err, project: this.deps.projectId, messageId: msg.messageId },
             "agent run failed",
           );
+          const partialText = (run ?? this.activeRun)?.accumulator.accumulatedText.trim() ?? "";
+          this.invalidateRuns();
           outcome = {
             status: "error",
-            text: accumulator.accumulatedText.trim(),
+            text: partialText,
             error: { source: "pi", message: formatUserFacingError(err) },
             warnings: [],
           };
         }
-      } finally {
-        unsubscribe();
       }
 
       await stopTyping();
-      await this.deliverOutcome(turn, outcome, msg.messageId);
+      if (outcome) await this.deliverOutcome(turn, outcome, msg.messageId);
     } finally {
       await stopTyping();
       this.deps.interaction.cancelUiWaiters("turn ended");
-      this.state = nextState;
       this.deps.currentTurn.set(undefined);
+      this.inboundRun = undefined;
+      this.pendingInboundOrigin = undefined;
+      if (!this.activeRun && this.pendingDeliveries === 0) this.state = nextState;
     }
   }
 
@@ -406,28 +505,42 @@ export class SessionController {
   }
 
   private async deliverOutcome(
-    turn: TurnContext,
+    turn: TurnContext | undefined,
     outcome: TurnOutcome,
-    messageId: string,
+    messageId?: string,
+    isCurrent?: () => boolean,
   ): Promise<void> {
     if (outcome.status === "success") {
       if (outcome.text) {
         if (this.deps.broadcastText) {
-          const report = await this.deps.broadcastText(outcome.text);
+          const report = await this.deps.broadcastText(outcome.text, isCurrent);
           if (report && report.failed > 0) {
             this.deps.logger[report.succeeded === 0 ? "error" : "warn"](
               { project: this.deps.projectId, messageId, ...report },
               "agent reply broadcast delivery incomplete",
             );
           }
-        } else {
+        } else if (turn) {
           await this.reply(turn, outcome.text);
         }
       }
-      if (outcome.warnings.length > 0) await this.reply(turn, formatWarnings(outcome.warnings));
+      if (turn && outcome.warnings.length > 0)
+        await this.reply(turn, formatWarnings(outcome.warnings));
+      if (!turn && outcome.warnings.length > 0)
+        this.deps.logger.warn(
+          { project: this.deps.projectId, warnings: outcome.warnings },
+          "independent agent run extension warnings",
+        );
       return;
     }
 
+    if (!turn) {
+      this.deps.logger.warn(
+        { project: this.deps.projectId, outcome },
+        "independent agent run did not succeed",
+      );
+      return;
+    }
     if (outcome.status === "aborted") {
       const suffix = outcome.text ? "\n\n⏹ 任务已中止，上述内容可能不完整。" : "⏹ 已中止。";
       await this.reply(turn, `${outcome.text}${suffix}`);
@@ -670,6 +783,7 @@ export class SessionController {
     // Real dispose: the SDK runtime is torn down; the wrapper/bridge/participants
     // survive. The next message rebuilds a fresh session (new sessionId).
     this.state = "replacing";
+    this.invalidateRuns();
     try {
       await withTimeout(
         this.deps.host.stop(),
@@ -705,6 +819,14 @@ export class SessionController {
     }
   }
 }
+
+type AgentRun = {
+  accumulator: ResponseAccumulator;
+  origin?: TurnContext;
+  messageId?: string;
+  generation: number;
+  delivered?: Promise<void>;
+};
 
 type ModelChoice = { provider: string; id: string; name: string };
 type SessionChoice = {

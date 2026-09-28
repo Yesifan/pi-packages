@@ -51,6 +51,7 @@ export class PiSdkHost {
   private unsubscribe: (() => void) | undefined;
   private extensionHost: PiExtensionHost | undefined;
   private readonly listeners = new Set<PiHostEventListener>();
+  private generation = 0;
   private readonly opts: PiSdkHostOptions;
 
   constructor(opts: PiSdkHostOptions) {
@@ -129,12 +130,14 @@ export class PiSdkHost {
 
   private async bindSession(session: AgentSession, runtime: AgentSessionRuntime): Promise<void> {
     this.unsubscribe?.();
+    const generation = ++this.generation;
     this.sessionRef = session;
+    this.emit({ type: "session_bound", generation });
     if (this.extensionHost) {
       await this.extensionHost.bind(session, runtime);
     }
     this.unsubscribe = session.subscribe((event) => {
-      this.emit(toPiHostEvent(event));
+      if (this.generation === generation) this.emit(toPiHostEvent(event));
     });
     this.opts.logger.debug({ sessionFile: session.sessionFile }, "session bound");
   }
@@ -290,6 +293,7 @@ export class PiSdkHost {
 
   /** Dispose the runtime and all bindings (idle close / project stop). */
   async stop(): Promise<void> {
+    this.generation++;
     this.unsubscribe?.();
     this.unsubscribe = undefined;
     const runtime = this.runtime;
