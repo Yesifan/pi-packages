@@ -299,7 +299,10 @@ export class ProjectController {
   };
 
   /** ④ Broadcast the agent's final reply to every authorized participant. */
-  private readonly broadcastToRegistry = async (text: string): Promise<DeliveryReport> => {
+  private readonly broadcastToRegistry = async (
+    text: string,
+    isCurrent?: () => boolean,
+  ): Promise<DeliveryReport> => {
     const targets = this.broadcastTargets();
     const report: DeliveryReport = {
       attempted: targets.length,
@@ -308,6 +311,7 @@ export class ProjectController {
       failedAccounts: [],
     };
     for (const p of targets) {
+      if (isCurrent && !isCurrent()) break;
       try {
         await this.sendTo(p, text);
         report.succeeded += 1;

@@ -51,10 +51,24 @@ export class FakeAgentRuntime implements SessionRuntimePort {
 
   async prompt(input: HostPromptInput): Promise<void> {
     this.prompts.push({ text: input.text, images: input.images });
+    this.emit({ type: "agent_started" });
     this.emit({ type: "assistant_started" });
     await new Promise<void>((resolve, reject) => {
       this.pending = { resolve, reject };
     });
+  }
+
+  /** Start an Agent round without a Weixin prompt (e.g. an extension-enqueued message). */
+  startIndependentTurn(): void {
+    this.emit({ type: "agent_started" });
+    this.emit({ type: "assistant_started" });
+  }
+
+  /** Complete an independent Agent round, without resolving a pending prompt. */
+  completeIndependentTurn(reply: string): void {
+    this.emitText(reply);
+    this.emit({ type: "assistant_finished", stopReason: "stop" });
+    this.emit({ type: "agent_settled" });
   }
 
   /** Complete the current prompt: emit text deltas + final status + settled. */

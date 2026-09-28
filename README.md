@@ -12,7 +12,7 @@ A monorepo of [Pi](https://github.com/badlogic/pi-mono) packages published under
 
 ## Development
 
-Requires Node.js 22 or newer and pnpm 11.
+Requires Node.js 22 or newer and pnpm 11. All packages use the Pi SDK version pinned in the `pnpm-workspace.yaml` catalog (currently 0.87.1).
 
 ```bash
 pnpm install

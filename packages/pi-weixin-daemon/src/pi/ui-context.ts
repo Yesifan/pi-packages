@@ -76,8 +76,51 @@ function isUiTimeoutError(err: unknown): boolean {
  * - All remaining terminal/TUI primitives are no-ops that never throw.
  * - theme: real minimal `Theme` instance (never `{} as Theme`).
  */
+// The SDK spreads the supplied context before handing it to extensions.
+// Keep every public method own/enumerable so the spread retains the full UI API.
+const UI_METHODS = [
+  "confirm",
+  "select",
+  "input",
+  "notify",
+  "onTerminalInput",
+  "setStatus",
+  "setWorkingMessage",
+  "setWorkingVisible",
+  "setWorkingIndicator",
+  "setHiddenThinkingLabel",
+  "setWidget",
+  "setFooter",
+  "setHeader",
+  "setTitle",
+  "custom",
+  "pasteToEditor",
+  "setEditorText",
+  "getEditorText",
+  "editor",
+  "addAutocompleteProvider",
+  "setEditorComponent",
+  "getEditorComponent",
+  "getAllThemes",
+  "getTheme",
+  "setTheme",
+  "getToolsExpanded",
+  "setToolsExpanded",
+] as const satisfies readonly (keyof ExtensionUIContext)[];
+
 export class WeixinUIContext implements ExtensionUIContext {
-  constructor(private readonly deps: WeixinUIContextDeps) {}
+  constructor(private readonly deps: WeixinUIContextDeps) {
+    // Parameter properties are normally enumerable; do not expose dependencies
+    // (including the logger/transport) to extensions via the SDK's spread.
+    Object.defineProperty(this, "deps", { value: deps, writable: false, enumerable: false });
+    for (const name of UI_METHODS) {
+      Object.defineProperty(this, name, {
+        value: this[name].bind(this),
+        enumerable: true,
+        configurable: true,
+      });
+    }
+  }
 
   private requireTurn() {
     const turn = this.deps.interaction.getCurrentTurn();

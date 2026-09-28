@@ -13,6 +13,56 @@ function deferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
 }
 
 describe("RootUiBroker", () => {
+  it("keeps the full UI API when the SDK spreads the child proxy", async () => {
+    const calls: string[] = [];
+    const rootUi = {
+      theme: {},
+      confirm: async (title: string) => {
+        calls.push(title);
+        return true;
+      },
+      setWidget: () => calls.push("root widget changed"),
+    } as unknown as ExtensionUIContext;
+    const proxy = new RootUiBroker(rootUi, true, 100).proxy("sa", "worker");
+    const wrapped = { ...proxy } as ExtensionUIContext;
+    const methods: (keyof ExtensionUIContext)[] = [
+      "select",
+      "confirm",
+      "input",
+      "notify",
+      "onTerminalInput",
+      "setStatus",
+      "setWorkingMessage",
+      "setWorkingVisible",
+      "setWorkingIndicator",
+      "setHiddenThinkingLabel",
+      "setWidget",
+      "setFooter",
+      "setHeader",
+      "setTitle",
+      "custom",
+      "pasteToEditor",
+      "setEditorText",
+      "getEditorText",
+      "editor",
+      "addAutocompleteProvider",
+      "setEditorComponent",
+      "getEditorComponent",
+      "getAllThemes",
+      "getTheme",
+      "setTheme",
+      "getToolsExpanded",
+      "setToolsExpanded",
+    ];
+    for (const method of methods) expect(typeof wrapped[method]).toBe("function");
+    expect(wrapped.onTerminalInput(() => undefined)).toBeTypeOf("function");
+    expect(wrapped.getEditorText()).toBe("");
+    await expect(wrapped.confirm("Allow?", "message")).resolves.toBe(true);
+    wrapped.setWidget("child-widget", ["not forwarded"]);
+    expect(calls).toEqual(["[subagent: worker / sa] Allow?"]);
+    expect(Object.keys(wrapped)).not.toContain("rootUi");
+    expect(Object.keys(wrapped)).not.toContain("broker");
+  });
   it("serializes blocking dialogs and cancellation advances the FIFO", async () => {
     const firstDialog = deferred<boolean>();
     const calls: string[] = [];

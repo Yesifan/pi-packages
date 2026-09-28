@@ -210,6 +210,218 @@ describe("M6 session controller (fake transport + fake runtime)", () => {
   });
 });
 
+describe("requirement 0006: replies from the active session", () => {
+  it("broadcasts the inbound turn once and a later independent round once, in order", async () => {
+    const broadcasts: string[] = [];
+    const { runtime, session, transport } = setup({
+      broadcastText: async (text) => {
+        broadcasts.push(text);
+      },
+    });
+    const inbound = session.handleUserMessage(msgA("first"));
+    await vi.waitFor(() => expect(runtime.prompts).toHaveLength(1));
+    runtime.complete("inbound reply");
+    await inbound;
+
+    runtime.startIndependentTurn();
+    runtime.completeIndependentTurn("background reply");
+    await vi.waitFor(() => expect(broadcasts).toEqual(["inbound reply", "background reply"]));
+    expect(transport.sentTexts).toEqual([]);
+    expect(session.getState()).toBe("ready");
+  });
+
+  it("waits for settlement rather than broadcasting intermediate retry output", async () => {
+    const broadcasts: string[] = [];
+    const { runtime, session } = setup({
+      broadcastText: async (text) => {
+        broadcasts.push(text);
+      },
+    });
+    const inbound = session.handleUserMessage(msgA("prime"));
+    await vi.waitFor(() => expect(runtime.prompts).toHaveLength(1));
+    runtime.complete("prime reply");
+    await inbound;
+    broadcasts.length = 0;
+
+    runtime.startIndependentTurn();
+    runtime.emit({ type: "text_delta", delta: "failed partial" });
+    runtime.emit({ type: "assistant_finished", stopReason: "error", errorMessage: "retry" });
+    runtime.emit({ type: "assistant_started" });
+    runtime.emit({ type: "text_delta", delta: "final answer" });
+    runtime.emit({ type: "assistant_finished", stopReason: "stop" });
+    expect(broadcasts).toEqual([]);
+    runtime.emit({ type: "agent_settled" });
+    await vi.waitFor(() => expect(broadcasts).toEqual(["final answer"]));
+  });
+
+  it("keeps continuation text until the single settled boundary", async () => {
+    const broadcasts: string[] = [];
+    const { runtime, session } = setup({
+      broadcastText: async (text) => {
+        broadcasts.push(text);
+      },
+    });
+    const inbound = session.handleUserMessage(msgA("prime"));
+    await vi.waitFor(() => expect(runtime.prompts).toHaveLength(1));
+    runtime.complete("prime");
+    await inbound;
+    broadcasts.length = 0;
+    runtime.startIndependentTurn();
+    runtime.emit({ type: "text_delta", delta: "first " });
+    runtime.emit({ type: "agent_started" });
+    runtime.completeIndependentTurn("second");
+    await vi.waitFor(() => expect(broadcasts).toEqual(["first second"]));
+  });
+
+  it("keeps busy until all queued deliveries finish", async () => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const broadcasts: string[] = [];
+    const { runtime, session, transport } = setup({
+      broadcastText: async (text) => {
+        broadcasts.push(text);
+        if (text === "first") await held;
+      },
+    });
+    const inbound = session.handleUserMessage(msgA("prime"));
+    await vi.waitFor(() => expect(runtime.prompts).toHaveLength(1));
+    runtime.complete("prime");
+    await inbound;
+    runtime.startIndependentTurn();
+    runtime.completeIndependentTurn("first");
+    await vi.waitFor(() => expect(broadcasts).toContain("first"));
+    runtime.startIndependentTurn();
+    runtime.completeIndependentTurn("second");
+    expect(session.getState()).toBe("busy");
+    await session.handleUserMessage(msgB("waiting"));
+    expect(transport.textsTo("acct-b")).toEqual([BUSY_REPLY]);
+    release();
+    await vi.waitFor(() => expect(broadcasts).toEqual(["prime", "first", "second"]));
+    await vi.waitFor(() => expect(session.getState()).toBe("ready"));
+  });
+
+  it("refuses another Weixin prompt during an independent round and its delivery", async () => {
+    let releaseDelivery!: () => void;
+    const deliveryHeld = new Promise<void>((resolve) => (releaseDelivery = resolve));
+    const broadcasts: string[] = [];
+    const { runtime, session, transport } = setup({
+      broadcastText: async (text) => {
+        broadcasts.push(text);
+        if (text === "background reply") await deliveryHeld;
+      },
+    });
+    const inbound = session.handleUserMessage(msgA("prime"));
+    await vi.waitFor(() => expect(runtime.prompts).toHaveLength(1));
+    runtime.complete("prime reply");
+    await inbound;
+
+    runtime.startIndependentTurn();
+    await vi.waitFor(() => expect(session.getState()).toBe("busy"));
+    await session.handleUserMessage(msgB("during run"));
+    runtime.completeIndependentTurn("background reply");
+    await vi.waitFor(() => expect(broadcasts).toContain("background reply"));
+    await session.handleUserMessage(msgB("during delivery"));
+    expect(transport.textsTo("acct-b")).toEqual([BUSY_REPLY, BUSY_REPLY]);
+    expect(runtime.prompts).toHaveLength(1);
+    releaseDelivery();
+    await vi.waitFor(() => expect(session.getState()).toBe("ready"));
+  });
+
+  it("does not broadcast blank, failed, or aborted independent rounds", async () => {
+    const broadcasts: string[] = [];
+    const { runtime, session, transport } = setup({
+      broadcastText: async (text) => {
+        broadcasts.push(text);
+      },
+    });
+    const inbound = session.handleUserMessage(msgA("prime"));
+    await vi.waitFor(() => expect(runtime.prompts).toHaveLength(1));
+    runtime.complete("prime reply");
+    await inbound;
+    broadcasts.length = 0;
+
+    runtime.startIndependentTurn();
+    runtime.completeIndependentTurn("  ");
+    await vi.waitFor(() => expect(session.getState()).toBe("ready"));
+    runtime.startIndependentTurn();
+    runtime.emit({ type: "text_delta", delta: "incomplete" });
+    runtime.emit({
+      type: "assistant_finished",
+      stopReason: "error",
+      errorMessage: "provider failed",
+    });
+    runtime.emit({ type: "agent_settled" });
+    await vi.waitFor(() => expect(session.getState()).toBe("ready"));
+    runtime.startIndependentTurn();
+    runtime.emit({ type: "text_delta", delta: "aborted partial" });
+    runtime.emit({ type: "assistant_finished", stopReason: "aborted" });
+    runtime.emit({ type: "agent_settled" });
+    await vi.waitFor(() => expect(session.getState()).toBe("ready"));
+    expect(broadcasts).toEqual([]);
+    expect(transport.sentTexts).toEqual([]);
+  });
+
+  it("drops queued replies after a session rebind", async () => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const broadcasts: string[] = [];
+    const { runtime, session } = setup({
+      broadcastText: async (text) => {
+        broadcasts.push(text);
+        if (text === "first") await held;
+      },
+    });
+    const inbound = session.handleUserMessage(msgA("prime"));
+    await vi.waitFor(() => expect(runtime.prompts).toHaveLength(1));
+    runtime.complete("prime");
+    await inbound;
+    runtime.startIndependentTurn();
+    runtime.completeIndependentTurn("first");
+    await vi.waitFor(() => expect(broadcasts).toContain("first"));
+    runtime.startIndependentTurn();
+    runtime.completeIndependentTurn("stale second");
+    runtime.emit({ type: "session_bound", generation: 2 });
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(broadcasts).toEqual(["prime", "first"]);
+  });
+
+  it("ignores late events after stopping the session", async () => {
+    const broadcasts: string[] = [];
+    const { runtime, session } = setup({
+      broadcastText: async (text) => {
+        broadcasts.push(text);
+      },
+    });
+    const inbound = session.handleUserMessage(msgA("prime"));
+    await vi.waitFor(() => expect(runtime.prompts).toHaveLength(1));
+    runtime.complete("prime reply");
+    await inbound;
+    broadcasts.length = 0;
+
+    runtime.startIndependentTurn();
+    await session.stop();
+    runtime.completeIndependentTurn("late reply");
+    expect(broadcasts).toEqual([]);
+  });
+
+  it("does not wait for settlement when prompt returns without starting an Agent round", async () => {
+    class NoAgentRuntime extends FakeAgentRuntime {
+      override async prompt(): Promise<void> {
+        this.prompts.push({ text: "no agent round" });
+      }
+    }
+    const { session, transport } = setup({ runtime: new NoAgentRuntime(), turnTimeoutMs: 100 });
+    await session.handleUserMessage(msgA("no round"));
+    expect(session.getState()).toBe("ready");
+    expect(transport.sentTexts).toEqual([]);
+  });
+});
+
 describe("M6 commands over weixin", () => {
   it("reports command execution failures", async () => {
     class CompactFailureRuntime extends FakeAgentRuntime {

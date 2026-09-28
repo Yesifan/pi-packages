@@ -1,6 +1,6 @@
 # @yesifan/pi-subagents
 
-Persistent, in-process background subagents for [Pi](https://pi.dev), tested against `@earendil-works/pi-coding-agent@0.85.1`.
+Persistent, in-process background subagents for [Pi](https://pi.dev), tested against the Pi SDK version pinned in the workspace catalog (`pnpm-workspace.yaml`).
 
 ## Install
 

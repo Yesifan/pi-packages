@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { getAgentDir, ProjectTrustStore } from "@earendil-works/pi-coding-agent";
 
 const TEST_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".tmp");
 
@@ -8,6 +9,15 @@ export interface TmpProject {
   dir: string;
   markerFile: string;
   uiMarkerFile: string;
+}
+
+/** Trust only this test project, restoring its exact saved decision afterward. */
+export function trustTmpProject(project: TmpProject, decision = true): () => void {
+  const store = new ProjectTrustStore(getAgentDir());
+  const entry = store.getEntry(project.dir);
+  const previous = entry?.path === fs.realpathSync(project.dir) ? entry.decision : null;
+  store.set(project.dir, decision);
+  return () => store.set(project.dir, previous);
 }
 
 /** Create a temporary project with .pi/extensions fixtures. */
