@@ -29,8 +29,7 @@
 - **一个 account 只属于一个 project**：`account → project` 单向映射；一账号绑第二个 project 会报错。未绑定 / disabled 的账号消息直接丢弃，不进入 Pi。
 - **busy / abort 是 Project 作用域**：foo 忙、foo 被 abort、foo 出错都不影响 bar（严格故障隔离）。
 - **多微信账号**：一次扫码登录一个账号，可重复添加；每个账号独立 monitor，多个账号可绑定到同一 project。
-- **TurnContext 回源与广播**：每一轮请求记录来源（account/sender/context_token）。agent 文本回复默认回发起者；
-  项目启用广播后，回复会发给项目内**所有**参与者；文件、UI 询问仍只回到发起者。
+- **会话级回复广播**：活动 Pi 会话中每个完成的 Agent 回合（包括扩展触发的独立回合）的成功最终文本，发送给项目内已登记的参与者；无最终文本不发送。微信发起的失败、warning、文件、UI 询问及进度仍只回到发起者。
 - **会话空闲自动关闭**：项目会话 10 分钟无消息自动关闭（广播"本次会话已关闭"），下一条消息自动新建会话。
 - **每次启动新建会话**：项目启动（含 daemon 重启）总是新建会话，**不跨重启恢复**上一个会话。
 - **发送者标记**：入站消息交给 agent 的文本末尾追加 `-- from weixin <账号name>`。
@@ -190,7 +189,7 @@ daemon 通过 Pi SDK 运行模型，需要对应 provider 的凭据。若运行�
 
 - **`weixin_send_file(path, caption?)`**：daemon 内存注入的工具（不写入项目 `.pi/extensions`，普通 `pi`/PI WEB 会话不可见）。自动发送到当前 Turn 的微信用户；仅要求文件存在且为普通文件（文件名 sanitize），**不设路径边界**——权限模型 = agent 进程权限，与 bash/read/write 一致（可发 `cwd` 之外 agent 可读的文件）。
 - **入站媒体**：图片 → 多模态输入；文件/视频/语音 → 下载到 `<cwd>/.pi-weixin/inbox/<message-id>/` 并在 prompt 中说明路径。`.pi-weixin/` 会自动加入项目 `.gitignore`。
-- **Extension UI**：项目 extension 调用 `ctx.ui.confirm/select/input` 时，daemon 进入 `WAITING_FOR_UI`，通过微信与用户交互（其他账号仍 busy）；`ctx.ui.notify` 直接推送消息。`ctx.ui.custom()` resolve undefined、`ctx.ui.editor()` 降级为输入框、`ctx.ui.theme` 返回真实最小 Theme 对象；其余 TUI 专属原语 no-op 不 throw。
+- **Extension UI**：项目 extension 调用 `ctx.ui.confirm/select/input` 时，daemon 进入 `WAITING_FOR_UI`，通过微信与用户交互（其他账号仍 busy）；`ctx.ui.notify` 直接推送消息。`ctx.ui.custom()` resolve undefined、`ctx.ui.editor()` 降级为输入框、`ctx.ui.theme` 返回真实最小 Theme 对象；其余 TUI 专属原语 no-op 不 throw。全部公开 UI 方法在 Pi SDK 包装后的扩展上下文中仍可调用。
 - **runner-level settings 不支持（W8）**：`resourceLoader` 层的项目配置正常生效；runner 级 settings（如 `sessionDir`）在 daemon 内不支持。
 
 ## 架构

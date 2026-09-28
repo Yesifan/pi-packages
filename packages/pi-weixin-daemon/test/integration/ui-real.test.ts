@@ -8,22 +8,26 @@ import { createLogger } from "../../src/util/logger.js";
 import { WeixinInteractionController } from "../../src/weixin/interaction-controller.js";
 import { FakeWeixinTransport, makeInboundMessage } from "../helpers/fake-transport.js";
 import { MultiAccountTransport } from "../helpers/multi-account-transport.js";
-import { createTmpProject } from "../helpers/tmp-project.js";
+import { createTmpProject, trustTmpProject } from "../helpers/tmp-project.js";
 
 const logger = createLogger({ level: "warn" });
 const TIMEOUT = 120_000;
 
 describe("M9 e2e: extension UI dialogs completed over weixin (real SDK)", () => {
   const runtimes: PiSdkHost[] = [];
+  const restoreTrust: Array<() => void> = [];
 
   afterEach(async () => {
-    for (const r of runtimes.splice(0)) {
-      await r.stop().catch(() => {});
+    try {
+      for (const r of runtimes.splice(0)) await r.stop().catch(() => {});
+    } finally {
+      for (const restore of restoreTrust.splice(0)) restore();
     }
   });
 
   async function setupProject(name: string) {
     const project = createTmpProject(name, { withUiExtension: true });
+    restoreTrust.push(trustTmpProject(project));
     const transport = new FakeWeixinTransport();
     const multi = new MultiAccountTransport();
     multi.register("acct-a", transport);

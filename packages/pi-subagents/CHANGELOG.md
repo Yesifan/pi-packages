@@ -2,6 +2,16 @@
 
 All notable changes to this package are documented here. The format follows Keep a Changelog.
 
+## [0.2.4] - 2026-09-26
+
+### Fixed
+
+- Keep child `ctx.ui` methods available to extensions after Pi SDK wraps the UI proxy, preventing `session_start` failures such as `ctx.ui.onTerminalInput is not a function`.
+
+### Changed
+
+- Align Pi SDK development dependencies with the workspace catalog (0.87.1).
+
 ## [0.2.3] - 2026-09-14
 
 ### Added

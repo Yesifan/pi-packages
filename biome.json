@@ -6,6 +6,7 @@
       "!!**/dist",
       "!!**/node_modules",
       "!!**/.refer",
+      "!!**/.pi/subagents/sessions",
       "!!**/coverage",
       "!!**/release",
       "!!**/test/.tmp"

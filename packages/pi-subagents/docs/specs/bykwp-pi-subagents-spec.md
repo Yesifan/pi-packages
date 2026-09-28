@@ -4,11 +4,11 @@
 **状态：** v1 实现基线（已合并 session-local delegation、project-local storage 与原生进度 widget 决策）
 **目标包名：** `@bykwp/pi-subagents`  
 **目标宿主：** Pi CLI / TUI  
-**SDK 验证基线：** `@earendil-works/pi-coding-agent@0.85.1`  
+**当前 SDK 验证基线：** `pnpm-workspace.yaml` catalog 锁定的 Pi SDK（目前 0.87.1；文末 P1–P9 为最初 0.85.1 设计依据）
 **实现语言：** TypeScript，ES modules  
 **用途：** 交给 coding agent 完成 package、测试、示例和使用文档。
 
-本文中的“必须”“不得”是验收要求；“建议”允许在保持行为一致的前提下调整实现。代码中的业务类型用于解释契约，不应误认为 Pi 导出的类型。所有 Pi API 签名以 0.85.1 的实际导出和类型检查为准。
+本文中的“必须”“不得”是验收要求；“建议”允许在保持行为一致的前提下调整实现。代码中的业务类型用于解释契约，不应误认为 Pi 导出的类型。所有 Pi API 签名以当前工作区 catalog 锁定版本的实际导出和类型检查为准。
 
 本规格区分两类内容：产品行为由本文定义；Pi 已有接口及其语义由文末固定版本源码支撑。本文不是已经运行通过的 package，也不代表集成测试已经完成。
 
@@ -1093,9 +1093,9 @@ fork/clone/import 默认不继承旧 scope 的 child 写权限，即使新父历
 }
 ```
 
-Node 下限与 0.85.1 宿主一致。[P9] 编译和测试安装精确固定 Pi 0.85.1；扩展实际使用宿主 Pi，不打包第二份 Pi runtime。核心 Pi 包和 typebox 按 Pi package 的 peer 约定处理，仅声明实际导入的依赖。[P8]
+Node 下限参照 Pi 宿主要求。[P9] 编译和测试使用工作区 catalog 锁定的 Pi 版本；扩展实际使用宿主 Pi，不打包第二份 Pi runtime。核心 Pi 包和 typebox 按 Pi package 的 peer 约定处理，仅声明实际导入的依赖。[P8]
 
-若 peer 范围按官方建议为 `*`，README 仍只声明已测试的 0.85.1，并通过 capability/type smoke tests 避免把范围误写成兼容承诺。依赖锁文件、CI 和开发依赖负责固定测试基线。不得为了通过测试静默升级到 main。
+若 peer 范围按官方建议为 `*`，README 仍只声明已测试的工作区 catalog 版本，并通过 capability/type smoke tests 避免把范围误写成兼容承诺。依赖锁文件、CI 和开发依赖负责固定测试基线。不得为了通过测试静默升级到 main。
 
 内置 Markdown 必须进入 npm tarball，生产代码按模块所在路径定位，不能按用户 cwd 定位包内文件。开发测试都从打包后的本地 tarball再做一次安装 smoke test。
 
