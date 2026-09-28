@@ -1,4 +1,9 @@
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { cleanupTestSessions } from "./helpers/session-cleanup.js";
+
+const PACKAGE_ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 /**
  * Vitest global setup/teardown. Vitest calls `teardown` once after the whole
@@ -7,7 +12,8 @@ import { cleanupTestSessions } from "./helpers/session-cleanup.js";
  * Vitest-4-supported hook; there is no globalTeardown config key.
  */
 export function setup(): void {
-  // nothing to prepare up-front
+  process.chdir(PACKAGE_ROOT);
+  fs.mkdirSync(path.join(PACKAGE_ROOT, "test/.tmp"), { recursive: true });
 }
 
 export function teardown(): void {

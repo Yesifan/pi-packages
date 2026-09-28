@@ -2,17 +2,18 @@
 
 ## 仓库概览
 
-本项目是一个使用 pnpm workspace 管理的 Pi 包 monorepo。所有子包位于 `packages/`，并以 `@BYKWP/` scope 发布到 npm。
+本项目是一个使用 pnpm workspace 管理的 Pi 包 monorepo。所有子包位于 `packages/`，并以 `@yesifan/` scope 发布到 npm。
 
 当前包含：
 
-- `@BYKWP/pi-weixin-daemon`：连接微信 iLink Bot 与 Pi Coding Agent 的 TypeScript 守护进程及 `pi-wx` CLI。
-- `@BYKWP/pi-system-prompt`：提供 `/system-prompt` 命令，显示当前会话实际发送给模型的系统提示词和工具定义。
+- `@yesifan/pi-weixin-daemon`：连接微信 iLink Bot 与 Pi Coding Agent 的 TypeScript 守护进程及 `pi-wx` CLI。
+- `@yesifan/pi-system-prompt`：提供 `/system-prompt` 命令，显示当前会话实际发送给模型的系统提示词和工具定义。
+- `@yesifan/pi-subagents`：提供持久化后台 subagent 与嵌套委派工具。
 
 在根目录使用 pnpm filter 运行子 package 的命令：
 
 ```bash
-pnpm --filter @BYKWP/<pkg> run <script>
+pnpm --filter @yesifan/<pkg> run <script>
 # 或
 pnpm -C packages/<pkg> run <script>
 ```
@@ -49,10 +50,10 @@ pnpm build       # 对所有提供 build 脚本的子包执行构建
 只检查一个包：
 
 ```bash
-pnpm --filter @BYKWP/pi-weixin-daemon typecheck
-pnpm --filter @BYKWP/pi-weixin-daemon lint
-pnpm --filter @BYKWP/pi-weixin-daemon test
-pnpm --filter @BYKWP/pi-system-prompt typecheck
+pnpm --filter @yesifan/pi-weixin-daemon typecheck
+pnpm --filter @yesifan/pi-weixin-daemon lint
+pnpm --filter @yesifan/pi-weixin-daemon test
+pnpm --filter @yesifan/pi-system-prompt typecheck
 ```
 
 `pi-weixin-daemon` 的完整测试包含真实运行时集成测试，可能耗时较长。不要因为超时而直接认定测试通过；应记录失败或超时的具体测试，并在需要时运行最小相关测试文件定位问题。
@@ -73,7 +74,7 @@ pnpm --filter @BYKWP/pi-system-prompt typecheck
 新增子包时至少完成以下事项：
 
 1. 放入 `packages/<pkg>/`，并提供独立 `package.json`。
-2. 包名使用 `@BYKWP/<pkg>`。
+2. 包名使用 `@yesifan/<pkg>`。
 3. 在根 `README.md` 的 Packages 表中登记。
 4. 配置明确的 `files` allowlist，只发布运行时代码和用户文档。
 5. 提供适用的 `typecheck`、`test`、`lint` 或 `build` 脚本；根脚本通过递归运行自动发现它们。
@@ -88,7 +89,15 @@ pnpm --filter @BYKWP/pi-system-prompt typecheck
 - 无 **BREAKING** 变更（仅新增、修复或行为增强）时，只更新包版本的 **patch** 位，例如 `0.5.0 → 0.5.1`。
 - 有破坏性变更（标记 `BREAKING`）时，升级 **minor**，必要时升级 **major**。
 - 每个包的 `package.json` 是其唯一版本源，不要在源码中重复维护版本号。
-- 每次改版都应在对应包的 `CHANGELOG.md` 顶部新增版本条目，格式遵循 Keep a Changelog。
+- 每次改版都应在对应包的 `CHANGELOG.md` 顶部新增版本条目，格式遵循 Keep a Changelog。常规流程由 Changesets 在版本 PR 中生成版本与 CHANGELOG，不在功能 PR 手动改版。
+
+## Release 流程
+
+- 修改公开包的运行时代码或用户可见行为时，在功能 PR 中运行 `pnpm changeset`，只选择受影响的子包，按上述版本规则选择 patch/minor，并提交 `.changeset/*.md`。仅内部文档、测试或 CI 变更且不影响发布内容时可不添加 changeset。
+- 功能 PR 的 CI 通过后合入 `main`；Release workflow 先验证，再创建或更新版本 PR（更新各包的 `package.json`、CHANGELOG 和必要的锁文件）。人工审核版本与发布内容，确认版本 PR 的 CI 通过后再合并。
+- 版本 PR 合入 `main` 后，Release workflow 再次验证；仅在验证成功且位于 `main` 时，才尝试发布尚未在 npm 上存在的包版本，并为成功发布的包创建 tag 和 GitHub Release。各包版本独立，不要求同步升级。
+- 首次发布尚未存在于 npm 的包时，其他未发布的公开包可能一并以当前版本发布。不要用发布、打 tag 或 `git push` 探测行为；这些远端操作仍须用户明确授权。
+- 具体工作流、命令、例外和一次性配置参考 [`docs/ci-release.md`](docs/ci-release.md)；实际执行以 `.github/workflows/ci.yml`、`.github/workflows/release.yml` 为准。
 
 ## 发布内容约定
 
@@ -103,7 +112,7 @@ pnpm --filter @BYKWP/pi-system-prompt typecheck
 发布前使用以下方式检查 tarball：
 
 ```bash
-pnpm --filter @BYKWP/<pkg> pack --pack-destination /tmp
+pnpm --filter @yesifan/<pkg> pack --pack-destination /tmp
 ```
 
 确认 tarball 中包含所有运行时文件，同时没有混入开发文件。`pi-weixin-daemon` 发布前会通过 `prepare`/`prepublishOnly` 构建 `dist/`，不得发布陈旧构建结果。

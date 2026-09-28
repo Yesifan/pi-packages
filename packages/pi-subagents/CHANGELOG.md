@@ -2,6 +2,13 @@
 
 All notable changes to this package are documented here. The format follows Keep a Changelog.
 
+## [0.2.5] - 2026-09-28
+
+### Changed
+
+- Renamed the npm package from `@BYKWP/pi-subagents` to `@yesifan/pi-subagents`; install using the new name.
+- Automatic subagent reports now use the `subagent-report` custom message type instead of `bykwp-subagent-report`.
+
 ## [0.2.4] - 2026-09-26
 
 ### Fixed

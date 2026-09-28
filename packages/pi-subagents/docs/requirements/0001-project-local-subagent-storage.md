@@ -172,15 +172,15 @@
 - `src/index.ts`、`src/runtime.ts`、`src/child-session.ts`
 - `test/unit/config.test.ts`、`test/unit/project-storage.test.ts`、`test/unit/store.test.ts`、`test/unit/child-session.test.ts`
 - `test/integration/extension.test.ts`、runtime/recovery 相关测试
-- `README.md`、`docs/domain-model.md`、`docs/specs/bykwp-pi-subagents-spec.md`
+- `README.md`、`docs/domain-model.md`、`docs/specs/yesifan-pi-subagents-spec.md`
 - `CHANGELOG.md`
 
 验证命令：
 
 ```bash
 pnpm exec biome check --write packages/pi-subagents
-pnpm --filter @BYKWP/pi-subagents typecheck
-pnpm --filter @BYKWP/pi-subagents test
-pnpm --filter @BYKWP/pi-subagents build
-pnpm --filter @BYKWP/pi-subagents pack --pack-destination /tmp
+pnpm --filter @yesifan/pi-subagents typecheck
+pnpm --filter @yesifan/pi-subagents test
+pnpm --filter @yesifan/pi-subagents build
+pnpm --filter @yesifan/pi-subagents pack --pack-destination /tmp
 ```

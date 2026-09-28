@@ -3,11 +3,11 @@
 - 状态：✅ 已接受并实施（Accepted）
 - 目标版本：0.2.1
 - 日期：2026-09-11
-- 关联：`docs/specs/bykwp-pi-subagents-spec.md`
+- 关联：`docs/specs/yesifan-pi-subagents-spec.md`
 
 ## 背景
 
-`@BYKWP/pi-subagents` 的 `subagent` 和普通 `ask_subagent` 会在 Pi 接受任务后立即返回，
+`@yesifan/pi-subagents` 的 `subagent` 和普通 `ask_subagent` 会在 Pi 接受任务后立即返回，
 实际模型调用、thinking 和工具执行继续在后台 child `AgentSession` 中发生。用户需要在不改变
 后台语义的前提下看到这些活动，并能同时观察多个 subagent 的进度。
 

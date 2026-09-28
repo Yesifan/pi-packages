@@ -701,7 +701,7 @@ export class RootRuntime implements DelegationRuntimeApi {
     void parent.session
       .sendCustomMessage(
         {
-          customType: "bykwp-subagent-report",
+          customType: "subagent-report",
           content: formatReport(report, status),
           display: true,
           details: deliveredReport(report, status),
@@ -742,7 +742,7 @@ export class RootRuntime implements DelegationRuntimeApi {
     const status = this.delegationStatusFor(stored.parentAgentId);
     const delivery = parent.session.sendCustomMessage(
       {
-        customType: "bykwp-subagent-report",
+        customType: "subagent-report",
         content: formatReport(report, status),
         display: true,
         details: deliveredReport(report, status),
