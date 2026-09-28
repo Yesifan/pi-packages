@@ -3,7 +3,7 @@
 - 状态：✅ 已接受并实施（Accepted）
 - 目标版本：0.2.1
 - 日期：2026-09-11
-- 关联：`docs/specs/bykwp-pi-subagents-spec.md`
+- 关联：`docs/specs/yesifan-pi-subagents-spec.md`
 
 ## 背景
 

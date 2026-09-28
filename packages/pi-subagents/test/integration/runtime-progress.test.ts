@@ -274,6 +274,7 @@ describe("runtime progress widget", () => {
       expect(children[2]!.customMessages).toHaveLength(1);
     });
     const nestedMessage = children[2]!.customMessages[0]!;
+    expect(nestedMessage.customType).toBe("subagent-report");
     expect(nestedMessage.content).toContain(
       `Active direct subagents (1): nested-reviewer (${nestedReviewer.id}).`,
     );

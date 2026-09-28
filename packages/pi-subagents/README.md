@@ -1,6 +1,6 @@
 # @yesifan/pi-subagents
 
-Persistent, in-process background subagents for [Pi](https://pi.dev), tested against the Pi SDK version pinned in the workspace catalog (`pnpm-workspace.yaml`).
+Persistent, in-process background subagents for [Pi](https://pi.dev), tested against `@earendil-works/pi-coding-agent@0.87.1` and `@earendil-works/pi-ai@0.87.1`.
 
 ## Install
 
@@ -118,7 +118,7 @@ The generated local `.gitignore` ignores `/sessions/`. Existing ignore files are
 
 ## Background lifecycle
 
-- Final responses are reported automatically to the direct parent as Pi custom messages.
+- Final responses are reported automatically to the direct parent as Pi custom messages (`customType: "subagent-report"`). Older histories may contain `bykwp-subagent-report` messages; the extension does not rewrite them.
 - Tool results show the caller's active direct subagents and current shared live usage. `SUBAGENT_BUSY` and `LIVE_AGENT_LIMIT` results include the same snapshot.
 - Automatic reports show the remaining active direct subagents. While relevant reports are pending, the caller is instructed to provide only a brief progress update and defer its final answer.
 - An idle parent waiting for children remains loaded; it is not cold-released.
@@ -166,4 +166,4 @@ pnpm --filter @yesifan/pi-subagents build
 pnpm --filter @yesifan/pi-subagents pack --pack-destination /tmp
 ```
 
-See [`docs/domain-model.md`](docs/domain-model.md) for the terminology and lifecycle model, and [`docs/specs/bykwp-pi-subagents-spec.md`](docs/specs/bykwp-pi-subagents-spec.md) for the implementation specification.
+See [`docs/domain-model.md`](docs/domain-model.md) for the terminology and lifecycle model, and [`docs/specs/yesifan-pi-subagents-spec.md`](docs/specs/yesifan-pi-subagents-spec.md) for the implementation specification.

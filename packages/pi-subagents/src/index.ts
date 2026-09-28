@@ -123,7 +123,7 @@ export default function piSubagents(pi: ExtensionAPI): void {
           sendReport: (report: SubagentReport, status: DelegationStatusSnapshot) => {
             pi.sendMessage(
               {
-                customType: "bykwp-subagent-report",
+                customType: "subagent-report",
                 content: formatRootReport(report, status),
                 display: true,
                 details: deliveredReport(report, status),

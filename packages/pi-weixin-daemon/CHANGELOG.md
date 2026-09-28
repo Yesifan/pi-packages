@@ -7,6 +7,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/) and [Semantic Ver
 
 ---
 
+## [0.6.12]
+
+### Changed
+
+- npm 包名从 `@BYKWP/pi-weixin-daemon` 改为 `@yesifan/pi-weixin-daemon`；请使用新包名安装。
+
 ## [0.6.11]
 
 ### Added

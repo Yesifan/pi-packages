@@ -1,6 +1,6 @@
 {
   "name": "@yesifan/pi-subagents",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "Persistent in-process background subagents for Pi Coding Agent",
   "keywords": [
     "pi-package",
@@ -27,6 +27,7 @@
     "prepublishOnly": "tsc",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json",
     "test": "vitest run",
+    "test:ci": "vitest run",
     "test:watch": "vitest"
   },
   "dependencies": {

@@ -5,15 +5,14 @@
 1. 开发时如何把这个扩展安装到本地的 Pi。
 2. 源码修改后，如何让改动生效（更新扩展）。
 
-> 前提：假定你已经在用 Pi（`pi` 命令可用）。开发目录为仓库根目录
-> `/home/ye/code/pi-system-prompt`，下文简称为「本地路径」。
+> 前提：假定你已经在用 Pi（`pi` 命令可用）。下文命令均从仓库根目录运行，包目录是 `packages/pi-system-prompt/`。
 
 ---
 
 ## 1. 本地安装（开发时）
 
-Pi 安装包（package）的命令是 `pi install`。这个仓库本身就是一个 Pi 包，
-因为根目录 `package.json` 里有：
+Pi 安装包（package）的命令是 `pi install`。本仓库是 pnpm workspace；
+`packages/pi-system-prompt/package.json` 里有：
 
 ```json
 {
@@ -23,16 +22,16 @@ Pi 安装包（package）的命令是 `pi install`。这个仓库本身就是一
 }
 ```
 
-`./extensions` 里的 `system-prompt.ts` 会被 Pi 当作扩展加载。
+包目录下 `extensions/system-prompt.ts` 会被 Pi 当作扩展加载。
 
 ### 方式一：用户级（写进 `~/.pi/agent/settings.json`）
 
 ```bash
-# 绝对路径
-pi install /home/ye/code/pi-system-prompt
+# 从仓库根目录安装该子包
+pi install ./packages/pi-system-prompt
 
-# 相对路径（相对于当前目录；也可以写相对于 settings 文件所在目录）
-pi install ./path/to/pi-system-prompt
+# 或使用绝对路径
+pi install "$(pwd)/packages/pi-system-prompt"
 ```
 
 安装后，`settings.json` 的 `packages` 数组里会多一项指向本地路径，例如：
@@ -40,7 +39,7 @@ pi install ./path/to/pi-system-prompt
 ```json
 {
   "packages": [
-    "/home/ye/code/pi-system-prompt"
+    "/path/to/pi-packages/packages/pi-system-prompt"
   ]
 }
 ```
@@ -50,7 +49,7 @@ pi install ./path/to/pi-system-prompt
 如果只想在某个项目里启用：
 
 ```bash
-pi install -l /home/ye/code/pi-system-prompt
+pi install -l ./packages/pi-system-prompt
 ```
 
 `-l` 表示写入项目设置（`.pi/settings.json`）。
@@ -59,7 +58,7 @@ pi install -l /home/ye/code/pi-system-prompt
 
 本地路径（local path）与 npm / git 包不同：**Pi 直接把本地路径加进
 settings，而不会拷贝一份副本**。也就是说，Pi 加载的就是仓库里的那份源码，
-`extensions/system-prompt.ts` 改了就等于是「已安装版」改了，不需要重新拷贝。
+包目录下的 `extensions/system-prompt.ts` 改了就等于是「已安装版」改了，不需要重新拷贝。
 
 ### 安装后生效
 
@@ -91,13 +90,10 @@ pi list
 
 ### 步骤 2：改源码
 
-直接编辑仓库里的文件：
+直接编辑 `packages/pi-system-prompt/` 里的文件：
 
 - `extensions/system-prompt.ts` —— 命令逻辑。
 - `README.md` / `docs/*` —— 说明文档。
-
-例如之前修复的 `ENOENT` 问题，就是删掉了 `extensions/system-prompt.ts` 里
-写 `.pi/system-prompt.txt` 的 `writeFileSync` 调用。
 
 ### 步骤 3：让改动生效
 
@@ -124,7 +120,7 @@ pi list
 此时再执行一次 `pi install <path>`，Pi 会重新解析资源并更新 settings。
 
 ```bash
-pi install /home/ye/code/pi-system-prompt   # 刷新注册（本地路径）
+pi install ./packages/pi-system-prompt   # 刷新注册（本地路径）
 ```
 
 ---
@@ -133,11 +129,11 @@ pi install /home/ye/code/pi-system-prompt   # 刷新注册（本地路径）
 
 | 目的 | 命令 |
 |------|------|
-| 安装（用户级，绝对路径） | `pi install /home/ye/code/pi-system-prompt` |
-| 安装（项目级） | `pi install -l /home/ye/code/pi-system-prompt` |
+| 安装（用户级） | `pi install ./packages/pi-system-prompt` |
+| 安装（项目级） | `pi install -l ./packages/pi-system-prompt` |
 | 查看已装包 | `pi list` |
-| 移除 | `pi remove /home/ye/code/pi-system-prompt` |
-| 仅本轮临时生效（不写入 settings） | `pi -e /home/ye/code/pi-system-prompt` |
+| 移除 | `pi remove "$(pwd)/packages/pi-system-prompt"` |
+| 仅本轮临时生效（不写入 settings） | `pi -e ./packages/pi-system-prompt` |
 | 源码改动后让扩展生效 | 会话内 `/reload`（或重启 Pi） |
 | 注册信息需要刷新时 | 重新 `pi install <path>` |
 
@@ -151,9 +147,8 @@ A：确认是否执行了 `/reload`；另外确认 `pi list` 里注册的是本�
 需 `pi install git:...@新tag` 移动引用。
 
 **Q：本地路径改了设置文件但想让别的机器/同事共用？**
-A：本地路径是机器相关的。若要共享，把仓库推到 GitHub 后改用
-`pi install git:github.com/<你>/pi-system-prompt`，或发布成 npm 包
-`pi install npm:@you/pi-system-prompt`。
+A：本地路径是机器相关的。若要共享，可安装已发布的 npm 包：
+`pi install npm:@yesifan/pi-system-prompt`。
 
 **Q：`/reload` 后会丢失已捕获的 system prompt 吗？**
 A：会。`lastSystemPrompt` / `lastRawPayload` 是会话内变量，重载后清空。

@@ -30,15 +30,14 @@
 npm 包名必须小写，因此 scope 是 `@yesifan`。npm 账号或组织 `yesifan` 必须已经存在，并且
 执行发布的 npm 用户需要拥有该 scope 的发布权限。
 
-Trusted Publisher 通常在包已经存在后才能从包设置页配置。本仓库中的两个小写包首次发布时，
-先使用一次临时 token：
+Trusted Publisher 通常在包已经存在后才能从包设置页配置。首次发布尚未存在于 npm 的包时，先使用一次临时 token：
 
 1. 在 npm 创建具有 `@yesifan` 包 **Read and write** 权限的 granular access token；若 npm 要求，
    为自动发布启用 bypass 2FA。
 2. 在 GitHub **Settings → Secrets and variables → Actions → New repository secret** 中创建
    `NPM_TOKEN`。
-3. 合并本次功能 PR。Release workflow 会创建 `chore: release packages` PR。
-4. 审核并合并该 Release PR。工作流将用 `NPM_TOKEN` 首次发布两个包。
+3. 若功能 PR 只包含 changeset，合并后 Release workflow 会创建 `chore: release packages` PR；审核并合并它。若版本与 CHANGELOG 已在功能 PR 中更新且 changeset 已消费，合并后工作流会直接进入发布步骤。
+4. 工作流将用 `NPM_TOKEN` 首次发布尚未存在于 npm 的包。
 
 不要把 token 写入仓库文件、workflow 日志或 npm 配置文件。OIDC 配好后立即删除这个 secret。
 
@@ -48,6 +47,7 @@ Trusted Publisher 通常在包已经存在后才能从包设置页配置。本�
 
 - `@yesifan/pi-weixin-daemon`
 - `@yesifan/pi-system-prompt`
+- `@yesifan/pi-subagents`
 
 每个包填写同一组、区分大小写的值：
 
@@ -91,7 +91,9 @@ pnpm changeset
 3. 人工审核并合并 Release PR；
 4. workflow 执行 `pnpm check`、`pnpm test:ci`、`pnpm build`；
 5. 仅发布版本尚未出现在 npm 的 package；
-6. 创建形如 `@yesifan/pi-system-prompt@0.2.0` 的 tag 和 GitHub Release。
+6. 创建形如 `@yesifan/pi-system-prompt@0.1.1` 的 tag 和 GitHub Release。
+
+如果在功能 PR 中直接更新所有受影响包的版本与 CHANGELOG（BREAKING 变更按 minor 升级），应同时移除已包含在本次版本中的 pending changeset，避免下次重复升级。此时合并到 `main` 后将直接触发发布，**不会另建 Release PR**；合并前务必审核版本、锁文件和发布内容。
 
 本地可预检发布内容：
 

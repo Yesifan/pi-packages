@@ -4,7 +4,7 @@
 **状态：** v1 实现基线（已合并 session-local delegation、project-local storage 与原生进度 widget 决策）
 **目标包名：** `@yesifan/pi-subagents`
 **目标宿主：** Pi CLI / TUI  
-**当前 SDK 验证基线：** `pnpm-workspace.yaml` catalog 锁定的 Pi SDK（目前 0.87.1；文末 P1–P9 为最初 0.85.1 设计依据）
+**当前 SDK 验证基线：** Pi SDK 0.87.1（源码工作区的 `pnpm-workspace.yaml` catalog 锁定此版本；文末 P1–P9 为最初 0.85.1 设计依据）
 **实现语言：** TypeScript，ES modules  
 **用途：** 交给 coding agent 完成 package、测试、示例和使用文档。
 
@@ -792,7 +792,7 @@ interface SubagentReport {
 ```ts
 pi.sendMessage(
   {
-    customType: "bykwp-subagent-report",
+    customType: "subagent-report",
     content: formatReport(report, remainingDelegationStatus),
     display: true,
     details: { ...report, delegation_status: remainingDelegationStatus },

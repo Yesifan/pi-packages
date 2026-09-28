@@ -1,6 +1,6 @@
 {
   "name": "@yesifan/pi-weixin-daemon",
-  "version": "0.6.11",
+  "version": "0.6.12",
   "description": "Connect Weixin iLink Bot with Pi Coding Agent",
   "type": "module",
   "engines": {
@@ -22,6 +22,7 @@
     "dev": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:ci": "vitest run --exclude 'test/integration/bridge-real.test.ts' --exclude 'test/integration/ui-real.test.ts' --exclude 'test/integration/pi-runtime.test.ts' --exclude 'test/integration/runtime-extension.test.ts'",
     "test:watch": "vitest"
   },
   "dependencies": {

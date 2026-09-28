@@ -50,8 +50,8 @@
 > ⚠️ 推荐 11.x：pnpm 12 对 `install -g <本地路径/tarball>` 有回归（会把本地路径误当 registry 包名，报 `@scope` 错）。
 
 ```bash
-git clone <repo> && cd pi-weixin-daemon
-pnpm install        # 安装依赖并自动构建 dist
+git clone <repo> && cd pi-packages
+pnpm install        # 安装 workspace 依赖并自动构建 dist
 ```
 
 把 pnpm 全局 bin 目录加到 PATH（`pnpm config get global-bin-dir`，通常 `~/.local/share/pnpm/bin`）。
@@ -59,8 +59,8 @@ pnpm install        # 安装依赖并自动构建 dist
 ### 开发时全局安装（推荐）
 
 ```bash
-pnpm install -g ./            # 跟随仓库构建
-pnpm build && pnpm install -g ./   # 改源码后更新
+pnpm install -g ./packages/pi-weixin-daemon  # 跟随仓库构建
+pnpm --filter @yesifan/pi-weixin-daemon build && pnpm install -g ./packages/pi-weixin-daemon  # 改源码后更新
 ```
 
 `pi-wx` 指向仓库里的 `dist/index.js`（依赖走仓库 `node_modules`）。
@@ -68,10 +68,11 @@ pnpm build && pnpm install -g ./   # 改源码后更新
 ### 自包含（发布/独立安装）
 
 ```bash
-pnpm build
-pnpm pack --pack-destination release   # 产物集中放 release/
-pnpm install -g ./release/pi-weixin-daemon-*.tgz
-# 更新：重跑 pnpm build && pnpm pack --pack-destination release && pnpm install -g ./release/pi-weixin-daemon-*.tgz
+pnpm --filter @yesifan/pi-weixin-daemon build
+mkdir -p release
+pnpm --filter @yesifan/pi-weixin-daemon pack --pack-destination "$PWD/release"
+pnpm install -g ./release/yesifan-pi-weixin-daemon-*.tgz
+# 更新：重跑 build、pack 和 install -g
 ```
 
 tarball 自带 dist 与依赖（在全局 store），安装后**不依赖 repo 目录**。
@@ -80,7 +81,7 @@ tarball 自带 dist 与依赖（在全局 store），安装后**不依赖 repo �
 
 ### npm 等价用法
 
-把 `pnpm` 换成 `npm`（npm 全局 bin 目录：`$(npm config get prefix)/bin`），`npm pack --pack-destination release` 与 `pnpm install -g` 分别对应 npm 的 `npm install -g`。
+npm 全局 bin 目录为 `$(npm config get prefix)/bin`。从仓库根目录可运行 `npm pack ./packages/pi-weixin-daemon --pack-destination release`，再用 `npm install -g ./release/yesifan-pi-weixin-daemon-*.tgz` 安装；开发及构建仍按本仓库 pnpm workspace 命令执行。
 
 ## 使用
 
