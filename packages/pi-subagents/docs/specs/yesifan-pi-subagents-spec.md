@@ -803,7 +803,7 @@ pi.sendMessage(
 
 向内存中的 B 使用相应 AgentSession custom-message API，并保持相同业务语义。
 
-Pi 0.85.1 的 custom-message 实现负责运行中入队、空闲时按 `triggerTurn` 开始处理；不需要自己等 parent settled 才投递。[P3] 模型可见 report 与 `details` 必须使用同一个完成后快照，列出 direct logical subagents 的状态（包括刚完成报告的 child）、剩余 active direct subagents 和共享 live usage；没有任何 direct child 时显示 `none`。每条模型可见 report 还应提示直接 parent：如需同领域后续任务，可用 `ask_subagent` 和该 report 的 agent ID 再次委派给同一个 logical subagent。
+Pi 0.85.1 的 custom-message 实现负责运行中入队、空闲时按 `triggerTurn` 开始处理；不需要自己等 parent settled 才投递。[P3] 模型可见 report 与 `details` 必须使用同一个完成后快照，列出 direct logical subagents 的状态（包括刚完成报告的 child）、剩余 active direct subagents 和共享 live usage；没有任何 direct child 时显示 `none`。每条模型可见 report 还应提示直接 parent：如需相关后续任务，可用 `ask_subagent` 委派给上述任意空闲的 direct logical subagent；提示本身不重复或指定具体 agent ID。
 
 steer 不代表强行终止当前 Bash 或撤销已发生的工具副作用。不要调用裸 `session.steer(text)` 后假定 idle parent 会自动启动；必须使用具备 idle trigger 语义的消息路径。
 
