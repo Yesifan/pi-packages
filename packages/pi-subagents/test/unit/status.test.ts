@@ -90,21 +90,23 @@ describe("delegation status", () => {
     );
   });
 
-  it("keeps interrupted and hidden completed agents in the summary counts", () => {
+  it("lists all direct subagents, including a reporting agent beyond the old limit", () => {
     const direct = Array.from({ length: 12 }, (_, index) => ({
       id: `sa_${index}`,
       name: `worker-${index}`,
       state: index === 11 ? ("interrupted" as const) : ("done" as const),
     }));
     const snapshot = createDelegationStatusSnapshot([], 0, 8, direct);
-    expect(snapshot.directSubagents).toHaveLength(10);
-    expect(formatDelegationStatus(snapshot)).toContain(
-      "**0 running, 11 done, 1 interrupted; shared usage: 0/8.**",
-    );
-    expect(formatDelegationStatus(snapshot)).toContain("- …and 2 more");
+    expect(snapshot.directSubagents).toHaveLength(12);
+    const formatted = formatDelegationStatus(snapshot);
+    expect(formatted).toContain("**0 running, 11 done, 1 interrupted; shared usage: 0/8.**");
+    for (const { id, name, state } of direct) {
+      expect(formatted).toContain(`- ${name} (\`${id}\`): ${state}`);
+    }
+    expect(formatted).not.toContain("…and");
   });
 
-  it("bounds and single-lines model-visible names", () => {
+  it("shows every active subagent while compacting model-visible names", () => {
     const activeDirectSubagents = Array.from({ length: 12 }, (_, index) => ({
       id: `sa_${index}`,
       name: index === 0 ? `worker\n${"x".repeat(100)}` : `worker-${index}`,
@@ -113,13 +115,14 @@ describe("delegation status", () => {
     const formatted = formatDelegationStatus(snapshot);
 
     expect(snapshot.activeDirectSubagentCount).toBe(12);
-    expect(snapshot.activeDirectSubagents).toHaveLength(10);
+    expect(snapshot.activeDirectSubagents).toHaveLength(12);
     expect(snapshot.activeDirectSubagents[0]?.name).not.toContain("\n");
     expect(snapshot.activeDirectSubagents[0]?.name.length).toBeLessThanOrEqual(80);
     expect(formatted).not.toContain("worker\n");
     expect(formatted).toContain("worker x");
-    expect(formatted).toContain("…and 2 more");
-    expect(formatted).not.toContain("worker-10");
+    expect(formatted).toContain("worker-10");
+    expect(formatted).toContain("worker-11");
+    expect(formatted).not.toContain("…and");
     expect(formatted).toContain("shared usage: 12/20.");
   });
 });
