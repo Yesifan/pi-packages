@@ -9,18 +9,18 @@ import { Type } from "typebox";
 import { formatSubagentToolDescription } from "./delegation.js";
 import { errorToolResult } from "./errors.js";
 import { formatDelegationStatus } from "./status.js";
-import type {
-  AcceptedResult,
-  CallerBinding,
-  DelegationStatusSnapshot,
-  ErrorResult,
-  ThinkingLevel,
+import {
+  type AcceptedResult,
+  type CallerBinding,
+  type DelegationStatusSnapshot,
+  type ErrorResult,
+  SUBAGENT_THINKING_LEVELS,
+  type SubagentThinkingLevel,
 } from "./types.js";
 
-const thinkingSchema = StringEnum(
-  ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const,
-  { description: "Thinking level for this subagent." },
-);
+const thinkingSchema = StringEnum(SUBAGENT_THINKING_LEVELS, {
+  description: "Thinking level for this subagent.",
+});
 
 const subagentParameters = Type.Object({
   name: Type.String({ minLength: 1, description: "Display name for the subagent." }),
@@ -61,7 +61,7 @@ export interface DelegationRuntimeApi {
       name: string;
       prompt: string;
       agent_type?: string;
-      thinking?: ThinkingLevel;
+      thinking?: SubagentThinkingLevel;
       cwd?: string;
     },
     ctx: ExtensionContext,
@@ -85,7 +85,7 @@ function statusContent(status: DelegationStatusSnapshot): Array<{
 }
 
 function completionGuidance(): string {
-  return "Its report will arrive automatically. Do not poll, redo, or re-delegate its task. Until all relevant reports arrive, give only a brief progress update that identifies the active subagents, then end your turn.";
+  return "Its report will arrive automatically. Do not poll, redo, or re-delegate its task. To adjust the direction of an actively streaming run or add new context, use ask_subagent with its id and isSteer: true; this steers the same run and does not create a separate report. Until all relevant reports arrive, give only a brief progress update that identifies the active subagents, then end your turn.";
 }
 
 export function createDelegationExtension(

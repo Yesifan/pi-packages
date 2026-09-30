@@ -5,6 +5,17 @@ export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhig
 
 export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
 
+/**
+ * Thinking levels accepted from users: the `subagent` tool parameter and
+ * `agents/*.md` frontmatter.
+ *
+ * Stored role snapshots and inherited parent thinking may still carry any
+ * `ThinkingLevel`, so restoring existing subagents needs no migration.
+ */
+export const SUBAGENT_THINKING_LEVELS = ["off", "low", "medium", "high", "max"] as const;
+
+export type SubagentThinkingLevel = (typeof SUBAGENT_THINKING_LEVELS)[number];
+
 export interface AgentDefinitionSnapshot {
   id: string;
   description?: string;
@@ -102,6 +113,9 @@ export interface ActiveSubagentSummary {
 export interface DelegationStatusSnapshot {
   activeDirectSubagents: ActiveSubagentSummary[];
   activeDirectSubagentCount: number;
+  directSubagents: Array<ActiveSubagentSummary & { state: "running" | "done" | "interrupted" }>;
+  directSubagentCount: number;
+  interruptedDirectSubagentCount: number;
   liveAgents: number;
   maxLiveAgents: number;
 }

@@ -27,7 +27,7 @@ import {
   createSubagentProgressState,
 } from "./progress.js";
 import { initializeProjectSubagents } from "./project-storage.js";
-import { createDelegationStatusSnapshot, formatDelegationStatus } from "./status.js";
+import { createDelegationStatusSnapshot, formatSubagentReport } from "./status.js";
 import { PersistentSubagentStore } from "./store.js";
 import type { DelegationRuntimeApi } from "./tools.js";
 import type {
@@ -41,6 +41,7 @@ import type {
   StoredSubagent,
   SubagentReport,
   SubagentsConfig,
+  SubagentThinkingLevel,
   ThinkingLevel,
 } from "./types.js";
 import { RootUiBroker } from "./ui.js";
@@ -101,12 +102,6 @@ function deliveredReport(
   status: DelegationStatusSnapshot,
 ): DeliveredSubagentReport {
   return { ...report, delegation_status: status };
-}
-
-function formatReport(report: SubagentReport, status: DelegationStatusSnapshot): string {
-  const heading = `[Subagent ${report.name} (${report.agentId}) ${report.outcome}]`;
-  const error = report.error ? `\n${report.error.code}: ${report.error.message}` : "";
-  return `${heading}\ncwd: ${report.cwd}${error}\n\n${report.result}\n\n${formatDelegationStatus(status)}`;
 }
 
 export class RootRuntime implements DelegationRuntimeApi {
@@ -172,7 +167,7 @@ export class RootRuntime implements DelegationRuntimeApi {
       name: string;
       prompt: string;
       agent_type?: string;
-      thinking?: ThinkingLevel;
+      thinking?: SubagentThinkingLevel;
       cwd?: string;
     },
     ctx: ExtensionContext,
@@ -411,7 +406,6 @@ export class RootRuntime implements DelegationRuntimeApi {
     this.runs.set(run.id, run);
     stored.activeRunId = run.id;
     stored.lastRunId = run.id;
-    stored.interrupted = false;
     stored.updatedAt = now();
     try {
       await this.store.saveRun(run);
@@ -457,6 +451,7 @@ export class RootRuntime implements DelegationRuntimeApi {
           }
           run.state = "accepted";
           run.acceptedAt = now();
+          stored.interrupted = false;
           this.store.commitAcceptedRun(run);
           live.accepted = true;
           acceptedStatus = this.delegationStatusFor(stored.parentAgentId);
@@ -702,7 +697,7 @@ export class RootRuntime implements DelegationRuntimeApi {
       .sendCustomMessage(
         {
           customType: "subagent-report",
-          content: formatReport(report, status),
+          content: formatSubagentReport(report, status),
           display: true,
           details: deliveredReport(report, status),
         },
@@ -743,7 +738,7 @@ export class RootRuntime implements DelegationRuntimeApi {
     const delivery = parent.session.sendCustomMessage(
       {
         customType: "subagent-report",
-        content: formatReport(report, status),
+        content: formatSubagentReport(report, status),
         display: true,
         details: deliveredReport(report, status),
       },
@@ -828,10 +823,23 @@ export class RootRuntime implements DelegationRuntimeApi {
     const activeDirectSubagents = liveAgents
       .filter((live) => live.parentAgentId === parentAgentId)
       .map(({ id: agentId, name }) => ({ id: agentId, name }));
+    const directSubagents = [
+      ...liveAgents
+        .filter((live) => live.parentAgentId === parentAgentId)
+        .map(({ id, name }) => ({ id, name, state: "running" as const })),
+      ...[...this.agents.values()]
+        .filter((agent) => agent.parentAgentId === parentAgentId && !this.live.has(agent.id))
+        .map(({ id, name, interrupted }) => ({
+          id,
+          name,
+          state: interrupted ? ("interrupted" as const) : ("done" as const),
+        })),
+    ];
     return createDelegationStatusSnapshot(
       activeDirectSubagents,
       liveAgents.length,
       this.rootConfig.maxLiveAgents,
+      directSubagents,
     );
   }
 
@@ -1018,7 +1026,7 @@ export class RootRuntime implements DelegationRuntimeApi {
       const stored = this.agents.get(live.id);
       const interruptedAt = now();
       const run = this.runs.get(live.runId);
-      if (run && !run.completedAt) {
+      if (run && run.state !== "opening" && !run.completedAt) {
         run.state = "completed";
         run.completedAt = interruptedAt;
         run.outcome = "interrupted";
@@ -1029,7 +1037,7 @@ export class RootRuntime implements DelegationRuntimeApi {
         };
         await this.store.saveRun(run).catch((error) => this.notifyRuntimeError(error));
       }
-      if (stored?.activeRunId) {
+      if (stored?.activeRunId && run?.state !== "opening") {
         stored.activeRunId = undefined;
         stored.interrupted = true;
         stored.updatedAt = interruptedAt;

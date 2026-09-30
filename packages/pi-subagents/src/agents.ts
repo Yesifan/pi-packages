@@ -8,8 +8,8 @@ import { SubagentError } from "./errors.js";
 import {
   type AgentDefinitionSnapshot,
   type AgentTypeRegistry,
-  THINKING_LEVELS,
-  type ThinkingLevel,
+  SUBAGENT_THINKING_LEVELS,
+  type SubagentThinkingLevel,
 } from "./types.js";
 
 const AGENT_ID = /^[a-z][a-z0-9-]{0,63}$/;
@@ -71,18 +71,18 @@ function parseDefinition(id: string, source: string, content: string): AgentDefi
     }
     tools = [...new Set(frontmatter.tools as string[])];
   }
-  let thinking: ThinkingLevel | undefined;
+  let thinking: SubagentThinkingLevel | undefined;
   if (frontmatter.thinking !== undefined) {
     if (
       typeof frontmatter.thinking !== "string" ||
-      !THINKING_LEVELS.includes(frontmatter.thinking as ThinkingLevel)
+      !SUBAGENT_THINKING_LEVELS.includes(frontmatter.thinking as SubagentThinkingLevel)
     ) {
       throw new SubagentError(
         "INVALID_AGENT_DEFINITION",
-        `Invalid thinking level '${String(frontmatter.thinking)}' in ${source}`,
+        `Invalid thinking level '${String(frontmatter.thinking)}' in ${source}; allowed values: ${SUBAGENT_THINKING_LEVELS.join(", ")}`,
       );
     }
-    thinking = frontmatter.thinking as ThinkingLevel;
+    thinking = frontmatter.thinking as SubagentThinkingLevel;
   }
   const normalized = {
     id,

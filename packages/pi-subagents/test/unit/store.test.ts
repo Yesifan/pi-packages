@@ -90,67 +90,70 @@ describe("PersistentSubagentStore", () => {
     ).toBe(true);
   });
 
-  it("discards a prepared run that Pi never accepted", async () => {
-    const project = await temporaryProject();
-    const storage = await initializeProjectSubagents(project);
-    const rootSessionFile = path.join(project, "root.jsonl");
-    const store = new PersistentSubagentStore(
-      project,
-      storage.directory,
-      "root-id",
-      rootSessionFile,
-    );
-    await store.open();
-    await store.prepareAgent("sa_test");
-    const timestamp = new Date().toISOString();
-    const agent = {
-      schemaVersion: 2,
-      id: "sa_test",
-      rootSessionId: "root-id",
-      parentAgentId: null,
-      name: "test",
-      cwd: project,
-      ancestorCwds: [project],
-      agentType: "general",
-      agentDefinitionSnapshot: {
-        id: "general",
-        prompt: "snapshot",
-        source: "/agents/general.md",
-        contentHash: "hash",
-      },
-      depth: 1,
-      model: { provider: "test", id: "model" },
-      thinking: "off",
-      sessionId: "session",
-      sessionPath: "agents/sa_test/sessions/child.jsonl",
-      lastRunId: "run_test",
-      activeRunId: "run_test",
-      interrupted: false,
-      createdAt: timestamp,
-      updatedAt: timestamp,
-    } satisfies StoredSubagent;
-    const run = {
-      id: "run_test",
-      agentId: agent.id,
-      parentRunId: null,
-      state: "opening",
-    } satisfies StoredRun;
-    await store.saveRun(run);
-    await store.saveAgent(agent);
-    await store.close();
+  it.each([false, true])(
+    "discards an unaccepted run while preserving prior interrupted=%s",
+    async (interrupted) => {
+      const project = await temporaryProject();
+      const storage = await initializeProjectSubagents(project);
+      const rootSessionFile = path.join(project, "root.jsonl");
+      const store = new PersistentSubagentStore(
+        project,
+        storage.directory,
+        "root-id",
+        rootSessionFile,
+      );
+      await store.open();
+      await store.prepareAgent("sa_test");
+      const timestamp = new Date().toISOString();
+      const agent = {
+        schemaVersion: 2,
+        id: "sa_test",
+        rootSessionId: "root-id",
+        parentAgentId: null,
+        name: "test",
+        cwd: project,
+        ancestorCwds: [project],
+        agentType: "general",
+        agentDefinitionSnapshot: {
+          id: "general",
+          prompt: "snapshot",
+          source: "/agents/general.md",
+          contentHash: "hash",
+        },
+        depth: 1,
+        model: { provider: "test", id: "model" },
+        thinking: "off",
+        sessionId: "session",
+        sessionPath: "agents/sa_test/sessions/child.jsonl",
+        lastRunId: "run_test",
+        activeRunId: "run_test",
+        interrupted,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      } satisfies StoredSubagent;
+      const run = {
+        id: "run_test",
+        agentId: agent.id,
+        parentRunId: null,
+        state: "opening",
+      } satisfies StoredRun;
+      await store.saveRun(run);
+      await store.saveAgent(agent);
+      await store.close();
 
-    const reopened = new PersistentSubagentStore(
-      project,
-      storage.directory,
-      "root-id",
-      rootSessionFile,
-    );
-    await expect(reopened.open()).resolves.toMatchObject([{ id: agent.id, interrupted: false }]);
-    await expect(reopened.readRun(agent.id, run.id)).rejects.toMatchObject({
-      code: "STORE_ERROR",
-    });
-    await reopened.close();
-  });
+      const reopened = new PersistentSubagentStore(
+        project,
+        storage.directory,
+        "root-id",
+        rootSessionFile,
+      );
+      await expect(reopened.open()).resolves.toMatchObject([{ id: agent.id, interrupted }]);
+      await expect(reopened.readRun(agent.id, run.id)).rejects.toMatchObject({
+        code: "STORE_ERROR",
+      });
+      await reopened.close();
+    },
+  );
 
   it("rejects escaped and absolute child session paths", async () => {
     const project = await temporaryProject();

@@ -26,6 +26,12 @@ const delegationStatus: DelegationStatusSnapshot = {
     { id: "sa_scout", name: "scout" },
   ],
   activeDirectSubagentCount: 2,
+  directSubagents: [
+    { id: "sa_test", name: "worker", state: "running" },
+    { id: "sa_scout", name: "scout", state: "running" },
+  ],
+  directSubagentCount: 2,
+  interruptedDirectSubagentCount: 0,
   liveAgents: 3,
   maxLiveAgents: 8,
 };
@@ -54,11 +60,24 @@ function registerTools(runtime: DelegationRuntimeApi): ToolDefinition[] {
 }
 
 function statusText(): string {
-  return "Active direct subagents (2): worker (sa_test), scout (sa_scout).\nShared live usage: 3/8.";
+  return "**2 running, 0 done; shared usage: 3/8.**\n- worker (`sa_test`): running\n- scout (`sa_scout`): running";
 }
 
 describe("delegation tool results", () => {
-  it("reports asynchronous startup, completion discipline, and current status", async () => {
+  it("exposes only the reduced thinking levels on the subagent tool", () => {
+    const runtime: DelegationRuntimeApi = {
+      getMaxLiveAgents: () => 8,
+      createSubagent: vi.fn(),
+      askSubagent: vi.fn(),
+    };
+    const tool = registerTools(runtime).find(({ name }) => name === "subagent");
+    const properties = (tool?.parameters as { properties?: Record<string, { enum?: string[] }> })
+      ?.properties;
+
+    expect(properties?.thinking?.enum).toEqual(["off", "low", "medium", "high", "max"]);
+  });
+
+  it("reports asynchronous startup, completion discipline, and steering guidance", async () => {
     const getMaxLiveAgents = vi.fn(() => 8);
     const runtime: DelegationRuntimeApi = {
       getMaxLiveAgents,
@@ -83,7 +102,7 @@ describe("delegation tool results", () => {
       },
       {
         type: "text",
-        text: "Its report will arrive automatically. Do not poll, redo, or re-delegate its task. Until all relevant reports arrive, give only a brief progress update that identifies the active subagents, then end your turn.",
+        text: "Its report will arrive automatically. Do not poll, redo, or re-delegate its task. To adjust the direction of an actively streaming run or add new context, use ask_subagent with its id and isSteer: true; this steers the same run and does not create a separate report. Until all relevant reports arrive, give only a brief progress update that identifies the active subagents, then end your turn.",
       },
       { type: "text", text: statusText() },
     ]);
@@ -98,12 +117,14 @@ describe("delegation tool results", () => {
     {
       status: "started" as const,
       firstLine: "Started background subagent worker (sa_test).",
+      isSteer: false,
     },
     {
       status: "steered" as const,
       firstLine: "Steered background subagent worker (sa_test).",
+      isSteer: true,
     },
-  ])("returns status after an ask is $status", async ({ status, firstLine }) => {
+  ])("returns status after an ask is $status", async ({ status, firstLine, isSteer }) => {
     const runtime: DelegationRuntimeApi = {
       getMaxLiveAgents: () => 8,
       createSubagent: vi.fn(),
@@ -113,17 +134,23 @@ describe("delegation tool results", () => {
 
     const result = await tool?.execute(
       "call",
-      { id: "sa_test", prompt: "Continue" },
+      { id: "sa_test", prompt: "Continue", isSteer },
       undefined,
       undefined,
       {} as ExtensionContext,
     );
 
+    expect(runtime.askSubagent).toHaveBeenCalledWith(
+      caller,
+      { id: "sa_test", prompt: "Continue", isSteer },
+      expect.anything(),
+      undefined,
+    );
     expect(result?.content).toEqual([
       { type: "text", text: firstLine },
       {
         type: "text",
-        text: "Its report will arrive automatically. Do not poll, redo, or re-delegate its task. Until all relevant reports arrive, give only a brief progress update that identifies the active subagents, then end your turn.",
+        text: "Its report will arrive automatically. Do not poll, redo, or re-delegate its task. To adjust the direction of an actively streaming run or add new context, use ask_subagent with its id and isSteer: true; this steers the same run and does not create a separate report. Until all relevant reports arrive, give only a brief progress update that identifies the active subagents, then end your turn.",
       },
       { type: "text", text: statusText() },
     ]);
