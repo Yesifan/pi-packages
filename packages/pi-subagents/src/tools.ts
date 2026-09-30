@@ -85,7 +85,7 @@ function statusContent(status: DelegationStatusSnapshot): Array<{
 }
 
 function completionGuidance(): string {
-  return "Its report will arrive automatically. Do not poll, redo, or re-delegate its task. Until all relevant reports arrive, give only a brief progress update that identifies the active subagents, then end your turn.";
+  return "Its report will arrive automatically. Do not poll, redo, or re-delegate its task. To adjust the direction of an actively streaming run or add new context, use ask_subagent with its id and isSteer: true; this steers the same run and does not create a separate report. Until all relevant reports arrive, give only a brief progress update that identifies the active subagents, then end your turn.";
 }
 
 export function createDelegationExtension(

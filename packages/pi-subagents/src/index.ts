@@ -5,7 +5,7 @@ import { buildDelegationContext } from "./delegation.js";
 import { asSubagentError, SubagentError } from "./errors.js";
 import { canonicalizeDirectory, findProjectRoot } from "./paths.js";
 import { RootRuntime } from "./runtime.js";
-import { formatDelegationStatus } from "./status.js";
+import { formatSubagentReport } from "./status.js";
 import { createDelegationExtension, type DelegationRuntimeApi } from "./tools.js";
 import type {
   CallerBinding,
@@ -124,7 +124,7 @@ export default function piSubagents(pi: ExtensionAPI): void {
             pi.sendMessage(
               {
                 customType: "subagent-report",
-                content: formatRootReport(report, status),
+                content: formatSubagentReport(report, status),
                 display: true,
                 details: deliveredReport(report, status),
               },
@@ -151,16 +151,6 @@ function deliveredReport(
   status: DelegationStatusSnapshot,
 ): DeliveredSubagentReport {
   return { ...report, delegation_status: status };
-}
-
-function formatRootReport(report: SubagentReport, status: DelegationStatusSnapshot): string {
-  const error = report.error ? `\n${report.error.code}: ${report.error.message}` : "";
-  return `[Subagent ${report.name} (${report.agentId}) ${report.outcome}]
-cwd: ${report.cwd}${error}
-
-${report.result}
-
-${formatDelegationStatus(status)}`;
 }
 
 export type { ExtensionContext };

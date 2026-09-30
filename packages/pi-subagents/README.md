@@ -46,7 +46,7 @@ To steer an actively streaming run without creating a new run:
 { "id": "sa_...", "prompt": "Focus on the authorization boundary.", "isSteer": true }
 ```
 
-Steering returns the current run ID with `status: "steered"`. It does not create a separate report. Idle, released, finalizing, or waiting-for-children agents are not steerable.
+Steering can adjust the direction of an actively streaming run or add new context. Both `subagent` and `ask_subagent` tool results remind the caller of this option. Steering returns the current run ID with `status: "steered"`. It does not create a separate report. Idle, released, finalizing, or waiting-for-children agents are not steerable.
 
 ## Agent types
 
@@ -119,8 +119,8 @@ The generated local `.gitignore` ignores `/sessions/`. Existing ignore files are
 ## Background lifecycle
 
 - Final responses are reported automatically to the direct parent as Pi custom messages (`customType: "subagent-report"`). Older histories may contain `bykwp-subagent-report` messages; the extension does not rewrite them.
-- Tool results show the caller's active direct subagents and current shared live usage. `SUBAGENT_BUSY` and `LIVE_AGENT_LIMIT` results include the same snapshot.
-- Automatic reports show the remaining active direct subagents. While relevant reports are pending, the caller is instructed to provide only a brief progress update and defer its final answer.
+- Tool results list the caller's direct subagents as running, done, or interrupted, alongside current shared live usage. `SUBAGENT_BUSY` and `LIVE_AGENT_LIMIT` results include the same snapshot. Lists are bounded to 10 entries, with an omitted count when longer.
+- Automatic reports show the direct parent's subagent statuses (including the reporting agent as done) and remind the direct parent that it can use `ask_subagent` with the reporting agent's ID for related follow-up work. While relevant reports are pending, the caller is instructed to provide only a brief progress update and defer its final answer.
 - An idle parent waiting for children remains loaded; it is not cold-released.
 - Stopping only the root model response does not stop accepted background work.
 - Quitting, replacing, forking, or reloading the root session aborts active descendants, cancels proxied UI, and disposes child SDK sessions.

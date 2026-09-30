@@ -181,7 +181,6 @@ export class PersistentSubagentStore {
             if (run.state === "opening") {
               await this.deleteRun(agent.id, run.id);
               if (agent.lastRunId === run.id) agent.lastRunId = undefined;
-              agent.interrupted = false;
             } else {
               if (!run.completedAt) {
                 run.state = "completed";

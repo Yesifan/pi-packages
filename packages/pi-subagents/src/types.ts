@@ -102,6 +102,9 @@ export interface ActiveSubagentSummary {
 export interface DelegationStatusSnapshot {
   activeDirectSubagents: ActiveSubagentSummary[];
   activeDirectSubagentCount: number;
+  directSubagents: Array<ActiveSubagentSummary & { state: "running" | "done" | "interrupted" }>;
+  directSubagentCount: number;
+  interruptedDirectSubagentCount: number;
   liveAgents: number;
   maxLiveAgents: number;
 }

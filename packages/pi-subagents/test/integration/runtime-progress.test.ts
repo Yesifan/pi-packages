@@ -223,6 +223,12 @@ describe("runtime progress widget", () => {
       expect(reportStatuses[0]).toEqual({
         activeDirectSubagents: [{ id: expect.any(String), name: "reviewer" }],
         activeDirectSubagentCount: 1,
+        directSubagents: [
+          { id: expect.any(String), name: "reviewer", state: "running" },
+          { id: expect.any(String), name: "worker", state: "done" },
+        ],
+        directSubagentCount: 2,
+        interruptedDirectSubagentCount: 0,
         liveAgents: 1,
         maxLiveAgents: 8,
       });
@@ -235,6 +241,12 @@ describe("runtime progress widget", () => {
       expect(reportStatuses[1]).toEqual({
         activeDirectSubagents: [],
         activeDirectSubagentCount: 0,
+        directSubagents: [
+          { id: expect.any(String), name: "worker", state: "done" },
+          { id: expect.any(String), name: "reviewer", state: "done" },
+        ],
+        directSubagentCount: 2,
+        interruptedDirectSubagentCount: 0,
         liveAgents: 0,
         maxLiveAgents: 8,
       });
@@ -275,17 +287,26 @@ describe("runtime progress widget", () => {
     });
     const nestedMessage = children[2]!.customMessages[0]!;
     expect(nestedMessage.customType).toBe("subagent-report");
+    expect(nestedMessage.content).toContain("**1 running, 1 done; shared usage: 3/8.**");
     expect(nestedMessage.content).toContain(
-      `Active direct subagents (1): nested-reviewer (${nestedReviewer.id}).`,
+      `- nested-reviewer (\`${nestedReviewer.id}\`): running`,
     );
-    expect(nestedMessage.content).toContain("Shared live usage: 3/8.");
-    expect(nestedMessage.content).not.toContain(`root-sibling (${sibling.id})`);
+    expect(nestedMessage.content).toContain(`- nested-worker (\`${nestedWorker.id}\`): done`);
+    expect(nestedMessage.content).toContain(
+      `use \`ask_subagent\` with ID \`${nestedWorker.id}\` to ask this same subagent again`,
+    );
+    expect(nestedMessage.content).not.toContain(sibling.id);
     expect(nestedMessage.content).not.toContain(nestedWorker.run_id);
     expect(nestedMessage.details).toMatchObject({
       runId: nestedWorker.run_id,
       delegation_status: {
         activeDirectSubagents: [{ id: nestedReviewer.id, name: "nested-reviewer" }],
         activeDirectSubagentCount: 1,
+        directSubagents: [
+          { id: nestedReviewer.id, name: "nested-reviewer", state: "running" },
+          { id: nestedWorker.id, name: "nested-worker", state: "done" },
+        ],
+        directSubagentCount: 2,
         liveAgents: 3,
         maxLiveAgents: 8,
       },

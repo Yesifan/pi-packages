@@ -232,9 +232,9 @@ interface AcceptedResult {
 }
 ```
 
-必须包装成普通 Pi tool result：`content` 提供可读的启动结果，`details` 保存结构化数据。不能只把返回 ID 写在 UI 通知中。模型可见的启动文案保留 logical subagent ID，但无需显示 run ID；`details.run_id`、持久化记录和 report envelope 仍保留 run identity。
+必须包装成普通 Pi tool result：`content` 提供可读的启动结果，`details` 保存结构化数据。不能只把返回 ID 写在 UI 通知中。模型可见的启动文案保留 logical subagent ID，但无需显示 run ID；`details.run_id`、持久化记录和 report envelope 仍保留 run identity。`subagent` 和 `ask_subagent` 的成功工具结果应提示：如需在当前仍 streaming 的 run 中调整方向或补充上下文，可用同一 ID 调用 `ask_subagent` 并设 `isSteer: true`；这不是新 delegation，也不产生单独报告。仍须遵守 pending report 期间不轮询、不重复委派、暂缓最终答复的指引。
 
-成功的 `subagent`、普通 ask 和 steering 结果必须携带在接受线性化点捕获的 delegation status：调用者当前的 active direct subagents，以及全树共享的 `live/max_live_agents` 快照。列表只包含 direct children，名称必须单行化、截断且整体有界；不暴露其他 parent 的 child。该快照属于 tool result，不得通过重新注册 tool description 来更新。
+成功的 `subagent`、普通 ask 和 steering 结果必须携带在接受线性化点捕获的 delegation status：调用者当前的 active direct subagents，以及全树共享的 `live/max_live_agents` 快照。列表只包含 direct children，名称必须单行化、截断且整体有界；不暴露其他 parent 的 child。快照另含调用方全部 direct logical subagent 的有界状态列表及总数（running / done / interrupted）；running 包括 opening、executing 和等待子任务的实例，done 表示已结束且可再次 ask，interrupted 表示上次 run 中断。报告文本以 Markdown 展示运行中/已结束数量、共享 live usage 与各项状态；超过 10 项须标记省略数量。该快照属于 tool result，不得通过重新注册 tool description 来更新。
 
 “后台”表示不等待模型完成任务。工具允许等待参数校验、项目准入、必要资源加载和 session 初始化。只有确定该请求已被接受后才返回成功。返回前失败应返回工具错误；接受后发生的执行失败通过自动报告交回 parent。
 
@@ -803,7 +803,7 @@ pi.sendMessage(
 
 向内存中的 B 使用相应 AgentSession custom-message API，并保持相同业务语义。
 
-Pi 0.85.1 的 custom-message 实现负责运行中入队、空闲时按 `triggerTurn` 开始处理；不需要自己等 parent settled 才投递。[P3] 模型可见 report 与 `details` 必须使用同一个完成后快照，列出剩余 active direct subagents 和共享 live usage；最后一个 direct child 完成时明确显示 `none`。
+Pi 0.85.1 的 custom-message 实现负责运行中入队、空闲时按 `triggerTurn` 开始处理；不需要自己等 parent settled 才投递。[P3] 模型可见 report 与 `details` 必须使用同一个完成后快照，列出 direct logical subagents 的状态（包括刚完成报告的 child）、剩余 active direct subagents 和共享 live usage；没有任何 direct child 时显示 `none`。每条模型可见 report 还应提示直接 parent：如需同领域后续任务，可用 `ask_subagent` 和该 report 的 agent ID 再次委派给同一个 logical subagent。
 
 steer 不代表强行终止当前 Bash 或撤销已发生的工具副作用。不要调用裸 `session.steer(text)` 后假定 idle parent 会自动启动；必须使用具备 idle trigger 语义的消息路径。
 
@@ -1196,7 +1196,7 @@ Node 下限参照 Pi 宿主要求。[P9] 编译和测试使用工作区 catalog 
 | R07 | root closing 不触发新 run，迟到报告不进入下一 session |
 | R08 | crash 在保存结果/投递/确认之间发生时能够按 reportId 对账 |
 | R09 | 报告触发 parent run 不阻塞 child 自身清理与下一次明确 ask |
-| R10 | report 文本与 details 使用同一个完成后 status 快照，只列剩余 direct children 与共享 live usage，不暴露其他 parent 的 child |
+| R10 | report 文本与 details 使用同一个完成后 status 快照，只列 direct children（含已完成的报告者）与共享 live usage，不暴露其他 parent 的 child |
 
 ### 17.5 UI
 
