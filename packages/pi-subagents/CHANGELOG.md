@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.0
+
+### Minor Changes
+
+- a0111da: **BREAKING:** `thinking` now accepts only `off`, `low`, `medium`, `high`, and `max`, both as the `subagent` tool parameter and in `agents/*.md` frontmatter. `minimal` and `xhigh` are rejected with `INVALID_AGENT_DEFINITION` for agent files. Stored role snapshots and inherited parent thinking levels are unchanged, so existing subagent history keeps working.
+
+### Patch Changes
+
+- 4235c5b: Show running, completed, and interrupted direct subagents in Markdown status lists, and remind the parent in every report that it can reuse the reporting subagent with `ask_subagent` for related follow-up work. Preserve an earlier interrupted status when an unaccepted follow-up run is discarded. Tool results also explain how to steer an active run with `ask_subagent` to adjust its direction or add context.
+
 All notable changes to this package are documented here. The format follows Keep a Changelog.
 
 ## [0.2.5] - 2026-09-28
