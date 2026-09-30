@@ -13,7 +13,7 @@ import {
 } from "./types.js";
 
 const AGENT_ID = /^[a-z][a-z0-9-]{0,63}$/;
-const ALLOWED_FIELDS = new Set(["name", "description", "tools", "thinking"]);
+const ALLOWED_FIELDS = new Set(["name", "description", "tools", "disallowedTools", "thinking"]);
 const PACKAGE_AGENTS_DIR = fileURLToPath(new URL("../agents/", import.meta.url));
 
 function contentHash(definition: Omit<AgentDefinitionSnapshot, "source" | "contentHash">): string {
@@ -58,19 +58,25 @@ function parseDefinition(id: string, source: string, content: string): AgentDefi
       `description must be a string in ${source}`,
     );
   }
-  let tools: string[] | undefined;
-  if (frontmatter.tools !== undefined) {
-    if (
-      !Array.isArray(frontmatter.tools) ||
-      frontmatter.tools.some((tool) => typeof tool !== "string" || !tool)
-    ) {
+  if (frontmatter.tools !== undefined && frontmatter.disallowedTools !== undefined) {
+    throw new SubagentError(
+      "INVALID_AGENT_DEFINITION",
+      `tools and disallowedTools are mutually exclusive in ${source}`,
+    );
+  }
+  const parseTools = (field: "tools" | "disallowedTools"): string[] | undefined => {
+    const value = frontmatter[field];
+    if (value === undefined) return undefined;
+    if (!Array.isArray(value) || value.some((tool) => typeof tool !== "string" || !tool.trim())) {
       throw new SubagentError(
         "INVALID_AGENT_DEFINITION",
-        `tools must be an array of non-empty strings in ${source}`,
+        `${field} must be an array of non-empty strings in ${source}`,
       );
     }
-    tools = [...new Set(frontmatter.tools as string[])];
-  }
+    return [...new Set(value as string[])];
+  };
+  const tools = parseTools("tools");
+  const disallowedTools = parseTools("disallowedTools");
   let thinking: SubagentThinkingLevel | undefined;
   if (frontmatter.thinking !== undefined) {
     if (
@@ -90,6 +96,7 @@ function parseDefinition(id: string, source: string, content: string): AgentDefi
       ? { description: frontmatter.description as string }
       : {}),
     ...(tools ? { tools } : {}),
+    ...(disallowedTools ? { disallowedTools } : {}),
     ...(thinking ? { thinking } : {}),
     prompt: parsed.body.trim(),
   };

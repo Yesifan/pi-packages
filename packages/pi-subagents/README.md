@@ -71,7 +71,25 @@ thinking: high
 Report concrete evidence and file locations. Do not modify files.
 ```
 
-The built-in `explore` allows only `read`, `grep`, `find`, and `ls`.
+Roles accept either `tools` (an allowlist) or `disallowedTools` (a denylist), never both—even when one is empty. Both are arrays of non-empty tool-name strings; duplicate names are removed. `tools: []` allows no tools, while `disallowedTools: []` adds no restrictions. Omitting both preserves the normal target session's tools. Unknown allowlisted names fail with `TOOL_UNAVAILABLE`; unknown denylisted names are harmless and remain excluded if an extension registers them later.
+
+For example, to keep discovered extension tools while excluding selected tools:
+
+```md
+---
+name: researcher
+description: Explore using available search tools
+disallowedTools: [edit, write, bash, destructive_custom_tool]
+---
+
+Explore without modifying files. Report evidence and file locations.
+```
+
+The built-in `explore` uses `disallowedTools: [edit, write, bash]`, preserving its exploration prompt and other available built-in/extension tools. This does **not guarantee strict read-only execution**: other tools (including `powershell`, if enabled), extension code, and further delegation may have side effects. Use an explicit `tools` allowlist of trusted tools when tighter tool selection is needed; neither policy is a filesystem sandbox.
+
+Policies apply by exact tool name to the SDK registry, not only the initial active tools. Dynamic extension registration/re-registration and `setActiveTools()` cannot re-enable excluded names. Runtime delegation restrictions still apply: same-cwd and depth-limited children exclude `subagent`/`ask_subagent`; denylisting `subagent` disables descendant delegation, while denylisting only `ask_subagent` leaves creation available.
+
+The selected policy is included in the saved role snapshot and content hash. Existing snapshots without `disallowedTools` need no migration; old `explore` snapshots retain their saved allowlist. Later role file changes affect newly created logical subagents only, not subsequent asks or root recovery.
 
 ## Configuration and storage
 

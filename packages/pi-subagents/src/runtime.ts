@@ -32,6 +32,7 @@ import { PersistentSubagentStore } from "./store.js";
 import type { DelegationRuntimeApi } from "./tools.js";
 import type {
   AcceptedResult,
+  AgentDefinitionSnapshot,
   CallerBinding,
   DelegationStatusSnapshot,
   DeliveredSubagentReport,
@@ -92,9 +93,11 @@ async function awaitPreflight(
   });
 }
 
-function roleAllowsDelegation(stored: StoredSubagent): boolean {
-  const tools = stored.agentDefinitionSnapshot.tools;
-  return tools === undefined || tools.includes("subagent");
+function roleAllowsDelegation(definition: AgentDefinitionSnapshot): boolean {
+  return (
+    (definition.tools === undefined || definition.tools.includes("subagent")) &&
+    !definition.disallowedTools?.includes("subagent")
+  );
 }
 
 function deliveredReport(
@@ -211,9 +214,7 @@ export class RootRuntime implements DelegationRuntimeApi {
       const canDelegate =
         target.kind === "external" &&
         depth < this.rootConfig.maxDepth &&
-        definition.tools !== undefined
-          ? definition.tools.includes("subagent")
-          : target.kind === "external" && depth < this.rootConfig.maxDepth;
+        roleAllowsDelegation(definition);
       const delegation = canDelegate
         ? await this.buildChildDelegationContext(target.cwd)
         : undefined;
@@ -303,7 +304,7 @@ export class RootRuntime implements DelegationRuntimeApi {
       const canDelegate =
         target.kind === "external" &&
         stored.depth < this.rootConfig.maxDepth &&
-        roleAllowsDelegation(stored);
+        roleAllowsDelegation(stored.agentDefinitionSnapshot);
       const delegation = canDelegate
         ? await this.buildChildDelegationContext(stored.cwd)
         : undefined;

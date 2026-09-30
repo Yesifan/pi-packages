@@ -9,7 +9,7 @@ import type {
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { OpenedChild } from "../../src/child-session.js";
+import type { OpenChildOptions, OpenedChild } from "../../src/child-session.js";
 import { initializeProjectSubagents } from "../../src/project-storage.js";
 import { RootRuntime } from "../../src/runtime.js";
 import type {
@@ -47,6 +47,7 @@ interface Harness {
   context: ExtensionContext;
   failNextOpen(): void;
   runtime: RootRuntime;
+  mounts: OpenChildOptions[];
 }
 
 function generalAgent(): AgentDefinitionSnapshot {
@@ -96,6 +97,7 @@ async function createHarness(maxLiveAgents: number): Promise<Harness> {
   );
 
   const children = new Map<string, FakeChild>();
+  const mounts: OpenChildOptions[] = [];
   let childIndex = 0;
   let shouldFailNextOpen = false;
   const fakeFactory = {
@@ -150,7 +152,8 @@ async function createHarness(maxLiveAgents: number): Promise<Harness> {
       if (!child) throw new Error(`Missing fake child ${stored.sessionId}`);
       return child.sessionManager;
     },
-    open: async (options: { stored: StoredSubagent }): Promise<OpenedChild> => {
+    open: async (options: OpenChildOptions): Promise<OpenedChild> => {
+      mounts.push(options);
       if (shouldFailNextOpen) {
         shouldFailNextOpen = false;
         throw new Error("open failed");
@@ -193,13 +196,14 @@ async function createHarness(maxLiveAgents: number): Promise<Harness> {
       shouldFailNextOpen = true;
     },
     runtime,
+    mounts,
   };
 }
 
-async function createIdleSubagent(harness: Harness, name: string): Promise<string> {
+async function createIdleSubagent(harness: Harness, name: string, cwd?: string): Promise<string> {
   const started = await harness.runtime.createSubagent(
     harness.caller,
-    { name, prompt: "initial task" },
+    { name, prompt: "initial task", ...(cwd ? { cwd } : {}) },
     harness.context,
     undefined,
   );
@@ -227,6 +231,34 @@ async function createIdleSubagent(harness: Harness, name: string): Promise<strin
   });
   return started.id;
 }
+
+describe("role delegation policy", () => {
+  it.each([
+    { disallowedTools: ["subagent"], expected: false },
+    { disallowedTools: ["ask_subagent"], expected: true },
+    { disallowedTools: [], expected: true },
+    { tools: ["read"], expected: false },
+  ])("uses snapshotted policy on creation and ask: %j", async ({ expected, ...policy }) => {
+    const h = await createHarness(8);
+    const external = await mkdtemp(path.join(os.tmpdir(), "pi-subagents-external-policy-"));
+    temporaryDirectories.push(external);
+    h.caller.delegation.externalDirectories.push(external);
+    h.caller.delegation.agentTypes.set("general", { ...generalAgent(), ...policy });
+    const agentId = await createIdleSubagent(h, "worker", external);
+    expect(h.mounts.at(-1)?.canDelegate).toBe(expected);
+    expect(h.mounts.at(-1)?.stored.agentDefinitionSnapshot).toMatchObject(policy);
+    // A later same-name role must not alter the policy on this logical agent.
+    h.caller.delegation.agentTypes.set("general", generalAgent());
+    await h.runtime.askSubagent(
+      h.caller,
+      { id: agentId, prompt: "follow-up" },
+      h.context,
+      undefined,
+    );
+    expect(h.mounts.at(-1)?.canDelegate).toBe(expected);
+    expect(h.mounts.at(-1)?.stored.agentDefinitionSnapshot).toMatchObject(policy);
+  });
+});
 
 describe("normal ask concurrency", () => {
   it("reserves an idle subagent before the first asynchronous wait", async () => {

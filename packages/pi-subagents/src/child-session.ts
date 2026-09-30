@@ -215,6 +215,14 @@ Your final response is automatically reported to your direct parent.`;
         ...(stored.agentDefinitionSnapshot.tools
           ? { tools: stored.agentDefinitionSnapshot.tools }
           : {}),
+        // Warning Cache Broke: current tool context may change on remount, but role
+        // policy stays snapshot-backed. SDK 0.87.1 applies excludeTools to the full
+        // registry on every refresh, including dynamic extension re-registration;
+        // setActiveTools cannot re-enable a name absent from that registry.
+        excludeTools: [
+          ...(stored.agentDefinitionSnapshot.disallowedTools ?? []),
+          ...(options.canDelegate ? [] : ["subagent", "ask_subagent"]),
+        ],
         resourceLoader,
         sessionManager: options.sessionManager,
         settingsManager,

@@ -1,6 +1,6 @@
 # @yesifan/pi-subagents — 实现规格
 
-**文档版本：** 1.2
+**文档版本：** 1.3
 **状态：** v1 实现基线（已合并 session-local delegation、project-local storage 与原生进度 widget 决策）
 **目标包名：** `@yesifan/pi-subagents`
 **目标宿主：** Pi CLI / TUI  
@@ -407,18 +407,30 @@ thinking: high
 提供具体文件位置、证据和不确定之处，不修改文件。
 ```
 
-允许字段为 `name`、`description`、`tools`、`thinking`。body 是完整角色 prompt。`thinking` 只接受 `off | low | medium | high | max`；未知取值报 `INVALID_AGENT_DEFINITION` 并列出允许值。
+允许字段为 `name`、`description`、`tools`、`disallowedTools`、`thinking`。body 是完整角色 prompt。`thinking` 只接受 `off | low | medium | high | max`；未知取值报 `INVALID_AGENT_DEFINITION` 并列出允许值。
 
-`tools` 省略表示不施加角色级工具白名单；指定时只允许启用已发现且在列表内的工具。未知工具应给出明确错误，不能悄悄忽略。不得通过角色定义添加 model、cwd、后台模式、根目录权限或其他运行时控制字段。
+`tools` 是白名单；指定时只允许启用已发现且在列表内的工具，未知工具报 `TOOL_UNAVAILABLE`。`disallowedTools` 是黑名单，排除同名内置/扩展工具；尚未注册或未知的黑名单名称不报错，后续注册时仍须排除。两字段严格互斥（包括空数组），同时指定报 `INVALID_AGENT_DEFINITION`。两者必须是非空工具名称字符串数组，按原顺序去重；`tools: []` 禁用全部工具，`disallowedTools: []` 不增加限制。省略两者保留 target session 正常工具集合；匹配使用精确名称，不做 glob 或类别推断。不得通过角色定义添加 model、cwd、后台模式、根目录权限或其他运行时控制字段。
+
+黑名单示例：
+
+```md
+---
+name: researcher
+description: 使用当前内置和扩展搜索工具探索
+disallowedTools: [edit, write, bash, destructive_custom_tool]
+---
+
+探索代码，报告证据与文件位置，不修改文件。
+```
 
 内置角色：
 
 | 角色 | 定义 |
 |---|---|
 | general | 常规任务处理；不额外限制普通 session 的工具；不给默认 thinking 覆盖 |
-| explore | 代码理解与检索；白名单 `read, grep, find, ls`；不提供 bash/edit/write；不给默认 thinking 覆盖 |
+| explore | 代码理解与检索；黑名单 `edit, write, bash`；保留探索 prompt 和其他当前可用内置/扩展工具；不给默认 thinking 覆盖 |
 
-“内置 explore”通过实际工具集合实现只读倾向，不只依靠 prompt。全局或 caller 当前项目显式提供同名定义后，以完整覆盖后的定义为准；只有这种显式覆盖可以让 `explore` 获得 `bash`、`edit` 或 `write`。
+“内置 explore”通过实际工具排除实现只读倾向，但不保证严格只读：其他工具（例如已启用的 `powershell`）、扩展代码和进一步委派仍可能有副作用。工具选择不是文件系统沙箱；更严格的工具集合可显式使用可信工具白名单。全局或 caller 当前项目显式提供同名定义后，以完整覆盖后的定义为准；只有这种显式覆盖可以让新建的 `explore` 获得 `bash`、`edit` 或 `write`。
 
 ### 5.3 Agent definition snapshot
 
@@ -429,6 +441,7 @@ interface AgentDefinitionSnapshot {
   id: string;
   description?: string;
   tools?: string[];
+  disallowedTools?: string[];
   thinking?: ThinkingLevel;
   prompt: string;
   source: string;
@@ -437,6 +450,8 @@ interface AgentDefinitionSnapshot {
 ```
 
 以后 `ask_subagent(id, ...)` 始终用该 snapshot 恢复 current role。全局 agent 文件、项目 agent 文件或 caller registry 后续变化不得改变已存在 logical subagent 的角色；也不得按同名 ID 从恢复时项目重新解析角色。
+
+`disallowedTools` 是 snapshot 的可选字段并参与规范化/contentHash；未指定该字段的定义维持既有 hash 规则。存储 schemaVersion 仍为 2，无需迁移：既有 snapshot 原样恢复，旧 explore snapshot 的白名单不改写为新黑名单。后续 ask 和 root 恢复仍使用已保存的策略，但发现当前 target tools。
 
 角色 snapshot 不等于 delegation registry snapshot。child 恢复后未来可用的 delegation agents 必须按 child 当前 cwd 重新加载。其他普通 Pi resources、cwd 存在性、授权与项目信任也按当前状态重新检查；snapshot 不能绕过收紧后的安全策略。
 
@@ -483,7 +498,7 @@ target cwd 精确来自 caller external_directory
   → 可以获得 delegation capability
 ```
 
-external child 最终是否真正获得 `subagent`、`ask_subagent`，还必须同时通过 depth limit、所选 agent snapshot 的 tools whitelist 与 runtime policy。same-cwd child 始终排除这两个工具。执行入口必须重复检查能力和所有权；隐藏工具不能替代执行校验。
+external child 最终是否真正获得 `subagent`、`ask_subagent`，还必须同时通过 depth limit、所选 agent snapshot 的工具策略与 runtime policy。角色必须允许 `subagent` 才能取得委派能力；黑名单含 `subagent` 时不构建 child DelegationContext，并排除两个委派工具；仅排除 `ask_subagent` 时仍可创建 descendants，但不能 ask。same-cwd child 始终排除这两个工具。执行入口必须重复检查能力和所有权；隐藏工具不能替代执行校验。
 
 每个 logical subagent 保存 canonical cwd ancestor chain，例如：
 
@@ -542,13 +557,13 @@ Pi 普通资源发现可能加载目标 cwd 的祖先项目指令、用户级资
 
 ```text
 target cwd 普通资源发现得到的可用工具
-→ 若 current-role snapshot 指定 tools，则应用白名单
+→ 按 current-role snapshot 的 tools 白名单或 disallowedTools 黑名单过滤
 → 按 same-cwd/external、depth 和 runtime policy 应用委派能力排除项
 → external child 若仍可委派，则用 child 自己的 DelegationContext 生成工具与 description
 → 校验并创建当前 cwd 绑定的工具
 ```
 
-可使用 SDK 的 `tools` 和 `excludeTools`；后者也能排除 extension/custom tool。[P2]
+使用 SDK 的 `tools` 和 `excludeTools`；黑名单与 runtime 委派排除项合并传入 `excludeTools`，不能只设置初始 active tools。锁定 SDK 0.87.1 的 AgentSession 在每次 registry refresh 中过滤工具定义、执行 registry 和 prompt 贡献，因此 extension 初始注册、session_start 后动态注册/重新注册均遵守策略；`setActiveTools()` 只选择 registry 内已存在的名称，不能重新启用被排除工具。不得用 monkey-patch、私有字段或禁用所有扩展实现本策略。
 
 对于 external child，`AgentTypeRegistry(child.cwd)` 与 `DelegationConfig(child.cwd)` 只用于 child 自己的 `subagent` 工具；它们不能覆盖 parent 选择的 current-role snapshot。same-cwd child 不构建可调用的 delegation tools。
 
@@ -1115,7 +1130,9 @@ Node 下限参照 Pi 宿主要求。[P9] 编译和测试使用工作区 catalog 
 | A03 | model 继承创建时直接 parent；parent 换模型后旧 child ask 仍用原模型 |
 | A04 | thinking 三层优先级正确，模型 clamp 后返回实际值 |
 | A05 | 内置 general/explore 可用；默认 explore 没有 bash/edit/write |
-| A06 | 未知角色列出 caller registry；未知工具返回明确错误 |
+| A06 | 未知角色列出 caller registry；未知白名单工具返回明确错误；未知黑名单工具名称允许并持续排除 |
+| A13 | tools/disallowedTools 互斥（包括空数组）；类型校验、去重、snapshot/hash 及旧 snapshot 恢复正确 |
+| A14 | 黑名单过滤内置及扩展工具的 registry/active/执行集合，动态注册和重新启用不能绕过；未排除的扩展工具仍可用 |
 | A07 | Pi 基础 prompt 和原有追加 prompt 保留；runtime/current-role prompt 每个 AgentSession 构建一次 |
 | A08 | parent 对话历史不被复制；ask 恢复的是 child 自己的历史 |
 | A09 | 委派文本以 slash 开头也不会执行宿主命令 |
