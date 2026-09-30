@@ -41,6 +41,7 @@ import type {
   StoredSubagent,
   SubagentReport,
   SubagentsConfig,
+  SubagentThinkingLevel,
   ThinkingLevel,
 } from "./types.js";
 import { RootUiBroker } from "./ui.js";
@@ -166,7 +167,7 @@ export class RootRuntime implements DelegationRuntimeApi {
       name: string;
       prompt: string;
       agent_type?: string;
-      thinking?: ThinkingLevel;
+      thinking?: SubagentThinkingLevel;
       cwd?: string;
     },
     ctx: ExtensionContext,

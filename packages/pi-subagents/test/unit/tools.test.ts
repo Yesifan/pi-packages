@@ -64,6 +64,19 @@ function statusText(): string {
 }
 
 describe("delegation tool results", () => {
+  it("exposes only the reduced thinking levels on the subagent tool", () => {
+    const runtime: DelegationRuntimeApi = {
+      getMaxLiveAgents: () => 8,
+      createSubagent: vi.fn(),
+      askSubagent: vi.fn(),
+    };
+    const tool = registerTools(runtime).find(({ name }) => name === "subagent");
+    const properties = (tool?.parameters as { properties?: Record<string, { enum?: string[] }> })
+      ?.properties;
+
+    expect(properties?.thinking?.enum).toEqual(["off", "low", "medium", "high", "max"]);
+  });
+
   it("reports asynchronous startup, completion discipline, and steering guidance", async () => {
     const getMaxLiveAgents = vi.fn(() => 8);
     const runtime: DelegationRuntimeApi = {

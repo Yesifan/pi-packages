@@ -61,6 +61,28 @@ describe("AgentTypeRegistry", () => {
     expect(registry.get("explore")?.tools).toEqual(["read", "grep", "find", "ls"]);
   });
 
+  it("accepts only the supported thinking levels in frontmatter", async () => {
+    const agentDir = await temporaryDirectory();
+    const projectRoot = await temporaryDirectory();
+    const agentsDir = path.join(projectRoot, ".pi", "agents");
+    await writeAgent(
+      agentsDir,
+      "reviewer",
+      `---\nname: reviewer\ndescription: reviews\nthinking: high\n---\nreview prompt`,
+    );
+    const registry = await loadAgentTypeRegistry(agentDir, projectRoot);
+    expect(registry.get("reviewer")?.thinking).toBe("high");
+
+    await writeAgent(
+      agentsDir,
+      "legacy",
+      `---\nname: legacy\ndescription: legacy\nthinking: xhigh\n---\nlegacy prompt`,
+    );
+    await expect(loadAgentTypeRegistry(agentDir, projectRoot)).rejects.toThrow(
+      /Invalid thinking level 'xhigh'.*allowed values: off, low, medium, high, max/,
+    );
+  });
+
   it("returns a detached snapshot and lists caller roles for unknown ids", async () => {
     const registry = await loadAgentTypeRegistry(
       await temporaryDirectory(),

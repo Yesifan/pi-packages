@@ -126,7 +126,7 @@ interface SubagentParams {
   name: string;
   prompt: string;
   agent_type?: string; // 默认 general
-  thinking?: ThinkingLevel;
+  thinking?: SubagentThinkingLevel; // 只接受 off | low | medium | high | max
   cwd?: string;       // 默认调用者 ctx.cwd
 }
 ```
@@ -138,12 +138,12 @@ interface SubagentParams {
   "name": "auth-explorer",
   "prompt": "检查登录请求经过哪些模块，给出文件位置和调用关系，不修改代码。",
   "agent_type": "explore",
-  "thinking": "high",
+  "thinking": "medium",
   "cwd": "/home/user/code/backend"
 }
 ```
 
-参数规则：`name` 和 `prompt` 必须非空。`name` 只作显示标签，不作为唯一键、路径或角色选择器。`agent_type` 是字符串而非固定枚举，因为 caller 当前项目可以添加角色；它必须存在于 caller session 自己的 AgentTypeRegistry，省略时使用 `general`。thinking 的 schema 从锁定 SDK 的类型/支持值构建，不自行发明新等级。
+参数规则：`name` 和 `prompt` 必须非空。`name` 只作显示标签，不作为唯一键、路径或角色选择器。`agent_type` 是字符串而非固定枚举，因为 caller 当前项目可以添加角色；它必须存在于 caller session 自己的 AgentTypeRegistry，省略时使用 `general`。thinking 的 tool schema 只接受 `off | low | medium | high | max` 五档，不自行发明新等级；`minimal` 与 `xhigh` 不在 tool 参数中提供。`agents/*.md` 的 frontmatter 使用同一组允许值，其他取值返回 `INVALID_AGENT_DEFINITION`。已保存 snapshot 和继承自 parent 的 thinking 仍可为锁定 SDK 的完整等级集合，这样既有持久化身份无需迁移；最终生效值仍按模型能力 clamp 并原样返回。
 
 `cwd` 省略时使用 caller session 的 canonical cwd。显式提供时必须已经是绝对路径；tool 参数中不得使用相对路径、`~`、`$HOME` 或 `${HOME}`。实现对它执行 `realpath` 后，结果必须与 caller canonical cwd 或 caller 的某一项 canonical external cwd **完全相等**。`agent_type` 与 `cwd` 独立验证，不使用 cwd × agent_type 的条件 schema：
 
@@ -406,7 +406,7 @@ thinking: high
 提供具体文件位置、证据和不确定之处，不修改文件。
 ```
 
-允许字段为 `name`、`description`、`tools`、`thinking`。body 是完整角色 prompt。
+允许字段为 `name`、`description`、`tools`、`thinking`。body 是完整角色 prompt。`thinking` 只接受 `off | low | medium | high | max`；未知取值报 `INVALID_AGENT_DEFINITION` 并列出允许值。
 
 `tools` 省略表示不施加角色级工具白名单；指定时只允许启用已发现且在列表内的工具。未知工具应给出明确错误，不能悄悄忽略。不得通过角色定义添加 model、cwd、后台模式、根目录权限或其他运行时控制字段。
 

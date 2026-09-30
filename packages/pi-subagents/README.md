@@ -23,10 +23,12 @@ Starts a background logical subagent and returns as soon as Pi accepts its promp
   "name": "reviewer",
   "prompt": "Review the authentication flow and report concrete findings.",
   "agent_type": "general",
-  "thinking": "high",
+  "thinking": "medium",
   "cwd": "/absolute/path/to/project"
 }
 ```
+
+`thinking` is optional and accepts `off`, `low`, `medium`, `high`, or `max`. Omitted values fall back to the agent definition, then the parent's current thinking level. Agent definition frontmatter accepts the same five levels.
 
 `cwd` is optional and defaults to the caller's current cwd. An explicit value must be an absolute path that resolves exactly to the current cwd or one configured external cwd. Relative paths, `~`, `$HOME`, and `${HOME}` are rejected in tool input.
 
