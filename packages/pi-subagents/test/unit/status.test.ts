@@ -42,29 +42,33 @@ describe("delegation status", () => {
     ).toBe("**0 running, 0 done; shared usage: 0/8.**\n- None");
   });
 
-  it("prompts the direct parent to reuse the reporting agent for related follow-up work", () => {
-    expect(
-      formatSubagentReport(
-        {
-          schemaVersion: 1,
-          reportId: "report_1",
-          rootSessionId: "root_1",
-          agentId: "sa_worker",
-          runId: "run_1",
-          parentAgentId: null,
-          parentRunId: null,
-          name: "worker",
-          agentType: "general",
-          cwd: "/project",
-          outcome: "completed",
-          result: "Done.",
-          completedAt: "2026-01-01T00:00:00Z",
-        },
-        createDelegationStatusSnapshot([], 0, 8),
-      ),
-    ).toContain(
-      "**Follow-up:** For related work in the same area, use `ask_subagent` with ID `sa_worker` to ask this same subagent again.",
+  it("suggests any idle listed subagent for related follow-up work without repeating an ID", () => {
+    const formatted = formatSubagentReport(
+      {
+        schemaVersion: 1,
+        reportId: "report_1",
+        rootSessionId: "root_1",
+        agentId: "sa_worker",
+        runId: "run_1",
+        parentAgentId: null,
+        parentRunId: null,
+        name: "worker",
+        agentType: "general",
+        cwd: "/project",
+        outcome: "completed",
+        result: "Done.",
+        completedAt: "2026-01-01T00:00:00Z",
+      },
+      createDelegationStatusSnapshot([], 0, 8, [
+        { id: "sa_worker", name: "worker", state: "done" },
+        { id: "sa_reviewer", name: "reviewer", state: "done" },
+      ]),
     );
+    expect(formatted).toContain(
+      "**Follow-up:** For related work, you can use `ask_subagent` to give a new task to any idle subagent listed above.",
+    );
+    expect(formatted.split("**Follow-up:**")[1]).not.toContain("sa_worker");
+    expect(formatted.split("**Follow-up:**")[1]).not.toContain("sa_reviewer");
   });
 
   it("lists running and done direct subagents together", () => {

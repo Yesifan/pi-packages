@@ -293,8 +293,9 @@ describe("runtime progress widget", () => {
     );
     expect(nestedMessage.content).toContain(`- nested-worker (\`${nestedWorker.id}\`): done`);
     expect(nestedMessage.content).toContain(
-      `use \`ask_subagent\` with ID \`${nestedWorker.id}\` to ask this same subagent again`,
+      "use `ask_subagent` to give a new task to any idle subagent listed above",
     );
+    expect(nestedMessage.content.split("**Follow-up:**")[1]).not.toContain(nestedWorker.id);
     expect(nestedMessage.content).not.toContain(sibling.id);
     expect(nestedMessage.content).not.toContain(nestedWorker.run_id);
     expect(nestedMessage.details).toMatchObject({

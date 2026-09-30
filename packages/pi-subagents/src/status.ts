@@ -50,7 +50,7 @@ ${report.result}
 
 ${formatDelegationStatus(status)}
 
-**Follow-up:** For related work in the same area, use \`ask_subagent\` with ID \`${report.agentId}\` to ask this same subagent again.`;
+**Follow-up:** For related work, you can use \`ask_subagent\` to give a new task to any idle subagent listed above.`;
 }
 
 export function formatDelegationStatus(status: DelegationStatusSnapshot): string {
