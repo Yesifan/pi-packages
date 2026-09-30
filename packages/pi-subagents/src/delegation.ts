@@ -62,6 +62,7 @@ Current cwd:
 Available external cwd:
 ${external}
 
-Use ask_subagent to delegate another task to an existing idle subagent, or
-set isSteer to true to steer an actively executing run.`;
+For related follow-up work, prefer ask_subagent to reuse a directly owned idle
+subagent. Create a new subagent only for independent context or parallel work.
+Set isSteer to true to steer an actively executing run.`;
 }

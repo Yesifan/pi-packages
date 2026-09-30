@@ -42,29 +42,33 @@ describe("delegation status", () => {
     ).toBe("**0 running, 0 done; shared usage: 0/8.**\n- None");
   });
 
-  it("prompts the direct parent to reuse the reporting agent for related follow-up work", () => {
-    expect(
-      formatSubagentReport(
-        {
-          schemaVersion: 1,
-          reportId: "report_1",
-          rootSessionId: "root_1",
-          agentId: "sa_worker",
-          runId: "run_1",
-          parentAgentId: null,
-          parentRunId: null,
-          name: "worker",
-          agentType: "general",
-          cwd: "/project",
-          outcome: "completed",
-          result: "Done.",
-          completedAt: "2026-01-01T00:00:00Z",
-        },
-        createDelegationStatusSnapshot([], 0, 8),
-      ),
-    ).toContain(
-      "**Follow-up:** For related work in the same area, use `ask_subagent` with ID `sa_worker` to ask this same subagent again.",
+  it("suggests any idle listed subagent for related follow-up work without repeating an ID", () => {
+    const formatted = formatSubagentReport(
+      {
+        schemaVersion: 1,
+        reportId: "report_1",
+        rootSessionId: "root_1",
+        agentId: "sa_worker",
+        runId: "run_1",
+        parentAgentId: null,
+        parentRunId: null,
+        name: "worker",
+        agentType: "general",
+        cwd: "/project",
+        outcome: "completed",
+        result: "Done.",
+        completedAt: "2026-01-01T00:00:00Z",
+      },
+      createDelegationStatusSnapshot([], 0, 8, [
+        { id: "sa_worker", name: "worker", state: "done" },
+        { id: "sa_reviewer", name: "reviewer", state: "done" },
+      ]),
     );
+    expect(formatted).toContain(
+      "**Follow-up:** For related work, you can use `ask_subagent` to give a new task to any idle subagent listed above.",
+    );
+    expect(formatted.split("**Follow-up:**")[1]).not.toContain("sa_worker");
+    expect(formatted.split("**Follow-up:**")[1]).not.toContain("sa_reviewer");
   });
 
   it("lists running and done direct subagents together", () => {
@@ -86,21 +90,23 @@ describe("delegation status", () => {
     );
   });
 
-  it("keeps interrupted and hidden completed agents in the summary counts", () => {
+  it("lists all direct subagents, including a reporting agent beyond the old limit", () => {
     const direct = Array.from({ length: 12 }, (_, index) => ({
       id: `sa_${index}`,
       name: `worker-${index}`,
       state: index === 11 ? ("interrupted" as const) : ("done" as const),
     }));
     const snapshot = createDelegationStatusSnapshot([], 0, 8, direct);
-    expect(snapshot.directSubagents).toHaveLength(10);
-    expect(formatDelegationStatus(snapshot)).toContain(
-      "**0 running, 11 done, 1 interrupted; shared usage: 0/8.**",
-    );
-    expect(formatDelegationStatus(snapshot)).toContain("- …and 2 more");
+    expect(snapshot.directSubagents).toHaveLength(12);
+    const formatted = formatDelegationStatus(snapshot);
+    expect(formatted).toContain("**0 running, 11 done, 1 interrupted; shared usage: 0/8.**");
+    for (const { id, name, state } of direct) {
+      expect(formatted).toContain(`- ${name} (\`${id}\`): ${state}`);
+    }
+    expect(formatted).not.toContain("…and");
   });
 
-  it("bounds and single-lines model-visible names", () => {
+  it("shows every active subagent while compacting model-visible names", () => {
     const activeDirectSubagents = Array.from({ length: 12 }, (_, index) => ({
       id: `sa_${index}`,
       name: index === 0 ? `worker\n${"x".repeat(100)}` : `worker-${index}`,
@@ -109,13 +115,14 @@ describe("delegation status", () => {
     const formatted = formatDelegationStatus(snapshot);
 
     expect(snapshot.activeDirectSubagentCount).toBe(12);
-    expect(snapshot.activeDirectSubagents).toHaveLength(10);
+    expect(snapshot.activeDirectSubagents).toHaveLength(12);
     expect(snapshot.activeDirectSubagents[0]?.name).not.toContain("\n");
     expect(snapshot.activeDirectSubagents[0]?.name.length).toBeLessThanOrEqual(80);
     expect(formatted).not.toContain("worker\n");
     expect(formatted).toContain("worker x");
-    expect(formatted).toContain("…and 2 more");
-    expect(formatted).not.toContain("worker-10");
+    expect(formatted).toContain("worker-10");
+    expect(formatted).toContain("worker-11");
+    expect(formatted).not.toContain("…and");
     expect(formatted).toContain("shared usage: 12/20.");
   });
 });

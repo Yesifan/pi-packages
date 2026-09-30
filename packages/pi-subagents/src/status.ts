@@ -1,6 +1,5 @@
 import type { ActiveSubagentSummary, DelegationStatusSnapshot, SubagentReport } from "./types.js";
 
-const MAX_VISIBLE_ACTIVE_SUBAGENTS = 10;
 const MAX_VISIBLE_NAME_LENGTH = 80;
 
 function compactName(name: string): string {
@@ -21,13 +20,16 @@ export function createDelegationStatusSnapshot(
     (a, b) => Number(b.state === "running") - Number(a.state === "running"),
   );
   return {
-    activeDirectSubagents: activeDirectSubagents
-      .slice(0, MAX_VISIBLE_ACTIVE_SUBAGENTS)
-      .map(({ id, name }) => ({ id, name: compactName(name) })),
+    activeDirectSubagents: activeDirectSubagents.map(({ id, name }) => ({
+      id,
+      name: compactName(name),
+    })),
     activeDirectSubagentCount: activeDirectSubagents.length,
-    directSubagents: ordered
-      .slice(0, MAX_VISIBLE_ACTIVE_SUBAGENTS)
-      .map(({ id, name, state }) => ({ id, name: compactName(name), state })),
+    directSubagents: ordered.map(({ id, name, state }) => ({
+      id,
+      name: compactName(name),
+      state,
+    })),
     directSubagentCount: directSubagents.length,
     interruptedDirectSubagentCount: directSubagents.filter(({ state }) => state === "interrupted")
       .length,
@@ -40,17 +42,22 @@ export function formatSubagentReport(
   report: SubagentReport,
   status: DelegationStatusSnapshot,
 ): string {
-  const error = report.error ? `\n${report.error.code}: ${report.error.message}` : "";
-  return `[Subagent ${compactName(report.name)} (${report.agentId}) ${report.outcome}]
-cwd: ${report.cwd}${error}
+  const error = report.error ? `## Error\n${report.error.code}: ${report.error.message}` : "";
+  return `# ${compactName(report.name)} Subagent Report
+
+> agentId: ${report.agentId} outcome: ${report.outcome} cwd: ${report.cwd}
+
+${error}
+
+## Result
 
 ${report.result}
 
-### Subagents
+## Subagents
 
 ${formatDelegationStatus(status)}
 
-**Follow-up:** For related work in the same area, use \`ask_subagent\` with ID \`${report.agentId}\` to ask this same subagent again.`;
+**Follow-up:** For related work, you can use \`ask_subagent\` to give a new task to any idle subagent listed above.`;
 }
 
 export function formatDelegationStatus(status: DelegationStatusSnapshot): string {
@@ -63,7 +70,5 @@ export function formatDelegationStatus(status: DelegationStatusSnapshot): string
   const visible = status.directSubagents.map(
     ({ id, name, state }) => `- ${name} (\`${id}\`): ${state}`,
   );
-  const hidden = status.directSubagentCount - visible.length;
-  if (hidden > 0) visible.push(`- …and ${hidden} more`);
   return `${summary}\n${visible.length ? visible.join("\n") : "- None"}`;
 }

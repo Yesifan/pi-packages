@@ -203,8 +203,9 @@ cwd must be an absolute path and must exactly match Current cwd or one of
 Available external cwd after canonical path resolution.
 Omit cwd to use Current cwd.
 
-Use ask_subagent to delegate another task to an existing idle subagent, or
-set isSteer to true to steer an actively executing run.
+For related follow-up work, prefer ask_subagent to reuse a directly owned idle
+subagent. Create a new subagent only for independent context or parallel work.
+Set isSteer to true to steer an actively executing run.
 ```
 
 展示的 external cwd 必须已完成 home expansion、绝对路径验证和 canonicalization，模型应能直接复制。description 只暴露 caller 自己可用的资源，不递归暴露 external 项目的下一层配置。共享 live limit 来自 root project 的已生效配置；description 在 session tool 注册时生成，执行过程中不得因 live 状态变化而重注册或改写。
@@ -234,7 +235,7 @@ interface AcceptedResult {
 
 必须包装成普通 Pi tool result：`content` 提供可读的启动结果，`details` 保存结构化数据。不能只把返回 ID 写在 UI 通知中。模型可见的启动文案保留 logical subagent ID，但无需显示 run ID；`details.run_id`、持久化记录和 report envelope 仍保留 run identity。`subagent` 和 `ask_subagent` 的成功工具结果应提示：如需在当前仍 streaming 的 run 中调整方向或补充上下文，可用同一 ID 调用 `ask_subagent` 并设 `isSteer: true`；这不是新 delegation，也不产生单独报告。仍须遵守 pending report 期间不轮询、不重复委派、暂缓最终答复的指引。
 
-成功的 `subagent`、普通 ask 和 steering 结果必须携带在接受线性化点捕获的 delegation status：调用者当前的 active direct subagents，以及全树共享的 `live/max_live_agents` 快照。列表只包含 direct children，名称必须单行化、截断且整体有界；不暴露其他 parent 的 child。快照另含调用方全部 direct logical subagent 的有界状态列表及总数（running / done / interrupted）；running 包括 opening、executing 和等待子任务的实例，done 表示已结束且可再次 ask，interrupted 表示上次 run 中断。报告文本以 Markdown 展示运行中/已结束数量、共享 live usage 与各项状态；超过 10 项须标记省略数量。该快照属于 tool result，不得通过重新注册 tool description 来更新。
+成功的 `subagent`、普通 ask 和 steering 结果必须携带在接受线性化点捕获的 delegation status：调用者当前的 active direct subagents，以及全树共享的 `live/max_live_agents` 快照。列表只包含 direct children，名称必须单行化并截断；不省略 direct child，也不暴露其他 parent 的 child。快照另含调用方全部 direct logical subagent 的状态列表及总数（running / done / interrupted）；running 包括 opening、executing 和等待子任务的实例，done 表示已结束且可再次 ask，interrupted 表示上次 run 中断。报告文本以 Markdown 完整展示运行中/已结束数量、共享 live usage 与各项状态。该快照属于 tool result，不得通过重新注册 tool description 来更新。
 
 “后台”表示不等待模型完成任务。工具允许等待参数校验、项目准入、必要资源加载和 session 初始化。只有确定该请求已被接受后才返回成功。返回前失败应返回工具错误；接受后发生的执行失败通过自动报告交回 parent。
 
@@ -803,7 +804,7 @@ pi.sendMessage(
 
 向内存中的 B 使用相应 AgentSession custom-message API，并保持相同业务语义。
 
-Pi 0.85.1 的 custom-message 实现负责运行中入队、空闲时按 `triggerTurn` 开始处理；不需要自己等 parent settled 才投递。[P3] 模型可见 report 与 `details` 必须使用同一个完成后快照，列出 direct logical subagents 的状态（包括刚完成报告的 child）、剩余 active direct subagents 和共享 live usage；没有任何 direct child 时显示 `none`。每条模型可见 report 还应提示直接 parent：如需同领域后续任务，可用 `ask_subagent` 和该 report 的 agent ID 再次委派给同一个 logical subagent。
+Pi 0.85.1 的 custom-message 实现负责运行中入队、空闲时按 `triggerTurn` 开始处理；不需要自己等 parent settled 才投递。[P3] 模型可见 report 与 `details` 必须使用同一个完成后快照，列出 direct logical subagents 的状态（包括刚完成报告的 child）、剩余 active direct subagents 和共享 live usage；没有任何 direct child 时显示 `none`。每条模型可见 report 还应提示直接 parent：如需相关后续任务，可用 `ask_subagent` 委派给上述任意空闲的 direct logical subagent；提示本身不重复或指定具体 agent ID。
 
 steer 不代表强行终止当前 Bash 或撤销已发生的工具副作用。不要调用裸 `session.steer(text)` 后假定 idle parent 会自动启动；必须使用具备 idle trigger 语义的消息路径。
 
@@ -1147,8 +1148,8 @@ Node 下限参照 Pi 宿主要求。[P9] 编译和测试使用工作区 catalog 
 | TOOL03 | description 中 external cwd 使用展开/规范化后的绝对路径 |
 | TOOL04 | child ask 恢复后 tool description 根据 child 当前配置重新生成 |
 | TOOL05 | tool description 不持久化，且执行过程中不因 live 状态变化而改写 |
-| TOOL06 | description 说明后台异步、同轮并行、root 共享 live limit、任务不重叠、不轮询和 pending report 前不得给最终结论 |
-| TOOL07 | 成功、`SUBAGENT_BUSY`、`LIVE_AGENT_LIMIT` 结果携带有界的 active direct 列表与共享 live usage，且模型可见启动文案不显示 run ID |
+| TOOL06 | description 说明后台异步、同轮并行、root 共享 live limit、任务不重叠、不轮询、同领域后续任务优先复用空闲 agent，且 pending report 前不得给最终结论 |
+| TOOL07 | 成功、`SUBAGENT_BUSY`、`LIVE_AGENT_LIMIT` 结果携带完整 active direct 列表与共享 live usage，且模型可见启动文案不显示 run ID |
 | DEL01 | same-cwd child 不具有 `subagent`/`ask_subagent` 工具 |
 | DEL02 | external-directory child 在角色/depth/runtime policy 允许时具有委派工具 |
 | DEL03 | A 仅配置 B、B 仅配置 C 时允许 A → B → C |

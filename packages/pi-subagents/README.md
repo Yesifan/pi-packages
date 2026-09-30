@@ -34,7 +34,7 @@ Starts a background logical subagent and returns as soon as Pi accepts its promp
 
 ### `ask_subagent`
 
-Starts another run on a directly owned idle logical subagent:
+Starts another run on a directly owned idle logical subagent. Prefer reusing one for related follow-up work; create a new subagent when independent context or parallel work is needed:
 
 ```json
 { "id": "sa_...", "prompt": "Now check the tests." }
@@ -121,8 +121,8 @@ The generated local `.gitignore` ignores `/sessions/`. Existing ignore files are
 ## Background lifecycle
 
 - Final responses are reported automatically to the direct parent as Pi custom messages (`customType: "subagent-report"`). Older histories may contain `bykwp-subagent-report` messages; the extension does not rewrite them.
-- Tool results list the caller's direct subagents as running, done, or interrupted, alongside current shared live usage. `SUBAGENT_BUSY` and `LIVE_AGENT_LIMIT` results include the same snapshot. Lists are bounded to 10 entries, with an omitted count when longer.
-- Automatic reports show the direct parent's subagent statuses (including the reporting agent as done) and remind the direct parent that it can use `ask_subagent` with the reporting agent's ID for related follow-up work. While relevant reports are pending, the caller is instructed to provide only a brief progress update and defer its final answer.
+- Tool results list the caller's direct subagents as running, done, or interrupted, alongside current shared live usage. `SUBAGENT_BUSY` and `LIVE_AGENT_LIMIT` results include the same snapshot. Lists include every direct subagent; names are shortened when long.
+- Automatic reports show the direct parent's subagent statuses (including the reporting agent as done) and remind the direct parent that it can use `ask_subagent` with any idle subagent listed above for related follow-up work. While relevant reports are pending, the caller is instructed to provide only a brief progress update and defer its final answer.
 - An idle parent waiting for children remains loaded; it is not cold-released.
 - Stopping only the root model response does not stop accepted background work.
 - Quitting, replacing, forking, or reloading the root session aborts active descendants, cancels proxied UI, and disposes child SDK sessions.
