@@ -30,7 +30,7 @@ AgentSession，并提供 `subagent` 与 `ask_subagent` 工具。实现基线为
 
 - `src/index.ts`：Pi 扩展入口及 root session 生命周期绑定。
 - `src/runtime.ts`：logical agent/run 状态机、普通 ask、steering、报告和 shutdown。
-- `src/child-session.ts`：目标 cwd AgentSession 创建/恢复、资源隔离、工具白名单和角色 prompt。
+- `src/child-session.ts`：目标 cwd AgentSession 创建/恢复、资源隔离、工具白名单/黑名单和角色 prompt。
 - `src/delegation.ts`：session-local delegation context 与动态 tool description。
 - `src/config.ts`、`src/project-storage.ts`、`src/paths.ts`：项目本地配置、trust 后存储初始化、Git/路径安全、project root、canonical cwd 授权和 cycle 检查。
 - `src/agents.ts`：内置/global/project agent registry、frontmatter 校验和 snapshot/hash。
@@ -38,7 +38,7 @@ AgentSession，并提供 `subagent` 与 `ask_subagent` 工具。实现基线为
 - `src/progress.ts`：run-local 活动摘要与 root 原生 widget 行格式化。
 - `src/ui.ts`：所有 descendants 共用的 blocking UI FIFO、root progress widget 与受限 UI proxy。
 - `src/tools.ts`：`subagent` / `ask_subagent` schema 和结构化结果。
-- `agents/`：发布的内置 agent definitions；`explore` 默认必须保持只读。
+- `agents/`：发布的内置 agent definitions；`explore` 默认排除 `edit/write/bash` 并保留探索 prompt，不保证严格只读（其他工具、扩展及进一步委派仍可能有副作用）。
 - `test/unit/`、`test/integration/`：Vitest 测试。
 
 ## 实现边界
@@ -58,7 +58,7 @@ AgentSession，并提供 `subagent` 与 `ask_subagent` 工具。实现基线为
 修复缺陷时优先添加复现测试。根据改动覆盖以下相关边界：
 
 - config precedence、home expansion、绝对/canonical/exact cwd 匹配；
-- agent layer override、snapshot 稳定性、symlink escape 和工具白名单；
+- agent layer override、snapshot 稳定性、symlink escape、工具白名单/黑名单互斥及动态扩展重新注册后的过滤；
 - direct ownership、depth/live/cycle limit、普通 ask 原子 busy；
 - STR01–STR06 steering 行为和单 report；
 - child 等待、report delivery、恢复、interrupted run 和 writer lock；

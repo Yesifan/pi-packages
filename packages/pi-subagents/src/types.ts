@@ -20,6 +20,7 @@ export interface AgentDefinitionSnapshot {
   id: string;
   description?: string;
   tools?: string[];
+  disallowedTools?: string[];
   thinking?: ThinkingLevel;
   prompt: string;
   source: string;

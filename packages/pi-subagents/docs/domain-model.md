@@ -188,7 +188,7 @@ caller 当前可选择的角色定义表，按以下层级构建：
 
 ### 3.3 AgentDefinitionSnapshot（CurrentRole）
 
-创建 logical subagent 时从 caller AgentTypeRegistry 复制的不可变角色定义，包括 prompt、tools、thinking、source 和 content hash。
+创建 logical subagent 时从 caller AgentTypeRegistry 复制的不可变角色定义，包括 prompt、互斥的 tools 白名单 / disallowedTools 黑名单、thinking、source 和 content hash。黑名单也参与 hash；未指定黑名单的既有定义维持原规范化/hash 规则。旧 snapshot 没有该可选字段时无需迁移；旧 explore snapshot 仍保留原白名单，新内置 explore 则排除 edit/write/bash，不保证严格只读。
 
 后续恢复关系为：
 

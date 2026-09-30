@@ -21,74 +21,78 @@ afterEach(async () => {
 });
 
 describe("PersistentSubagentStore", () => {
-  it("persists project-local identity and excludes concurrent writers", async () => {
-    const project = await temporaryProject();
-    const storage = await initializeProjectSubagents(project);
-    const rootSessionFile = path.join(project, "root.jsonl");
-    const first = new PersistentSubagentStore(
-      project,
-      storage.directory,
-      "root-id",
-      rootSessionFile,
-    );
-    const second = new PersistentSubagentStore(
-      project,
-      storage.directory,
-      "root-id",
-      rootSessionFile,
-    );
-    await expect(first.open()).resolves.toEqual([]);
-    await expect(second.open()).rejects.toMatchObject({ code: "ROOT_SCOPE_IN_USE" });
+  it.each([undefined, ["read", "grep"], []])(
+    "persists project-local identity and tool policy %j and excludes concurrent writers",
+    async (disallowedTools) => {
+      const project = await temporaryProject();
+      const storage = await initializeProjectSubagents(project);
+      const rootSessionFile = path.join(project, "root.jsonl");
+      const first = new PersistentSubagentStore(
+        project,
+        storage.directory,
+        "root-id",
+        rootSessionFile,
+      );
+      const second = new PersistentSubagentStore(
+        project,
+        storage.directory,
+        "root-id",
+        rootSessionFile,
+      );
+      await expect(first.open()).resolves.toEqual([]);
+      await expect(second.open()).rejects.toMatchObject({ code: "ROOT_SCOPE_IN_USE" });
 
-    await first.prepareAgent("sa_test");
-    const sessionFile = path.join(first.sessionsDirectory("sa_test"), "child.jsonl");
-    const timestamp = new Date().toISOString();
-    await writeFile(
-      sessionFile,
-      `${JSON.stringify({ type: "session", version: 3, id: "session", timestamp, cwd: project })}\n`,
-    );
-    const stored: StoredSubagent = {
-      schemaVersion: 2,
-      id: "sa_test",
-      rootSessionId: "root-id",
-      parentAgentId: null,
-      name: "test",
-      cwd: project,
-      ancestorCwds: [project],
-      agentType: "general",
-      agentDefinitionSnapshot: {
-        id: "general",
-        prompt: "snapshot",
-        source: "/agents/general.md",
-        contentHash: "hash",
-      },
-      depth: 1,
-      model: { provider: "test", id: "model" },
-      thinking: "off",
-      sessionId: "session",
-      sessionPath: first.toSessionPath("sa_test", sessionFile),
-      createdAt: timestamp,
-      updatedAt: timestamp,
-    };
-    expect(path.isAbsolute(stored.sessionPath)).toBe(false);
-    await expect(first.resolveSessionPath("sa_test", stored.sessionPath)).resolves.toBe(
-      sessionFile,
-    );
-    await first.saveAgent(stored);
-    await first.close();
+      await first.prepareAgent("sa_test");
+      const sessionFile = path.join(first.sessionsDirectory("sa_test"), "child.jsonl");
+      const timestamp = new Date().toISOString();
+      await writeFile(
+        sessionFile,
+        `${JSON.stringify({ type: "session", version: 3, id: "session", timestamp, cwd: project })}\n`,
+      );
+      const stored: StoredSubagent = {
+        schemaVersion: 2,
+        id: "sa_test",
+        rootSessionId: "root-id",
+        parentAgentId: null,
+        name: "test",
+        cwd: project,
+        ancestorCwds: [project],
+        agentType: "general",
+        agentDefinitionSnapshot: {
+          id: "general",
+          prompt: "snapshot",
+          source: "/agents/general.md",
+          contentHash: "hash",
+          ...(disallowedTools !== undefined ? { disallowedTools } : { tools: ["read"] }),
+        },
+        depth: 1,
+        model: { provider: "test", id: "model" },
+        thinking: "off",
+        sessionId: "session",
+        sessionPath: first.toSessionPath("sa_test", sessionFile),
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      };
+      expect(path.isAbsolute(stored.sessionPath)).toBe(false);
+      await expect(first.resolveSessionPath("sa_test", stored.sessionPath)).resolves.toBe(
+        sessionFile,
+      );
+      await first.saveAgent(stored);
+      await first.close();
 
-    const reopened = new PersistentSubagentStore(
-      project,
-      storage.directory,
-      "root-id",
-      rootSessionFile,
-    );
-    await expect(reopened.open()).resolves.toEqual([stored]);
-    await reopened.close();
-    expect(
-      reopened.rootDirectory.startsWith(path.join(project, ".pi", "subagents", "sessions")),
-    ).toBe(true);
-  });
+      const reopened = new PersistentSubagentStore(
+        project,
+        storage.directory,
+        "root-id",
+        rootSessionFile,
+      );
+      await expect(reopened.open()).resolves.toEqual([stored]);
+      await reopened.close();
+      expect(
+        reopened.rootDirectory.startsWith(path.join(project, ".pi", "subagents", "sessions")),
+      ).toBe(true);
+    },
+  );
 
   it.each([false, true])(
     "discards an unaccepted run while preserving prior interrupted=%s",
