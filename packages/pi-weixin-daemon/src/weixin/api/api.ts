@@ -354,7 +354,12 @@ export async function apiPostFetch(params: {
   const base = ensureTrailingSlash(params.baseUrl);
   const url = new URL(params.endpoint, base);
   const hdrs = buildHeaders({ token: params.token });
-  log.debug(`POST ${redactUrl(url.toString())} body=${redactBody(params.body)}`);
+  // Outbound messages and upstream responses may contain text or credential echoes.
+  // Keep this omission scoped to sendMessage; other endpoints retain their existing logs.
+  const omitPayload = params.endpoint === "ilink/bot/sendmessage";
+  log.debug(
+    `POST ${redactUrl(url.toString())} body=${omitPayload ? "omitted" : redactBody(params.body)}`,
+  );
 
   const controller = params.timeoutMs !== undefined ? new AbortController() : undefined;
   const t =
@@ -374,7 +379,9 @@ export async function apiPostFetch(params: {
     });
     if (t !== undefined) clearTimeout(t);
     const rawText = await res.text();
-    log.debug(`${params.label} status=${res.status} raw=${redactBody(rawText)}`);
+    log.debug(
+      `${params.label} status=${res.status} ${omitPayload ? "response=omitted" : `raw=${redactBody(rawText)}`}`,
+    );
     if (!res.ok) {
       throw new Error(`${params.label} ${res.status}: ${rawText}`);
     }
@@ -382,9 +389,22 @@ export async function apiPostFetch(params: {
   } catch (err) {
     if (t !== undefined) clearTimeout(t);
     const classified = classifyFetchError(err);
-    log.error(
-      `${params.label}: POST fetch failed url=${redactUrl(url.toString())} timeoutMs=${params.timeoutMs ?? "none"} type=${classified.type} description=${classified.description}${classified.code ? ` code=${classified.code}` : ""} error=${String(err)}`,
-    );
+    if (omitPayload) {
+      // Only fixed classification fields are safe; exception messages, causes and codes may echo secrets.
+      log.error(
+        {
+          url: redactUrl(url.toString()),
+          timeoutMs: params.timeoutMs,
+          type: classified.type,
+          description: classified.description,
+        },
+        "sendMessage: POST fetch failed",
+      );
+    } else {
+      log.error(
+        `${params.label}: POST fetch failed url=${redactUrl(url.toString())} timeoutMs=${params.timeoutMs ?? "none"} type=${classified.type} description=${classified.description}${classified.code ? ` code=${classified.code}` : ""} error=${String(err)}`,
+      );
+    }
     throw err;
   } finally {
     cleanup();

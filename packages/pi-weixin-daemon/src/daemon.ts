@@ -25,6 +25,7 @@ import {
   unregisterWeixinAccountId,
 } from "./weixin/auth/accounts.js";
 import { WeixinFileSender } from "./weixin/file-sender.js";
+import { getContextToken, restoreContextTokens } from "./weixin/storage/context-token.js";
 import { ILinkWeixinTransport } from "./weixin/transport.js";
 import type { WeixinTransport } from "./weixin/types.js";
 
@@ -105,6 +106,14 @@ export class Daemon {
     this.accountManager = new AccountManager({ logger });
     this.projectManager = new ProjectManager({
       getTransport: (id) => this.accountManager.getTransport(id),
+      resolveBroadcastAccount: (id) => {
+        const account = loadWeixinAccount(id);
+        if (!account) return null;
+        return {
+          userId: account.userId,
+          contextToken: account.userId ? getContextToken(id, account.userId) : undefined,
+        };
+      },
       factory: deps.projectPiFactory ?? defaultProjectPiFactory,
       logger,
       resolveSenderName: (id) => resolveWeixinAccountName(id) ?? id,
@@ -147,6 +156,7 @@ export class Daemon {
 
     // --- Account monitors: one per registered account, independent of project ---
     for (const accountId of listIndexedWeixinAccountIds()) {
+      restoreContextTokens(accountId);
       const account = loadWeixinAccount(accountId);
       if (!account?.token) {
         logger.warn({ account: accountId }, "account has no token, skipping monitor");
@@ -249,6 +259,11 @@ export class Daemon {
     await this.reload();
   }
 
+  /** Direct notification to bound account owners; does not require a healthy Pi runtime. */
+  async broadcastProject(name: string, text: string) {
+    return this.projectManager.broadcast(name, text);
+  }
+
   async restartProject(name: string): Promise<void> {
     await this.projectManager.restart(name);
   }
@@ -275,6 +290,7 @@ export class Daemon {
     // Start monitors for newly-logged-in accounts.
     for (const accountId of index) {
       if (this.accountManager.has(accountId)) continue;
+      restoreContextTokens(accountId);
       const account = loadWeixinAccount(accountId);
       if (!account?.token) continue;
       const transport = await this.accountTransport(accountId, account.token, account.baseUrl);

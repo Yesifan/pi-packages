@@ -128,7 +128,21 @@ pi-wx project list
 pi-wx accounts
 ```
 
-### 4. systemd（用户级）
+### 4. 向项目用户广播通知
+
+```bash
+pi-wx broadcast --project foo --message "部署已完成"
+```
+
+须先启动 daemon，且 project 必须处于启用状态。通知直接发送给该项目所有绑定账号的扫码登录用户，不经过 Pi；没有活动 Pi 会话或 Pi 正忙也可发送，不改变会话状态。
+
+发送需要缓存中精确对应账号和扫码用户的 `context_token`。缺少接收用户、token 或可用 transport 时跳过并记录日志；某个账号失败不阻断其他账号。不检查 token 的本地有效期，微信接口仍可能拒绝发送。此接收范围与 Agent 回复使用的已登记参与者不同。
+
+CLI 等待处理完成，详细成功、跳过和失败记录通过 `pi-wx logs` 查看。只有非空接收集合全部发送成功时退出码为 `0`；存在跳过、失败、没有绑定账号或请求错误时为 `1`。广播不使用普通 RPC 的 15 秒总超时，底层微信请求仍有超时。
+
+不自动重试；长文本可能已部分送达，CLI 断开也不代表 daemon 停止发送，再次执行可能重复通知。不提供跨 daemon 重启补发保证。
+
+### 5. systemd（用户级）
 
 ```bash
 pi-wx service install   # 写入 ~/.config/systemd/user/pi-weixin-daemon.service（解析 CLI 绝对路径，不 sudo）

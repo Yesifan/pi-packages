@@ -27,6 +27,29 @@ export async function rpcCall<T = unknown>(
   params: Record<string, unknown> = {},
   socketPath = resolveDaemonSocket(),
 ): Promise<T> {
+  return callRpc<T>(method, params, socketPath, 15_000);
+}
+
+export interface BroadcastResult {
+  succeeded: number;
+  skipped: number;
+  failed: number;
+}
+
+/** Wait for project broadcast completion without an overall RPC timeout or retries. */
+export async function rpcBroadcast(
+  params: { name: string; text: string },
+  socketPath = resolveDaemonSocket(),
+): Promise<BroadcastResult> {
+  return callRpc<BroadcastResult>("project.broadcast", params, socketPath, 0);
+}
+
+async function callRpc<T>(
+  method: string,
+  params: Record<string, unknown>,
+  socketPath: string,
+  timeoutMs: number,
+): Promise<T> {
   if (!fs.existsSync(socketPath)) throw new DaemonNotRunningError();
   return new Promise<T>((resolve, reject) => {
     const socket = net.connect(socketPath);
@@ -62,7 +85,8 @@ export async function rpcCall<T = unknown>(
     });
     socket.on("error", () => done(() => reject(new DaemonNotRunningError())));
     socket.on("timeout", () => done(() => reject(new Error("rpc timeout"))));
-    socket.setTimeout(15_000);
+    socket.on("close", () => done(() => reject(new Error("rpc connection closed"))));
+    socket.setTimeout(timeoutMs);
   });
 }
 

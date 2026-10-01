@@ -126,6 +126,14 @@ export class RpcServer {
       case "project.disable":
         await this.daemon.setProjectEnabled(params.name as string, false);
         return this.daemon.getProjectStatuses();
+      case "project.broadcast":
+        if (typeof params.name !== "string" || !params.name.trim()) {
+          throw new Error("broadcast project name must be a non-empty string");
+        }
+        if (typeof params.text !== "string" || !params.text.trim()) {
+          throw new Error("broadcast text must be a non-blank string");
+        }
+        return this.daemon.broadcastProject(params.name, params.text);
       case "project.restart":
         await this.daemon.restartProject(params.name as string);
         return this.daemon.getProjectStatuses();

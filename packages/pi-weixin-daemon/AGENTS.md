@@ -43,6 +43,10 @@ pnpm --filter @yesifan/pi-weixin-daemon build
 
 ---
 
+## Specifications
+
+添加、编辑或实施 spec 前，先阅读[需求与规格索引及维护规则](docs/requirements/README.md)，并按其规则维护 spec 和索引。Specs 统一存放在 `docs/requirements/`。
+
 ## 项目文档索引
 
 本项目的机制 / 领域模型文档在 [`docs/README.md`](docs/README.md)，建议按以下顺序阅读：
