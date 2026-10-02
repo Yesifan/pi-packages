@@ -1,6 +1,6 @@
 {
   "name": "@yesifan/pi-weixin-daemon",
-  "version": "0.6.12",
+  "version": "0.6.13",
   "description": "Connect Weixin iLink Bot with Pi Coding Agent",
   "type": "module",
   "engines": {
