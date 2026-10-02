@@ -10,6 +10,9 @@ const logger = createLogger();
  * contextToken is issued per-message by the Weixin getupdates API and must
  * be echoed verbatim in every outbound send. The in-memory map is the primary
  * lookup; a disk-backed file per account ensures tokens survive daemon restarts.
+ * The protocol documentation does not specify context token validity. Community
+ * reports describe expiry after 24h or around 48h; neither is a guaranteed TTL,
+ * so this cache does not enforce a local expiry window.
  */
 const contextTokenStore = new Map<string, string>();
 

@@ -1,5 +1,5 @@
 import type { Logger } from "../../util/logger.js";
-import { sendMessage } from "../api/api.js";
+import { classifyFetchError, sendMessage } from "../api/api.js";
 import type { SendMessageReq } from "../api/types.js";
 import { MessageItemType, MessageState, MessageType } from "../api/types.js";
 import { generateId } from "../util/random.js";
@@ -78,7 +78,8 @@ export async function sendTextMessage(params: {
     } catch (err) {
       opts.logger?.error(
         {
-          err,
+          // Raw errors (including causes/stacks) can echo chunks or credentials.
+          errorType: classifyFetchError(err).type,
           to,
           clientId,
           chunkIndex,

@@ -40,6 +40,13 @@ export interface ProjectStatus {
   error?: string;
 }
 
+/** Counts returned after an explicit notification to a project's bound account owners. */
+export interface ProjectBroadcastResult {
+  succeeded: number;
+  skipped: number;
+  failed: number;
+}
+
 /** Account status exposed over RPC / `accounts`. */
 export type AccountStatus = "offline" | "connecting" | "online" | "reauth-required" | "error";
 

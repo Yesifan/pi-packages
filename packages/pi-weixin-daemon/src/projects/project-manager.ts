@@ -3,11 +3,16 @@ import type { InboundMessage, WeixinTransport } from "../weixin/types.js";
 import { type ProjectRuntimeConfig, runtimeKeyOf } from "./project-config.js";
 import { ProjectController, type ProjectHostFactory } from "./project-controller.js";
 import { ProjectTransport } from "./project-transport.js";
-import type { ProjectConfig, ProjectStatus } from "./types.js";
+import type { ProjectBroadcastResult, ProjectConfig, ProjectStatus } from "./types.js";
 
 export interface ProjectManagerOptions {
   /** Resolve the per-account transport (owned by AccountManager). */
   getTransport: (accountId: string) => WeixinTransport | undefined;
+  /** Owner details and exact cached token, supplied by the account/Weixin layer. */
+  resolveBroadcastAccount?: (accountId: string) => {
+    userId?: string;
+    contextToken?: string;
+  } | null;
   /** Build the per-project agent host (real PiSdkHost or fake in tests). */
   factory: ProjectHostFactory;
   logger: Logger;
@@ -149,6 +154,64 @@ export class ProjectManager {
       return;
     }
     await controller.handleMessage(msg);
+  }
+
+  /** Explicit owner notification; deliberately independent of Pi and session participants. */
+  async broadcast(projectId: string, text: string): Promise<ProjectBroadcastResult> {
+    const config = this.configs.get(projectId);
+    if (!config) throw new Error(`project "${projectId}" does not exist`);
+    if (!config.enabled) throw new Error(`project "${projectId}" is disabled`);
+    if (!text.trim()) throw new Error("broadcast text must not be blank");
+
+    const result: ProjectBroadcastResult = { succeeded: 0, skipped: 0, failed: 0 };
+    // Snapshot the bound accounts, not the actual-sender participant registry.
+    for (const accountId of [...config.accounts]) {
+      const account = this.opts.resolveBroadcastAccount?.(accountId);
+      const userId = account?.userId;
+      const contextToken = account?.contextToken;
+      const transport = this.opts.getTransport(accountId);
+      const target = { project: projectId, account: accountId, user: userId };
+      if (!account || !userId || !contextToken || !transport) {
+        const reason = !account
+          ? "missing-account"
+          : !userId
+            ? "missing-user"
+            : !contextToken
+              ? "missing-context-token"
+              : "missing-transport";
+        result.skipped++;
+        this.opts.logger.warn(
+          { ...target, status: "skipped", reason },
+          "project broadcast target skipped",
+        );
+        continue;
+      }
+
+      try {
+        await transport.sendText(
+          { accountId, senderId: userId, contextToken, messageId: "project-broadcast" },
+          text,
+        );
+        result.succeeded++;
+        this.opts.logger.info({ ...target, status: "succeeded" }, "project broadcast target sent");
+      } catch {
+        result.failed++;
+        // Arbitrary upstream errors can echo chunks or encoded payloads and credentials.
+        this.opts.logger.warn(
+          { ...target, status: "failed", classification: "delivery-failed" },
+          "project broadcast target failed",
+        );
+      }
+    }
+    this.opts.logger.info(
+      {
+        project: projectId,
+        ...result,
+        ...(config.accounts.length === 0 ? { reason: "no-bound-accounts" } : {}),
+      },
+      "project broadcast completed",
+    );
+    return result;
   }
 
   /** Effective status (desired ≡ effective; no config/runtime drift, ADR-0004). */

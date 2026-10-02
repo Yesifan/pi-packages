@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import { VERSION } from "../version.js";
 import { accountsCommand } from "./accounts.js";
+import { broadcastCommand } from "./broadcast.js";
 import {
   logsCommand,
   restartCommand,
@@ -31,6 +32,7 @@ export function buildProgram(): Command {
   program.addCommand(logoutCommand());
   program.addCommand(accountsCommand());
   program.addCommand(projectCommand());
+  program.addCommand(broadcastCommand());
   program.addCommand(doctorCommand());
   return program;
 }
