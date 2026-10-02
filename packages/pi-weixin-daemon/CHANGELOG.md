@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.13
+
+### Patch Changes
+
+- 25e9076: Add `pi-wx broadcast --project <name> --message <text>` to notify an enabled project's bound Weixin account owners directly, with per-recipient delivery logs and failure isolation.
+
 All notable changes to this project are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/) and [Semantic Versioning](https://semver.org/).
@@ -127,12 +133,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/) and [Semantic Ver
 - **idle 真关闭（W3）**：闲置到点后 dispose SDK runtime，下一条消息重建全新
   session；`/new` 透传 `{cancelled}`，被 `session_before_switch` 取消时如实回复。
 - **微信 slash 语义（W4）**：只认 daemon 显式命令 `/help /status /abort /new
-  /compact`；未知 `/xxx` 回复「未知命令」，不进 Pi 也不当普通消息。
+/compact`；未知 `/xxx` 回复「未知命令」，不进 Pi 也不当普通消息。
 
 ### Added
 
 - **完整 `bindExtensions`（W5）**：`waitForIdle/newSession/fork/navigateTree/
-  switchSession/reload` 六动作绑定公开 API，挂在 rebind 路径。
+switchSession/reload` 六动作绑定公开 API，挂在 rebind 路径。
 - **UI 降级契约（W6）**：`ctx.ui.custom()` resolve undefined、`editor()` 降级为
   输入框、`theme` 返回真实最小 Theme 对象；其余 TUI 原语 no-op 不 throw。
 - **`weixin_send_file` 无路径边界（W9）**：仅 `exists + isFile + sanitizeFilename`；
@@ -197,8 +203,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/) and [Semantic Ver
 
 ### Added
 
-- **入站媒体处理（参考 Hermes，不混合）**：每条 iLink 消息独立成回合；**图片**→多模态
-  （base64 + mime）；**文件 / 视频 / 语音文件**→生成 **context note**（类型 + 保存路径 +
+- **入站媒体处理（参考 Hermes，不混合）**：每条 iLink 消息独立成回合；**图片**→ 多模态
+  （base64 + mime）；**文件 / 视频 / 语音文件**→ 生成 **context note**（类型 + 保存路径 +
   “自己读/处理，别让用户粘贴/描述”）交给 agent；**语音**优先用 `voice_item.text`（iLink 自带的
   语音转写）**当作文本**，无转写才作为语音附件。
 - **下载失败告知**：媒体下载/解密失败不再静默跳过，而是记录为 `mediaFailures`，交由 agent
@@ -246,14 +252,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/) and [Semantic Ver
 
 ### Added
 
-- **会话空闲自动关闭**（需求①）：项目会话 10 分钟无消息后自动关闭，向项目内参与者广播一句
+- **会话空闲自动关闭**（需求 ①）：项目会话 10 分钟无消息后自动关闭，向项目内参与者广播一句
   "本次会话已关闭"；下一条消息进来时**自动新建**一个会话（`ProjectRuntime` 空闲定时器 +
   惰性 `newSession`）。
-- **发送者标记**（需求②）：入站消息交给 agent 的文本末尾追加 `-- from weixin <账号name>`
+- **发送者标记**（需求 ②）：入站消息交给 agent 的文本末尾追加 `-- from weixin <账号name>`
   （`buildPromptText`）。
-- **同项目互通**（需求③）：某账号的用户发消息时，同时通知同项目内**其他**参与者，
+- **同项目互通**（需求 ③）：某账号的用户发消息时，同时通知同项目内**其他**参与者，
   内容为 `"<账号name>: 消息文本"`。
-- **回复广播**（需求④）：agent 的最终回复广播给项目内**所有**参与者（含发起者）。
+- **回复广播**（需求 ④）：agent 的最终回复广播给项目内**所有**参与者（含发起者）。
 - **参与者注册表**：`ProjectRuntime` 记录每个项目下"实际发过消息的 `(accountId, senderId)` + `contextToken`"；
   互通与广播一律用它，**不依赖 `account.userId`**（避免 `ilink_user_id ≠ from_user_id` 时出错）。
 
@@ -306,7 +312,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/) and [Semantic Ver
    - `pi-wx accounts` 里 `NAME` 列显示的是 `ilink_bot_id`（无友好名）。
    - `project <name> add <label>` 按 `name` 定位账号，**找不到这些无 name 的账号**。
    - 已在 `project` 里引用它们的，`accounts` 数组存的是 `ilink_bot_id`（仍能路由），但无法再用 `name` 操作。
-   建议处理：
+     建议处理：
    - 用旧的 `ilink_bot_id`：`pi-wx logout <ilink_bot_id>` 登出无需保留的；
    - 需要保留的账号：先 `pi-wx logout <ilink_bot_id>`，再 `pi-wx login --name <label>` 重新登录（得到 `name`，可用 `project <name> add <label>` 绑定）。
    - 旧项目若 `accounts` 还引用旧 `ilink_bot_id` 且该账号已注销，请用新 `name` 重建绑定（`project create` + `project <name> add <label>`）。

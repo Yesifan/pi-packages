@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.1
+
+### Patch Changes
+
+- List every direct subagent in status snapshots and reports without omitting entries. Improve report formatting and follow-up guidance, shorten tool-result instructions, and recommend reusing an idle subagent for related work.
+- 9bbd900: Add mutually exclusive `disallowedTools` role denylists that filter built-in and extension tools, including dynamic re-registration, while preserving saved role policies across asks and recovery. Change the built-in `explore` role to exclude `edit`, `write`, and `bash` instead of allowlisting only built-in search tools; available extension tools remain usable, so this is not a strict read-only guarantee.
+
 ## 0.3.0
 
 ### Minor Changes
