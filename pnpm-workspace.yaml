@@ -2,10 +2,10 @@ packages:
   - "packages/*"
 
 catalog:
-  "@earendil-works/pi-ai": 0.87.1
-  "@earendil-works/pi-coding-agent": 0.87.1
+  "@earendil-works/pi-ai": 1.0.0
+  "@earendil-works/pi-coding-agent": 1.0.0
   "@types/node": ^26.4.0
-  # Keep direct TypeBox imports on the version required by Pi 0.87.1.
+  # Keep direct TypeBox imports on the version required by Pi 1.0.0.
   typebox: 1.3.27
   typescript: ^5.9.3
   vitest: ^4.1.11
