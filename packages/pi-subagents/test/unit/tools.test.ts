@@ -1,6 +1,7 @@
 import type {
   ExtensionAPI,
   ExtensionContext,
+  ExtensionToolContext,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
@@ -59,6 +60,14 @@ function registerTools(runtime: DelegationRuntimeApi): ToolDefinition[] {
   return tools;
 }
 
+function toolContext(): ExtensionToolContext {
+  return {
+    ...({} as ExtensionContext),
+    tools: [],
+    executeTool: vi.fn<ExtensionToolContext["executeTool"]>(),
+  };
+}
+
 function statusText(): string {
   return "**2 running, 0 done; shared usage: 3/8.**\n- worker (`sa_test`): running\n- scout (`sa_scout`): running";
 }
@@ -92,7 +101,7 @@ describe("delegation tool results", () => {
       { name: "worker", prompt: "Investigate" },
       undefined,
       undefined,
-      {} as ExtensionContext,
+      toolContext(),
     );
 
     expect(result?.content).toEqual([
@@ -137,7 +146,7 @@ describe("delegation tool results", () => {
       { id: "sa_test", prompt: "Continue", isSteer },
       undefined,
       undefined,
-      {} as ExtensionContext,
+      toolContext(),
     );
 
     expect(runtime.askSubagent).toHaveBeenCalledWith(
@@ -175,7 +184,7 @@ describe("delegation tool results", () => {
         { name: "worker", prompt: "Investigate" },
         undefined,
         undefined,
-        {} as ExtensionContext,
+        toolContext(),
       );
 
       expect(result?.content).toEqual([
