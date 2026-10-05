@@ -4,7 +4,7 @@
 **状态：** v1 实现基线（已合并 session-local delegation、project-local storage 与原生进度 widget 决策）
 **目标包名：** `@yesifan/pi-subagents`
 **目标宿主：** Pi CLI / TUI  
-**当前 SDK 验证基线：** Pi SDK 0.87.1（源码工作区的 `pnpm-workspace.yaml` catalog 锁定此版本；文末 P1–P9 为最初 0.85.1 设计依据）
+**当前 SDK 验证基线：** Pi SDK 1.0.0（源码工作区的 `pnpm-workspace.yaml` catalog 锁定此版本；文末 P1–P9 为最初 0.85.1 设计依据）
 **实现语言：** TypeScript，ES modules  
 **用途：** 交给 coding agent 完成 package、测试、示例和使用文档。
 
@@ -563,7 +563,7 @@ target cwd 普通资源发现得到的可用工具
 → 校验并创建当前 cwd 绑定的工具
 ```
 
-使用 SDK 的 `tools` 和 `excludeTools`；黑名单与 runtime 委派排除项合并传入 `excludeTools`，不能只设置初始 active tools。锁定 SDK 0.87.1 的 AgentSession 在每次 registry refresh 中过滤工具定义、执行 registry 和 prompt 贡献，因此 extension 初始注册、session_start 后动态注册/重新注册均遵守策略；`setActiveTools()` 只选择 registry 内已存在的名称，不能重新启用被排除工具。不得用 monkey-patch、私有字段或禁用所有扩展实现本策略。
+使用 SDK 的 `tools` 和 `excludeTools`；黑名单与 runtime 委派排除项合并传入 `excludeTools`，不能只设置初始 active tools。锁定 SDK 1.0.0 的 AgentSession 在每次 registry refresh 中过滤工具定义、执行 registry 和 prompt 贡献，因此 extension 初始注册、session_start 后动态注册/重新注册均遵守策略；`setActiveTools()` 只选择 registry 内已存在的名称，不能重新启用被排除工具。不得用 monkey-patch、私有字段或禁用所有扩展实现本策略。
 
 对于 external child，`AgentTypeRegistry(child.cwd)` 与 `DelegationConfig(child.cwd)` 只用于 child 自己的 `subagent` 工具；它们不能覆盖 parent 选择的 current-role snapshot。same-cwd child 不构建可调用的 delegation tools。
 
