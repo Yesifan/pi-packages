@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.14
+
+### Patch Changes
+
+- a19dae6: Upgrade the Pi SDK runtime dependencies to 1.0.0.
+
 ## 0.6.13
 
 ### Patch Changes
