@@ -1,12 +1,43 @@
 # @yesifan/pi-subagents — 实现规格
 
-**文档版本：** 1.3
-**状态：** v1 实现基线（已合并 session-local delegation、project-local storage 与原生进度 widget 决策）
+**文档版本：** 1.4
+**状态：** 当前权威规格索引：Spec 0002 于 2026-10-09 按用户明确决定标记 completed，手动 CLI 验收未运行、延期跟进；下文 V1 章节仅为历史记录
 **目标包名：** `@yesifan/pi-subagents`
 **目标宿主：** Pi CLI / TUI  
 **当前 SDK 验证基线：** Pi SDK 1.0.0（源码工作区的 `pnpm-workspace.yaml` catalog 锁定此版本；文末 P1–P9 为最初 0.85.1 设计依据）
 **实现语言：** TypeScript，ES modules  
 **用途：** 交给 coding agent 完成 package、测试、示例和使用文档。
+
+[Spec 0002](0002-prompt-and-session-storage.md) 的展示、name 接口、SDK 默认 history、按直接 parent metadata 和 Execution/RootScope 生命周期重写均已在当前工作区实现。主代理已独立重跑当前 typecheck 与 21 个文件 / 241 项测试，全部通过，runtime 修正后 pack 成功；独立最终复审确认此前 5 项问题已解决、未发现新的具体缺陷。用户于 2026-10-09 明确要求先标记完成再提交 PR，接受在实际交互 TUI/print 手动验收前关闭 Spec 0002。手测实际未运行、延期跟进，completed 不证明 §14 全部验收通过。[Spec 0003](0003-terminal-exit-reporting.md) 的异常退出通知扩展仍未开始，不属于本轮完成声明。
+
+## 当前契约与规格优先级
+
+本节、[Spec 0002](0002-prompt-and-session-storage.md)、[领域模型](../domain-model.md) 和 [ADR-0003](../adr/0003-sdk-sessions-and-parent-metadata.md) 定义当前契约。下文 V1 第 1–19 节及附录均为历史资料，不是当前实现指令或当前验收清单；其 ID、project-local store、metadata model/thinking/cwd 和补投承诺已废止。共同的 cwd/trust、角色 snapshot、当前资源、并发、等待 barrier、UI/widget、shutdown 和非 sandbox 边界按 Spec 0002 继续执行，不要求兼容旧 TS 类型/示例。
+
+| 历史章节（非当前要求） | 当前 Spec 0002 契约 |
+| --- | --- |
+| §2/§3：ID 与显示 name | 直接 parent 下 trim、大小写敏感唯一 name；ask.name，不接受 ask.id；模型工具/报告/details 不展示独立内部 ID（实际 JSONL 路径可含 Pi ID）。 |
+| §6/§7/§12：metadata cwd/model/thinking、私有 history | cwd/model/thinking 由 Pi header/history/SDK 恢复，完整 role snapshot 保留；创建继承优先级不变，ask 不用 parent 后来设置覆盖 history。 |
+| §8/§9/§13：run/mount ID、epoch | 内存 Execution/RootScope 对象身份和捕获的 parent 执行保护，steering 复用原 Execution；不生成本包 run/mount/report ID 或 epoch。 |
+| §10/§12/§13：完整 run/result/delivery | 每 parent session 一个最小 name-keyed children JSON，不保存历史 runRecord/result/delivery；在线报告至多一次，重启不补投、不自动续跑，running→interrupted。 |
+| §12：root 项目存全树/相对 history | metadata 在 `<getAgentDir()>/subagents/` 按直接 parent 分开；history 使用 `SessionManager.create(cwd)` 的 SDK 默认 cwd 分组，实际绝对 ID+file 身份用于恢复。无项目镜像，仍有一个整树 writer lock、串行原子 owner 写入，无跨文件事务。 |
+| §4/§7/§12：项目运行目录/ignore 初始化 | `.pi/subagents/setting.json` 和 caller-local/root-only 作用域不变，读取配置不强制新建项目 sessions/.gitignore；新 store 失败不回退旧 store。 |
+| §3/§8：boolean preflight | 普通仅 started 接受，steering 仅 queued 接受；handled 未接受：普通清 prepared，steering 原 Execution 不变。不伪装回滚扩展历史或外部副作用。 |
+| §17–§19/附录 A：旧存储/ID/补投验收 | 相关旧验收由 Spec 0002 §14 替代；共同行为继续回归。实施顺序与完成条件采用 Spec 0002 §13/§15 和当前锁定 Pi 1.0.0，不照抄历史 0.85.1 步骤。 |
+
+D2 允许 child 独立打开/resume/继续聊天，不增加 owned-child guard 或索引，不接管原 root metadata；整树锁不覆盖宿主直接写 JSONL 的竞争。D3 接受原生 discovery/picker/continue，不过滤或改 mtime 隐藏。D4 不应用 CLI `--session-dir`、`PI_CODING_AGENT_SESSION_DIR` 或 settings `sessionDir`，不继承 root CLI override；`PI_CODING_AGENT_DIR` 仍决定 agentDir，root 原文件不搬迁。D6 的 handled 清理只针对本包未接受准备资源，steering 不 abort 原任务。
+
+这是 BREAKING：旧 agents 不在新 registry 恢复、无法继续 ask；不迁移、不兼容、不删除旧文件。优先简单 SDK 行为和有用日志，未批准边缘策略延后。当前实现与独立最终复审已完成，Spec 0002 按用户决定关闭；实际交互 TUI/print 手动验收未运行、延期跟进。
+
+当前 child schemaVersion 为 1，hasChildren 标记用于已初始化分支缺失诊断，不是 owned-child 索引。同步接受提交可靠写入 opening→running，普通更新经串行原子写队列。ask 使用 Pi 历史 model/thinking（并验证实际 SDK 恢复，无静默 fallback），不是 metadata 固定模型副本。nested report 使用 Pi entry identity 与 settled 的处理 barrier；root 使用返回 void 的宿主 sendReport，成功仅表示 submitted、不是 processed 证明；成功提交后释放 scope delivery，无本包 root parent mount finalize 依赖。持有至 SDK 处理确认仅适用于 nested Execution，不新增 root inbox/receipt，不承诺跨重启补投或 exactly-once。异常退出通路进一步覆盖、抑制/失败日志要求仅为 Spec 0003 计划，不能据本摘要声称该计划已实施。
+
+steering 的异步 input hook / tool 取消竞争修正、自动测试与独立复审已完成：Pi queued preflight 发生在实际排队后，不可据已取消的 signal 将其描述为未接受或撤销；未排队路径仍需校验执行归属/取消，不把 started 当成 steering。细则见 Spec 0002 §8.3，不代替未运行的实际交互 TUI/print 手测。不合作的异步 hook 未退出时 shutdown 保留 writer lock，不承诺强制终止任意扩展；symlink/realpath/header 校验不是 sandbox，也不保证抵抗全部恶意路径替换竞争。
+
+---
+
+# 历史 V1 规格（第 1–19 节与附录均非当前实现要求）
+
+> 以下保留原设计的理由、类型与验收记录；不要将其中 project-store、run ID、metadata model/thinking/cwd、pending delivery 或旧 SDK 实施顺序当作当前不变量。当前规范入口在本文顶部及 Spec 0002。
 
 本文中的“必须”“不得”是验收要求；“建议”允许在保持行为一致的前提下调整实现。代码中的业务类型用于解释契约，不应误认为 Pi 导出的类型。所有 Pi API 签名以当前工作区 catalog 锁定版本的实际导出和类型检查为准。
 
@@ -204,8 +235,7 @@ Available external cwd after canonical path resolution.
 Omit cwd to use Current cwd.
 
 For related follow-up work, prefer ask_subagent to reuse a directly owned idle
-subagent. Create a new subagent only for independent context or parallel work.
-Set isSteer to true to steer an actively executing run.
+subagent.
 ```
 
 展示的 external cwd 必须已完成 home expansion、绝对路径验证和 canonicalization，模型应能直接复制。description 只暴露 caller 自己可用的资源，不递归暴露 external 项目的下一层配置。共享 live limit 来自 root project 的已生效配置；description 在 session tool 注册时生成，执行过程中不得因 live 状态变化而重注册或改写。
@@ -225,7 +255,7 @@ interface AcceptedResult {
   status: "started" | "steered";
   thinking: ThinkingLevel; // 实际生效值
   delegation_status: {
-    activeDirectSubagents: Array<{ id: string; name: string }>;
+    activeDirectSubagents: Array<{ id: string; name: string; agentType: string }>;
     activeDirectSubagentCount: number;
     liveAgents: number;
     maxLiveAgents: number;
@@ -235,7 +265,7 @@ interface AcceptedResult {
 
 必须包装成普通 Pi tool result：`content` 提供可读的启动结果，`details` 保存结构化数据。不能只把返回 ID 写在 UI 通知中。模型可见的启动文案保留 logical subagent ID，但无需显示 run ID；`details.run_id`、持久化记录和 report envelope 仍保留 run identity。`subagent` 和 `ask_subagent` 的成功工具结果应提示：如需在当前仍 streaming 的 run 中调整方向或补充上下文，可用同一 ID 调用 `ask_subagent` 并设 `isSteer: true`；这不是新 delegation，也不产生单独报告。仍须遵守 pending report 期间不轮询、不重复委派、暂缓最终答复的指引。
 
-成功的 `subagent`、普通 ask 和 steering 结果必须携带在接受线性化点捕获的 delegation status：调用者当前的 active direct subagents，以及全树共享的 `live/max_live_agents` 快照。列表只包含 direct children，名称必须单行化并截断；不省略 direct child，也不暴露其他 parent 的 child。快照另含调用方全部 direct logical subagent 的状态列表及总数（running / done / interrupted）；running 包括 opening、executing 和等待子任务的实例，done 表示已结束且可再次 ask，interrupted 表示上次 run 中断。报告文本以 Markdown 完整展示运行中/已结束数量、共享 live usage 与各项状态。该快照属于 tool result，不得通过重新注册 tool description 来更新。
+成功的 `subagent`、普通 ask 和 steering 结果必须携带在接受线性化点捕获的 delegation status：调用者当前的 active direct subagents，以及全树共享的 `live/max_live_agents` 快照。列表只包含 direct children，每项含创建时完整 snapshot 的角色 ID（`agentType`），名称必须单行化并截断；不省略 direct child，也不暴露其他 parent 的 child。快照另含调用方全部 direct logical subagent 的状态列表及总数（running / done / interrupted）；running 包括 opening、executing 和等待子任务的实例，done 表示已结束且可再次 ask，interrupted 表示上次 run 中断。报告文本以 Markdown 完整展示运行中/已结束数量、共享 live usage 与各项状态。该快照属于 tool result，不得通过重新注册 tool description 来更新。
 
 “后台”表示不等待模型完成任务。工具允许等待参数校验、项目准入、必要资源加载和 session 初始化。只有确定该请求已被接受后才返回成功。返回前失败应返回工具错误；接受后发生的执行失败通过自动报告交回 parent。
 
@@ -286,7 +316,7 @@ steering 在 idle、实例已释放、opening、closing/finalizing、恢复中�
     ok: false,
     error: { code: "SUBAGENT_BUSY", message: "...", id: "sa_..." },
     delegation_status: {
-      activeDirectSubagents: [{ id: "sa_...", name: "auth-explorer" }],
+      activeDirectSubagents: [{ id: "sa_...", name: "auth-explorer", agentType: "explore" }],
       activeDirectSubagentCount: 1,
       liveAgents: 2,
       maxLiveAgents: 8
@@ -798,6 +828,14 @@ interface SubagentReport {
 ```
 
 `reportId` 对同一 `(agentId, runId)` 固定。重复 callback 不能产生新的报告身份。
+
+报告来源行包含创建时 role。来源信息后、结果正文前直接展示一行：
+
+```text
+Complete conversation: `/absolute/path/to/session.jsonl`. Read it if more context is needed.
+```
+
+runtime 在投递前用现有 store 的 containment、非 symlink、普通非空文件与 realpath 校验解析实际绝对路径，随后只读核对首行 session header 的 ID/cwd 与保存身份；可获得本次 mount 的 SessionManager 时，还核对其 ID/cwd/实际文件一致。异步校验后重新检查 root closing/epoch，关闭或失效的 runtime 不投递。不可用或身份不符时明确说明，不猜路径、不增加 `Full session` 标题、不展开正文。正常、失败以及 root/嵌套投递均遵循此规则。该路径是投递时的派生信息（`sessionFile?`），不是新增持久化路径契约；已保存的 `sessionPath` 仍相对 root scope。完整 JSONL 不等于完整 system prompt/tool definitions，branch/compaction 也可能使文件内容不同于当前模型 request。
 
 报告内容是 worker 结果，不是更高优先级的系统指令。使用独立 custom type 和 metadata，清楚标记来源；不要伪装成用户刚刚输入的话。
 

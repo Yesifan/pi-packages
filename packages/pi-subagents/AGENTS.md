@@ -9,19 +9,24 @@ AgentSession，并提供 `subagent` 与 `ask_subagent` 工具。实现基线为
 持久化格式或委派边界前必须先更新或核对该规范；发现文档内部冲突时暂停实现并与用户讨论，
 不自行选择新语义。需求与实现规格统一存放在 `docs/specs/`，新增或移动文档时同步维护
 [`docs/README.md`](docs/README.md) 索引及相关引用。
+新增、编辑或实施规格前先阅读并遵守 [`规格索引与维护规则`](docs/specs/README.md)，同步规格 metadata 与索引。
+
+当前工作区已实现 [`Spec 0002`](docs/specs/0002-prompt-and-session-storage.md) 的 runtime 重写，独立最终复审已完成，主代理重跑当前 typecheck 与 21 个文件 / 241 项测试通过，修正后 pack 成功；实际交互 TUI/print 手测未运行，用户明确接受延期并要求关闭，Spec 0002 status 已标记 completed；不能因此声称 §14 真实 CLI 全验收通过。权威规格中的 V1 大节仅保留历史理由/约定，当前行为采用其顶部摘要、Spec 0002 和 [`ADR-0003`](docs/adr/0003-sdk-sessions-and-parent-metadata.md)。[`Spec 0003`](docs/specs/0003-terminal-exit-reporting.md) 仍为未开始的异常退出通知计划，未经授权不要顺带实施。
 
 ## 核心模型与不变量
 
-- 每个 root Pi session 对应一个 `RootRuntime`，并独占 root project 下 `.pi/subagents/sessions/<rootKey>/` 持久化 scope；external descendants 不保存副本。
-- logical subagent 身份可跨 ask 和 root 恢复保留，但每次活动 mount 使用独立 AgentSession。
+- 每个 file-backed root Pi session 对应一个 `RootRuntime` 和新的内存 `RootScope`，持有 `<getAgentDir()>/subagents/locks/<rootKey>/` 整树 writer lock；metadata 按直接 parent session 保存于全局 `subagents/sessions/<sessionKey>.json`，无项目镜像。
+- logical subagent 以直接 parent 下 trim、大小写敏感唯一 name 寻址；`ask_subagent` 使用 name，不支持旧 id。身份可跨 ask/exact root resume 保留，每次普通 ask 使用新的 `Execution` 与 AgentSession；不生成本包 agent/run/mount/report ID 或 epoch。
+- child history 采用 SDK `SessionManager.create(cwd)` 默认 cwd 分组，不应用 CLI/env/settings sessionDir、不继承 root CLI override；`PI_CODING_AGENT_DIR` 仍决定 agentDir。cwd/model/thinking 从 Pi header/history 恢复，不在 metadata 重复保存。
 - caller 只使用自己的 session-local `DelegationContext`：自己的 cwd、agent registry 和 external cwd 配置。
 - child 角色在创建时从 caller registry 解析并保存完整 snapshot；后续 ask 不得重新解析同名角色替换 snapshot。
 - tool 的 `cwd` 只接受绝对路径；canonicalize 后必须精确等于 caller cwd 或 caller 当前配置中的一个 external cwd。授权不包含子目录或路径前缀。
 - same-cwd child 是叶节点；external child 只有在角色工具、深度和运行时策略都允许时才能继续委派。
 - canonical cwd 祖先链不得重复，避免 `A → B → A` 循环。
 - 普通 ask 只接受 idle logical subagent；busy 时立即返回 `SUBAGENT_BUSY`，不得增加业务任务队列。
-- `isSteer: true` 只复用 Pi 当前 streaming run 的 steering queue，不创建新 run、run ID 或独立 report；不可 steering 时返回 `SUBAGENT_NOT_STEERABLE`。
-- 子 run/report 与发起它的 parent run 绑定；等待 child/report 的 parent 不得提前 finalize 或 cold-release。
+- `isSteer: true` 只复用 Pi 当前 streaming Execution 的 steering queue，不创建新执行或独立 report；不可 steering 时返回 `SUBAGENT_NOT_STEERABLE` 并说明具体状态，不能把所有拒绝等同已停止。
+- child/report 绑定发起它的具体 parent Execution；等待 child/report 的 parent 不得提前 finalize 或 cold-release。sender 释放后已提交 delivery 仍面向原有效 target，不改下一次执行。
+- 恢复 running→interrupted，不自动续跑、不保存历史 runRecord/result/delivery、不跨重启补投。旧 project/global store 不读取、迁移或 fallback，旧文件不自动删除。
 - root shutdown/session replacement 必须 abort 活动 descendants、取消 UI、dispose sessions 并释放 writer lock。
 - 子 session 的 resources、extensions、tools、ModelRuntime 和动态描述必须按目标 cwd 当前状态重新建立，不能跨 cwd 共享 mutable registry。
 
@@ -30,12 +35,12 @@ AgentSession，并提供 `subagent` 与 `ask_subagent` 工具。实现基线为
 ## 主要目录与模块
 
 - `src/index.ts`：Pi 扩展入口及 root session 生命周期绑定。
-- `src/runtime.ts`：logical agent/run 状态机、普通 ask、steering、报告和 shutdown。
+- `src/runtime.ts`：Agent/Execution/RootScope 生命周期、name reservation、普通 ask、steering、在线报告处理 barrier 和 shutdown。
 - `src/child-session.ts`：目标 cwd AgentSession 创建/恢复、资源隔离、工具白名单/黑名单和角色 prompt。
 - `src/delegation.ts`：session-local delegation context 与动态 tool description。
-- `src/config.ts`、`src/project-storage.ts`、`src/paths.ts`：项目本地配置、trust 后存储初始化、Git/路径安全、project root、canonical cwd 授权和 cycle 检查。
+- `src/config.ts`、`src/paths.ts`：caller 项目配置、project root、canonical cwd 授权和 cycle 检查。配置读取不强制新建项目 sessions/.gitignore；`src/project-storage.ts` 保留历史 helper，不是当前 runtime store 初始化入口。
 - `src/agents.ts`：内置/global/project agent registry、frontmatter 校验和 snapshot/hash。
-- `src/store.ts`：root-scoped 原子 JSON 持久化和单 writer lock。
+- `src/store.ts`：全局直接 parent owner JSON、归属校验、串行原子写入/同步接受提交、递归恢复与整树 writer lock。
 - `src/progress.ts`：run-local 活动摘要与 root 原生 widget 行格式化。
 - `src/ui.ts`：所有 descendants 共用的 blocking UI FIFO、root progress widget 与受限 UI proxy。
 - `src/tools.ts`：`subagent` / `ask_subagent` schema 和结构化结果。
@@ -46,8 +51,11 @@ AgentSession，并提供 `subagent` 与 `ask_subagent` 工具。实现基线为
 
 - 不为方便而读取 target cwd 的 agents/config 来替 caller 做委派决策。
 - 不把角色 snapshot、delegation context 或动态工具描述提升为 process-global cache。
-- 不把 steering 实现为第二套 completion/report 流程；原 run 仍只有一个最终报告。
-- 不让调用方 tool abort 在 Pi 已接受任务后撤销成功结果；接受前 abort 必须回滚 opening 状态。
+- 不把 steering 实现为第二套 completion/report 流程；原 Execution 仍至多一个在线最终报告。
+- 普通请求仅 preflight started 接受，steering 仅 queued 接受；handled 普通清 prepared，steering 原执行不变。接受后 tool abort 不撤销已接受结果；未接受新 child 仅清本次新资源，既有 ask 恢复先前 state，不声称回滚扩展历史或外部副作用。
+- 允许 child 独立打开/resume/继续聊天并接受原生 discovery/picker/continue；不增加 owned-child guard、标记或索引，不改 mtime 隐藏。整树锁不覆盖宿主直接写 JSONL 的竞争。
+- 新 metadata 不保存 model/thinking/cwd 的第二份副本，不新增持久 inbox、全局关系表或跨文件事务；优先简单 SDK 行为和有用日志。
+- root void sendReport 成功仅表示 submitted，无 processed receipt；nested Execution 才有 SDK 处理 barrier。queued steering 已实际排队，取消不可撤回。不合作的异步 hook 未退出时 shutdown 保留 writer lock；symlink/realpath/header 校验不是 sandbox 或全部恶意路径竞争的防护。
 - trust 检查必须发生在加载 external project resources 之前。
 - `external_directory` 只是 cwd admission，不是 filesystem sandbox；文档中不得宣称其提供文件系统隔离。
 - 改变公开行为时同步更新 README、规范及 CHANGELOG；遵守根目录的 patch/minor 版本规则。
@@ -61,7 +69,7 @@ AgentSession，并提供 `subagent` 与 `ask_subagent` 工具。实现基线为
 - config precedence、home expansion、绝对/canonical/exact cwd 匹配；
 - agent layer override、snapshot 稳定性、symlink escape、工具白名单/黑名单互斥及动态扩展重新注册后的过滤；
 - direct ownership、depth/live/cycle limit、普通 ask 原子 busy；
-- STR01–STR06 steering 行为和单 report；
+- Spec 0002 的 Execution/steering 行为、具体拒绝诊断、单 report 与迟到 callback guards；
 - child 等待、report delivery、恢复、interrupted run 和 writer lock；
 - target resources/tools 更新、跨 cwd 隔离及 `Warning Cache Broke` 场景；
 - UI FIFO、取消、timeout、无 UI fallback 和 status cleanup；

@@ -1,10 +1,12 @@
 # ADR-0001：项目本地单一权威 subagent 存储
 
-- 状态：✅ 已接受并实施（Accepted，`0.2.0`）
+- 状态：历史决定，已在 `0.2.0` 实施；相关存储决定已由 [ADR-0003](0003-sdk-sessions-and-parent-metadata.md) 替代，重写已在当前工作区实现，独立最终复审完成，手动 CLI 验收未运行。
 - 日期：2026-09-11
 - 目标版本：0.2.0
 - 关联：[`specs/0001-project-local-subagent-storage.md`](../specs/0001-project-local-subagent-storage.md)
 - 规格：已同步 `docs/specs/yesifan-pi-subagents-spec.md` 第 4、12、13 节及关联不变量
+
+> 本文保留原背景和理由。ADR-0003 替代 D1/D2/D4/D5 的运行数据位置、项目 runtime 初始化和相对 history 决定；caller-local 配置、root limits、trust 与单一事实来源原则保留。下文描述历史方案，不代表批准的新目标或迁移承诺。
 
 ## 背景
 

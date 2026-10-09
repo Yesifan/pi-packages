@@ -1,35 +1,30 @@
-import { createHash, randomUUID } from "node:crypto";
-import { chmodSync, lstatSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import * as fs from "node:fs";
 import {
-  chmod,
-  lstat,
-  mkdir,
-  readdir,
-  readFile,
-  realpath,
-  rename,
-  rm,
-  writeFile,
-} from "node:fs/promises";
+  chmodSync,
+  closeSync,
+  constants,
+  fstatSync,
+  fsyncSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import lockfile from "proper-lockfile";
 import { SubagentError } from "./errors.js";
-import { assertProjectStorageAvailable } from "./project-storage.js";
-import type { StoredRun, StoredSubagent } from "./types.js";
+import type {
+  AgentDefinitionSnapshot,
+  ChildRecord,
+  ParentSessionRecord,
+  SessionIdentity,
+} from "./types.js";
 
-interface StoredRoot {
-  schemaVersion: 2;
-  rootSessionId: string;
-  rootSessionFile: string;
-  updatedAt: string;
-}
-
-function stableRootKey(rootSessionId: string, rootSessionFile: string): string {
-  return createHash("sha256")
-    .update(`${rootSessionId}\0${path.resolve(rootSessionFile)}`)
-    .digest("hex")
-    .slice(0, 32);
-}
+export type { ChildRecord, ParentSessionRecord, SessionIdentity } from "./types.js";
 
 function storeError(message: string, cause?: unknown): SubagentError {
   return new SubagentError(
@@ -40,380 +35,501 @@ function storeError(message: string, cause?: unknown): SubagentError {
   );
 }
 
-function isWithin(candidate: string, parent: string): boolean {
-  const relative = path.relative(parent, candidate);
-  return (
-    relative === "" ||
-    (!path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(`..${path.sep}`))
-  );
+function object(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function safeSegment(value: string, kind: string): string {
-  if (!value || value === "." || value === ".." || path.basename(value) !== value) {
-    throw storeError(`Invalid ${kind} path segment: ${value}`);
+function onlyKeys(value: Record<string, unknown>, keys: string[]): boolean {
+  return Object.keys(value).every((key) => keys.includes(key));
+}
+
+function nonempty(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && !value.includes("\0");
+}
+
+function normalizeIdentity(value: SessionIdentity): SessionIdentity {
+  if (
+    !object(value) ||
+    !nonempty(value.sessionId) ||
+    !nonempty(value.sessionFile) ||
+    !path.isAbsolute(value.sessionFile)
+  ) {
+    throw storeError("Session identity requires a non-empty ID and an absolute file path.");
   }
-  return value;
+  return { sessionId: value.sessionId, sessionFile: path.normalize(value.sessionFile) };
 }
 
-async function ensurePlainDirectory(directory: string, create: boolean): Promise<void> {
+function storedIdentity(value: unknown): SessionIdentity {
+  if (!object(value) || !onlyKeys(value, ["sessionId", "sessionFile"])) {
+    throw storeError("Invalid stored session identity.");
+  }
+  return normalizeIdentity(value as unknown as SessionIdentity);
+}
+
+function sameIdentity(a: SessionIdentity, b: SessionIdentity): boolean {
+  return a.sessionId === b.sessionId && a.sessionFile === b.sessionFile;
+}
+
+export function sessionKey(identity: SessionIdentity): string {
+  const normalized = normalizeIdentity(identity);
+  return createHash("sha256")
+    .update(`${normalized.sessionId}\0${normalized.sessionFile}`)
+    .digest("hex")
+    .slice(0, 32);
+}
+
+function validateName(name: string): void {
+  if (typeof name !== "string" || !name.trim() || name !== name.trim()) {
+    throw storeError("Child names must be non-empty and already trimmed.");
+  }
+}
+
+function snapshot(value: unknown): AgentDefinitionSnapshot {
+  if (
+    !object(value) ||
+    !onlyKeys(value, [
+      "id",
+      "description",
+      "tools",
+      "disallowedTools",
+      "thinking",
+      "prompt",
+      "source",
+      "contentHash",
+    ]) ||
+    !nonempty(value.id) ||
+    typeof value.prompt !== "string" ||
+    !nonempty(value.source) ||
+    !nonempty(value.contentHash) ||
+    (value.description !== undefined && typeof value.description !== "string") ||
+    (value.tools !== undefined && value.disallowedTools !== undefined) ||
+    (value.thinking !== undefined &&
+      !["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(
+        value.thinking as string,
+      ))
+  ) {
+    throw storeError("Invalid stored role snapshot.");
+  }
+  for (const tools of [value.tools, value.disallowedTools]) {
+    if (tools !== undefined && (!Array.isArray(tools) || !tools.every(nonempty))) {
+      throw storeError("Invalid stored role tool policy.");
+    }
+  }
+  return structuredClone(value) as unknown as AgentDefinitionSnapshot;
+}
+
+function childRecord(value: unknown): ChildRecord {
+  if (
+    !object(value) ||
+    !onlyKeys(value, ["sessionId", "sessionFile", "roleSnapshot", "state", "hasChildren"]) ||
+    !["opening", "running", "idle", "interrupted"].includes(value.state as string) ||
+    (value.hasChildren !== undefined && value.hasChildren !== true)
+  ) {
+    throw storeError("Invalid stored child record.");
+  }
+  return {
+    ...normalizeIdentity(value as unknown as SessionIdentity),
+    roleSnapshot: snapshot(value.roleSnapshot),
+    state: value.state as ChildRecord["state"],
+    ...(value.hasChildren === true ? { hasChildren: true } : {}),
+  };
+}
+
+function plainDirectory(directory: string, create = false): void {
   try {
-    const info = await lstat(directory);
-    if (info.isSymbolicLink() || !info.isDirectory()) {
-      throw storeError(`Stored subagent path must be a non-symlink directory: ${directory}`);
+    const info = lstatSync(directory);
+    if (!info.isDirectory() || info.isSymbolicLink()) {
+      throw storeError(`Subagent storage requires a non-symlink directory: ${directory}`);
     }
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    if (!create) throw storeError(`Stored subagent directory is unavailable: ${directory}`, error);
+    if (!create || (error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     try {
-      await mkdir(directory, { mode: 0o700 });
-      await chmod(directory, 0o700);
+      mkdirSync(directory, { mode: 0o700 });
     } catch (mkdirError) {
-      if ((mkdirError as NodeJS.ErrnoException).code !== "EEXIST") {
-        throw storeError(`Cannot create stored subagent directory: ${directory}`, mkdirError);
-      }
+      if ((mkdirError as NodeJS.ErrnoException).code !== "EEXIST") throw mkdirError;
     }
-    const info = await lstat(directory);
-    if (info.isSymbolicLink() || !info.isDirectory()) {
-      throw storeError(`Stored subagent path must be a non-symlink directory: ${directory}`);
-    }
+    plainDirectory(directory);
   }
 }
 
-function atomicJsonSync(file: string, value: unknown): void {
-  const temp = `${file}.${process.pid}.${randomUUID()}.tmp`;
+function directoryChain(directory: string): string[] {
+  const directories: string[] = [];
+  for (let current = directory; ; current = path.dirname(current)) {
+    directories.unshift(current);
+    if (path.dirname(current) === current) return directories;
+  }
+}
+
+let temporarySequence = 0;
+
+function atomicJson(file: string, value: ParentSessionRecord): void {
+  // These suffixes identify scratch files only, never sessions or executions.
+  const temporary = `${file}.${process.pid}.${++temporarySequence}.tmp`;
+  let descriptor: number | undefined;
+  let created = false;
   try {
-    writeFileSync(temp, `${JSON.stringify(value, null, 2)}\n`, { flag: "wx", mode: 0o600 });
-    chmodSync(temp, 0o600);
-    renameSync(temp, file);
-  } catch (error) {
+    descriptor = openSync(temporary, "wx", 0o600);
+    created = true;
+    writeFileSync(descriptor, `${JSON.stringify(value, null, 2)}\n`);
+    fsyncSync(descriptor);
+    closeSync(descriptor);
+    descriptor = undefined;
+    renameSync(temporary, file);
+    const directory = openSync(path.dirname(file), "r");
     try {
-      rmSync(temp, { force: true });
-    } catch {
-      // Preserve the original persistence error.
+      fsyncSync(directory);
+    } finally {
+      closeSync(directory);
     }
-    throw storeError(`Cannot atomically write ${file}`, error);
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
+    if (created) rmSync(temporary, { force: true });
   }
 }
 
-async function atomicJson(file: string, value: unknown): Promise<void> {
-  const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
-  try {
-    await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
-    await rename(temporary, file);
-  } catch (error) {
-    await rm(temporary, { force: true }).catch(() => undefined);
-    throw storeError(`Cannot write stored subagent data: ${file}`, error);
-  }
-}
-
-async function readJson<T>(file: string): Promise<T> {
-  try {
-    const info = await lstat(file);
-    if (info.isSymbolicLink() || !info.isFile()) {
-      throw storeError(`Stored subagent data must be a non-symlink file: ${file}`);
-    }
-    return JSON.parse(await readFile(file, "utf8")) as T;
-  } catch (error) {
-    if (error instanceof SubagentError) throw error;
-    throw storeError(`Cannot read stored subagent data: ${file}`, error);
-  }
-}
-
+/** Global direct-owner metadata. History validation and recursive recovery belong to runtime. */
 export class PersistentSubagentStore {
   readonly rootKey: string;
-  readonly rootDirectory: string;
-  readonly sessionsRoot: string;
+  private readonly root: SessionIdentity;
+  private readonly directories: string[];
+  private readonly sessionsDirectory: string;
+  private readonly lockTarget: string;
+  private readonly lockDirectory: string;
   private releaseLock?: () => Promise<void>;
-  private writes = Promise.resolve();
+  private lockFailure?: Error;
+  private writes: Promise<unknown> = Promise.resolve();
+  private closing = false;
+  private opened = false;
+  private openPromise?: Promise<ParentSessionRecord | undefined>;
+  private closePromise?: Promise<void>;
+  private readonly loadedOwners = new Set<string>();
+  private revision = 0;
+  private readonly applied = new Map<string, Map<string, number>>();
 
-  constructor(
-    readonly projectRoot: string,
-    readonly storageDirectory: string,
-    readonly rootSessionId: string,
-    readonly rootSessionFile: string,
-  ) {
-    this.rootKey = stableRootKey(rootSessionId, rootSessionFile);
-    this.sessionsRoot = path.join(storageDirectory, "sessions");
-    this.rootDirectory = path.join(this.sessionsRoot, this.rootKey);
+  constructor(agentDir: string, root: SessionIdentity) {
+    if (!nonempty(agentDir) || !path.isAbsolute(agentDir)) {
+      throw storeError("Subagent agentDir must be an absolute path.");
+    }
+    this.root = normalizeIdentity(root);
+    this.rootKey = sessionKey(this.root);
+    const storage = path.join(path.normalize(agentDir), "subagents");
+    this.sessionsDirectory = path.join(storage, "sessions");
+    const locks = path.join(storage, "locks");
+    this.lockTarget = path.join(locks, this.rootKey);
+    this.lockDirectory = path.join(this.lockTarget, ".writer");
+    this.directories = [...directoryChain(storage), this.sessionsDirectory, locks, this.lockTarget];
   }
 
-  async open(): Promise<StoredSubagent[]> {
-    await assertProjectStorageAvailable(this.projectRoot, this.storageDirectory);
-    await ensurePlainDirectory(this.rootDirectory, true);
-    const agentsDirectory = path.join(this.rootDirectory, "agents");
-    await ensurePlainDirectory(agentsDirectory, true);
-    try {
-      this.releaseLock = await lockfile.lock(this.rootDirectory, {
-        realpath: false,
-        retries: 0,
-        stale: 30_000,
-      });
-    } catch (error) {
-      throw new SubagentError(
-        "ROOT_SCOPE_IN_USE",
-        `Another Pi process is already using subagent scope ${this.rootKey}`,
-        undefined,
-        { cause: error },
-      );
+  open(): Promise<ParentSessionRecord | undefined> {
+    if (this.opened || this.closing) {
+      return Promise.reject(storeError("Subagent store has already been opened."));
     }
+    this.opened = true;
+    this.openPromise = this.openNow();
+    return this.openPromise;
+  }
+
+  private async openNow(): Promise<ParentSessionRecord | undefined> {
     try {
-      await this.openRootRecord();
-      const entries = await readdir(agentsDirectory, { withFileTypes: true });
-      const agents: StoredSubagent[] = [];
-      for (const entry of entries) {
-        if (entry.isSymbolicLink()) {
-          throw storeError(
-            `Stored subagent agent directory must not be a symlink: ${path.join(agentsDirectory, entry.name)}`,
-          );
-        }
-        if (!entry.isDirectory()) continue;
-        const file = path.join(agentsDirectory, entry.name, "agent.json");
-        try {
-          const agent = await readJson<StoredSubagent>(file);
-          if (agent.schemaVersion !== 2 || agent.id !== entry.name) {
-            throw storeError(`Invalid stored subagent record: ${file}`);
-          }
-          await this.assertAgentDirectories(agent.id);
-          if (agent.activeRunId) {
-            const activeRunId = agent.activeRunId;
-            const run = await this.readRun(agent.id, activeRunId);
-            const recoveredAt = new Date().toISOString();
-            if (run.state === "opening") {
-              await this.deleteRun(agent.id, run.id);
-              if (agent.lastRunId === run.id) agent.lastRunId = undefined;
-            } else {
-              if (!run.completedAt) {
-                run.state = "completed";
-                run.completedAt = recoveredAt;
-                run.outcome = "interrupted";
-                run.result = run.result ?? "";
-                run.error = {
-                  code: "INTERRUPTED",
-                  message: "The root session ended before this run completed; it was not replayed.",
-                };
-                await this.saveRun(run);
-              }
-              agent.interrupted = run.outcome === "interrupted";
-            }
-            agent.activeRunId = undefined;
-            agent.updatedAt = recoveredAt;
-            await this.saveAgent(agent);
-          }
-          agents.push(agent);
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
-          throw error;
-        }
+      for (const directory of this.directories) plainDirectory(directory, true);
+      // Reject an unsafe existing lock path before asking the lock library to inspect it.
+      try {
+        plainDirectory(this.lockDirectory);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       }
-      return agents;
+      try {
+        this.releaseLock = await lockfile.lock(this.lockTarget, {
+          realpath: false,
+          lockfilePath: this.lockDirectory,
+          retries: 0,
+          stale: 30_000,
+          fs: {
+            ...fs,
+            mkdir: (directory: string, callback: (error: NodeJS.ErrnoException | null) => void) =>
+              fs.mkdir(directory, { mode: 0o700 }, callback),
+          },
+          onCompromised: (error) => {
+            this.lockFailure = error;
+          },
+        });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ELOCKED") throw error;
+        throw new SubagentError(
+          "ROOT_SCOPE_IN_USE",
+          "Another Pi process is already managing this root session's subagent tree.",
+          undefined,
+          { cause: error },
+        );
+      }
+      if (this.closing) throw storeError("Subagent store closed during lock acquisition.");
+      plainDirectory(this.lockDirectory);
+      chmodSync(this.lockDirectory, 0o700);
+      return this.readOwnerNow(this.root, null);
     } catch (error) {
       const release = this.releaseLock;
       this.releaseLock = undefined;
-      if (release) await release();
-      throw error;
+      if (release) await release().catch(() => undefined);
+      throw this.error(error);
     }
   }
 
-  private async openRootRecord(): Promise<void> {
-    const file = path.join(this.rootDirectory, "root.json");
-    const expectedFile = path.resolve(this.rootSessionFile);
+  readOwner(
+    owner: SessionIdentity,
+    parent: SessionIdentity | null,
+    required = false,
+  ): Promise<ParentSessionRecord | undefined> {
+    return this.enqueue(() => this.readOwnerNow(owner, parent, required));
+  }
+
+  /** Publish a valid empty branch owner before its parent's hasChildren marker. */
+  ensureOwner(owner: SessionIdentity, parent: SessionIdentity | null): Promise<void> {
     try {
-      const stored = await readJson<StoredRoot>(file);
+      const normalizedOwner = normalizeIdentity(owner);
+      const normalizedParent = parent === null ? null : normalizeIdentity(parent);
+      return this.enqueue(() => {
+        this.readOwnerNow(this.root, null, !sameIdentity(normalizedOwner, this.root));
+        if (this.readOwnerNow(normalizedOwner, normalizedParent)) return;
+        const record: ParentSessionRecord = {
+          schemaVersion: 1,
+          root: { ...this.root },
+          owner: normalizedOwner,
+          parent: normalizedParent,
+          children: Object.create(null),
+        };
+        const key = sessionKey(normalizedOwner);
+        atomicJson(path.join(this.sessionsDirectory, `${key}.json`), record);
+        this.loadedOwners.add(key);
+      });
+    } catch (error) {
+      return Promise.reject(this.error(error));
+    }
+  }
+
+  /** Grow-only field merge; never replace a child's newer state with a captured snapshot. */
+  markHasChildren(
+    owner: SessionIdentity,
+    parent: SessionIdentity | null,
+    name: string,
+  ): Promise<void> {
+    try {
+      const normalizedOwner = normalizeIdentity(owner);
+      const normalizedParent = parent === null ? null : normalizeIdentity(parent);
+      validateName(name);
+      return this.enqueue(() => {
+        this.readOwnerNow(this.root, null, true);
+        const record = this.readOwnerNow(normalizedOwner, normalizedParent, true);
+        const child = record?.children[name];
+        if (!record || !child) throw storeError("Branch marker requires an existing child record.");
+        this.readOwnerNow(child, normalizedOwner, true);
+        if (child.hasChildren) return;
+        child.hasChildren = true;
+        // Do not advance the child's mutation revision: this field-only merge must neither
+        // overwrite sync acceptance nor supersede a subsequent queued state update.
+        atomicJson(
+          path.join(this.sessionsDirectory, `${sessionKey(normalizedOwner)}.json`),
+          record,
+        );
+      });
+    } catch (error) {
+      return Promise.reject(this.error(error));
+    }
+  }
+
+  setChild(
+    owner: SessionIdentity,
+    parent: SessionIdentity | null,
+    name: string,
+    child: ChildRecord,
+  ): Promise<void> {
+    try {
+      const prepared = childRecord(child);
+      const normalizedOwner = normalizeIdentity(owner);
+      const normalizedParent = parent === null ? null : normalizeIdentity(parent);
+      validateName(name);
+      const revision = ++this.revision;
+      return this.enqueue(() =>
+        this.update(normalizedOwner, normalizedParent, name, prepared, revision),
+      );
+    } catch (error) {
+      return Promise.reject(this.error(error));
+    }
+  }
+
+  /** Synchronous preflight acceptance: requires an already durable opening record. */
+  setChildSync(
+    owner: SessionIdentity,
+    parent: SessionIdentity | null,
+    name: string,
+    child: ChildRecord,
+  ): void {
+    try {
+      if (this.closing) throw storeError("Subagent store is closing.");
+      validateName(name);
+      const prepared = childRecord(child);
+      const record = this.readOwnerNow(owner, parent, true);
+      const previous = record?.children[name];
       if (
-        stored.schemaVersion !== 2 ||
-        stored.rootSessionId !== this.rootSessionId ||
-        path.resolve(stored.rootSessionFile) !== expectedFile
+        !previous ||
+        previous.state !== "opening" ||
+        prepared.state !== "running" ||
+        !sameIdentity(previous, prepared)
       ) {
-        throw storeError(`Stored root identity does not match the current root session: ${file}`);
-      }
-    } catch (error) {
-      if (!(error instanceof SubagentError) || error.cause === undefined) throw error;
-      const cause = error.cause as NodeJS.ErrnoException;
-      if (cause.code !== "ENOENT") throw error;
-    }
-    await atomicJson(file, {
-      schemaVersion: 2,
-      rootSessionId: this.rootSessionId,
-      rootSessionFile: expectedFile,
-      updatedAt: new Date().toISOString(),
-    } satisfies StoredRoot);
-  }
-
-  agentDirectory(agentId: string): string {
-    return path.join(this.rootDirectory, "agents", safeSegment(agentId, "agent ID"));
-  }
-
-  sessionsDirectory(agentId: string): string {
-    return path.join(this.agentDirectory(agentId), "sessions");
-  }
-
-  async prepareAgent(agentId: string): Promise<void> {
-    return this.enqueue(async () => {
-      await this.assertRootAvailable();
-      const directory = this.agentDirectory(agentId);
-      await ensurePlainDirectory(directory, true);
-      await ensurePlainDirectory(path.join(directory, "runs"), true);
-      await ensurePlainDirectory(path.join(directory, "sessions"), true);
-    });
-  }
-
-  toSessionPath(agentId: string, sessionFile: string): string {
-    const absolute = path.resolve(sessionFile);
-    const expectedDirectory = this.sessionsDirectory(agentId);
-    if (!isWithin(absolute, expectedDirectory) || absolute === expectedDirectory) {
-      throw storeError(
-        `Child session file must be inside its agent session directory: ${sessionFile}`,
-      );
-    }
-    return path.relative(this.rootDirectory, absolute);
-  }
-
-  async resolveSessionPath(agentId: string, sessionPath: string): Promise<string> {
-    if (!sessionPath || path.isAbsolute(sessionPath)) {
-      throw storeError(`Stored child session path must be relative: ${sessionPath}`);
-    }
-    const normalized = path.normalize(sessionPath);
-    if (normalized === "." || normalized === ".." || normalized.startsWith(`..${path.sep}`)) {
-      throw storeError(`Stored child session path escapes its root scope: ${sessionPath}`);
-    }
-    await this.assertAgentDirectories(agentId);
-    const candidate = path.resolve(this.rootDirectory, normalized);
-    const expectedDirectory = this.sessionsDirectory(agentId);
-    if (!isWithin(candidate, expectedDirectory) || candidate === expectedDirectory) {
-      throw storeError(
-        `Stored child session path escapes its agent session directory: ${sessionPath}`,
-      );
-    }
-    try {
-      const info = await lstat(candidate);
-      if (info.isSymbolicLink() || !info.isFile() || info.size === 0) {
         throw storeError(
-          `Stored child session must be a non-empty, non-symlink file: ${candidate}`,
+          "Synchronous acceptance requires the same child's durable opening record.",
         );
       }
-      const [canonicalFile, canonicalDirectory] = await Promise.all([
-        realpath(candidate),
-        realpath(expectedDirectory),
-      ]);
-      if (!isWithin(canonicalFile, canonicalDirectory)) {
-        throw storeError(
-          `Stored child session path escapes its agent session directory: ${sessionPath}`,
-        );
-      }
-      return canonicalFile;
+      this.update(owner, parent, name, prepared, ++this.revision);
     } catch (error) {
-      if (error instanceof SubagentError) throw error;
-      throw storeError(`Stored child session is unavailable: ${candidate}`, error);
+      throw this.error(error);
     }
   }
 
-  async saveAgent(agent: StoredSubagent): Promise<void> {
-    return this.enqueue(async () => {
-      await this.assertAgentDirectories(agent.id);
-      await atomicJson(path.join(this.agentDirectory(agent.id), "agent.json"), agent);
-    });
-  }
-
-  async saveRun(run: StoredRun): Promise<void> {
-    return this.enqueue(async () => {
-      await this.assertAgentDirectories(run.agentId);
-      const runId = safeSegment(run.id, "run ID");
-      await atomicJson(path.join(this.agentDirectory(run.agentId), "runs", `${runId}.json`), run);
-    });
-  }
-
-  commitAcceptedRun(run: StoredRun): void {
-    if (run.state !== "accepted" || !run.acceptedAt || !this.releaseLock) {
-      throw storeError(`Cannot commit an unaccepted subagent run: ${run.id}`);
-    }
-    const directories = [
-      path.join(this.projectRoot, ".pi"),
-      this.storageDirectory,
-      path.join(this.storageDirectory, "sessions"),
-      this.rootDirectory,
-      path.join(this.rootDirectory, "agents"),
-      this.agentDirectory(run.agentId),
-      path.join(this.agentDirectory(run.agentId), "runs"),
-    ];
+  removeChild(owner: SessionIdentity, parent: SessionIdentity | null, name: string): Promise<void> {
     try {
-      for (const directory of directories) {
-        const info = lstatSync(directory);
-        if (info.isSymbolicLink() || !info.isDirectory()) {
-          throw storeError(`Subagent storage directory is unsafe: ${directory}`);
-        }
-      }
-      const root = realpathSync(this.rootDirectory);
-      const runs = realpathSync(path.join(this.agentDirectory(run.agentId), "runs"));
-      if (!isWithin(runs, root)) {
-        throw storeError(`Subagent run directory escapes its root scope: ${runs}`);
-      }
-      atomicJsonSync(path.join(runs, `${safeSegment(run.id, "run ID")}.json`), run);
+      validateName(name);
+      const normalizedOwner = normalizeIdentity(owner);
+      const normalizedParent = parent === null ? null : normalizeIdentity(parent);
+      const revision = ++this.revision;
+      return this.enqueue(() =>
+        this.update(normalizedOwner, normalizedParent, name, undefined, revision),
+      );
     } catch (error) {
-      if (error instanceof SubagentError) throw error;
-      throw storeError(`Cannot commit accepted subagent run: ${run.id}`, error);
+      return Promise.reject(this.error(error));
     }
   }
 
-  async deleteAgent(agentId: string): Promise<void> {
-    return this.enqueue(() =>
-      rm(this.agentDirectory(agentId), { recursive: true, force: true }).catch((error) => {
-        throw storeError(`Cannot delete stored subagent: ${agentId}`, error);
-      }),
-    );
-  }
-
-  async deleteRun(agentId: string, runId: string): Promise<void> {
-    return this.enqueue(() =>
-      rm(path.join(this.agentDirectory(agentId), "runs", `${safeSegment(runId, "run ID")}.json`), {
-        force: true,
-      }).catch((error) => {
-        throw storeError(`Cannot delete stored subagent run: ${runId}`, error);
-      }),
-    );
-  }
-
-  async readRun(agentId: string, runId: string): Promise<StoredRun> {
-    await this.assertAgentDirectories(agentId);
-    const file = path.join(
-      this.agentDirectory(agentId),
-      "runs",
-      `${safeSegment(runId, "run ID")}.json`,
-    );
-    const run = await readJson<StoredRun>(file);
-    if (
-      run.id !== runId ||
-      run.agentId !== agentId ||
-      !["opening", "accepted", "completed"].includes(run.state)
-    ) {
-      throw storeError(`Invalid stored subagent run: ${file}`);
+  private assertAvailable(): void {
+    if (!this.releaseLock || this.lockFailure) {
+      throw storeError("Subagent tree writer lock is unavailable.", this.lockFailure);
     }
-    return run;
+    for (const directory of [...this.directories, this.lockDirectory]) plainDirectory(directory);
   }
 
-  private async assertRootAvailable(): Promise<void> {
-    await assertProjectStorageAvailable(this.projectRoot, this.storageDirectory);
-    await ensurePlainDirectory(this.rootDirectory, false);
-    await ensurePlainDirectory(path.join(this.rootDirectory, "agents"), false);
+  private readOwnerNow(
+    ownerInput: SessionIdentity,
+    parentInput: SessionIdentity | null,
+    required = false,
+  ): ParentSessionRecord | undefined {
+    this.assertAvailable();
+    const owner = normalizeIdentity(ownerInput);
+    const parent = parentInput === null ? null : normalizeIdentity(parentInput);
+    if (sameIdentity(owner, this.root) !== (parent === null)) {
+      throw storeError("Only the root owner may have a null parent.");
+    }
+    const key = sessionKey(owner);
+    const file = path.join(this.sessionsDirectory, `${key}.json`);
+    let descriptor: number | undefined;
+    try {
+      const info = lstatSync(file);
+      if (!info.isFile() || info.isSymbolicLink()) {
+        throw storeError(`Owner metadata must be a non-symlink regular file: ${file}`);
+      }
+      descriptor = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW);
+      if (!fstatSync(descriptor).isFile()) throw storeError(`Unsafe owner metadata: ${file}`);
+      const value: unknown = JSON.parse(readFileSync(descriptor, "utf8"));
+      if (
+        !object(value) ||
+        !onlyKeys(value, ["schemaVersion", "root", "owner", "parent", "children"]) ||
+        value.schemaVersion !== 1 ||
+        !sameIdentity(storedIdentity(value.root), this.root) ||
+        !sameIdentity(storedIdentity(value.owner), owner) ||
+        (parent === null
+          ? value.parent !== null
+          : value.parent === null || !sameIdentity(storedIdentity(value.parent), parent)) ||
+        !object(value.children)
+      ) {
+        throw storeError(`Owner metadata schema or root/owner/parent header mismatch: ${file}`);
+      }
+      const children: Record<string, ChildRecord> = Object.create(null);
+      for (const [name, child] of Object.entries(value.children)) {
+        validateName(name);
+        children[name] = childRecord(child);
+      }
+      this.loadedOwners.add(key);
+      return { schemaVersion: 1, root: { ...this.root }, owner, parent, children };
+    } catch (error) {
+      if (
+        (error as NodeJS.ErrnoException).code === "ENOENT" &&
+        !required &&
+        !this.loadedOwners.has(key)
+      ) {
+        return undefined;
+      }
+      throw this.error(error);
+    } finally {
+      if (descriptor !== undefined) closeSync(descriptor);
+    }
   }
 
-  private async assertAgentDirectories(agentId: string): Promise<void> {
-    await this.assertRootAvailable();
-    const directory = this.agentDirectory(agentId);
-    await ensurePlainDirectory(directory, false);
-    await ensurePlainDirectory(path.join(directory, "runs"), false);
-    await ensurePlainDirectory(path.join(directory, "sessions"), false);
+  private update(
+    ownerInput: SessionIdentity,
+    parentInput: SessionIdentity | null,
+    name: string,
+    child: ChildRecord | undefined,
+    revision: number,
+  ): void {
+    const owner = normalizeIdentity(ownerInput);
+    const parent = parentInput === null ? null : normalizeIdentity(parentInput);
+    // Validate the root header at every write, including descendant-owner mutations.
+    this.readOwnerNow(this.root, null, !sameIdentity(owner, this.root));
+    const record = this.readOwnerNow(owner, parent);
+    const key = sessionKey(owner);
+    const revisions = this.applied.get(key) ?? new Map<string, number>();
+    // A sync preflight can overtake queued writes. Skip only the superseded child mutation,
+    // not sibling updates; no asynchronous filesystem write can be in flight here.
+    if ((revisions.get(name) ?? 0) > revision) return;
+    if (!record && !child) return;
+    const next = record ?? {
+      schemaVersion: 1,
+      root: { ...this.root },
+      owner,
+      parent,
+      children: Object.create(null),
+    };
+    if (child) {
+      next.children[name] = {
+        ...child,
+        ...(next.children[name]?.hasChildren ? { hasChildren: true } : {}),
+      };
+    } else delete next.children[name];
+    atomicJson(path.join(this.sessionsDirectory, `${key}.json`), next);
+    this.loadedOwners.add(key);
+    revisions.set(name, revision);
+    this.applied.set(key, revisions);
   }
 
-  private enqueue(operation: () => Promise<void>): Promise<void> {
-    const result = this.writes.then(operation, operation);
+  private error(error: unknown): SubagentError {
+    return error instanceof SubagentError
+      ? error
+      : storeError("Subagent metadata is unavailable or unsafe.", error);
+  }
+
+  private enqueue<T>(operation: () => T): Promise<T> {
+    if (this.closing) return Promise.reject(storeError("Subagent store is closing."));
+    const result = this.writes.then(() => {
+      try {
+        return operation();
+      } catch (error) {
+        throw this.error(error);
+      }
+    });
     this.writes = result.catch(() => undefined);
     return result;
   }
 
-  async close(): Promise<void> {
-    await this.writes;
-    const release = this.releaseLock;
-    this.releaseLock = undefined;
-    if (release) await release();
+  close(): Promise<void> {
+    if (!this.closePromise) {
+      this.closing = true;
+      this.closePromise = (this.openPromise ?? Promise.resolve())
+        .catch(() => undefined)
+        .then(() => this.writes)
+        .then(async () => {
+          const release = this.releaseLock;
+          this.releaseLock = undefined;
+          if (release) await release();
+        });
+    }
+    return this.closePromise;
   }
 }

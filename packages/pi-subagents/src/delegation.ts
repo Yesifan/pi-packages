@@ -6,13 +6,12 @@ import type { DelegationContext, SubagentsConfig } from "./types.js";
 export async function buildDelegationContext(
   cwdInput: string,
   agentDir: string,
-  options: { initializeStorage?: boolean } = {},
 ): Promise<{ context: DelegationContext; config: SubagentsConfig }> {
   const cwd = await canonicalizeDirectory(cwdInput, {
     missing: "CWD_NOT_FOUND",
     notDirectory: "CWD_NOT_DIRECTORY",
   });
-  const config = await loadSubagentsConfig(cwd, options);
+  const config = await loadSubagentsConfig(cwd);
   const agentTypes = await loadAgentTypeRegistry(agentDir, config.projectRoot);
   return {
     config,
@@ -25,6 +24,7 @@ export async function buildDelegationContext(
   };
 }
 
+// Warning Cache Broke: description changes alter the session's model tool context.
 export function formatSubagentToolDescription(
   context: DelegationContext,
   maxLiveAgents?: number,
@@ -63,6 +63,5 @@ Available external cwd:
 ${external}
 
 For related follow-up work, prefer ask_subagent to reuse a directly owned idle
-subagent. Create a new subagent only for independent context or parallel work.
-Set isSteer to true to steer an actively executing run.`;
+subagent.`;
 }

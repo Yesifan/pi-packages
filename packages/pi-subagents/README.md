@@ -32,12 +32,14 @@ Starts a background logical subagent and returns as soon as Pi accepts its promp
 
 `cwd` is optional and defaults to the caller's current cwd. An explicit value must be an absolute path that resolves exactly to the current cwd or one configured external cwd. Relative paths, `~`, `$HOME`, and `${HOME}` are rejected in tool input.
 
+Names are trimmed, case-sensitive, and unique among one parent's direct children. Completed and interrupted children retain their names; duplicate creation returns `SUBAGENT_NAME_EXISTS` and suggests `ask_subagent`. Different parents may reuse the same name. Display labels may be shortened, but structured results preserve the full name for exact asks. Names never become file paths.
+
 ### `ask_subagent`
 
 Starts another run on a directly owned idle logical subagent. Prefer reusing one for related follow-up work; create a new subagent when independent context or parallel work is needed:
 
 ```json
-{ "id": "sa_...", "prompt": "Now check the tests." }
+{ "name": "reviewer", "prompt": "Now check the tests." }
 ```
 
 A normal ask against a busy subagent immediately returns `SUBAGENT_BUSY`; requests are not queued. `ask_subagent` is not a status or result-polling tool.
@@ -45,10 +47,12 @@ A normal ask against a busy subagent immediately returns `SUBAGENT_BUSY`; reques
 To steer an actively streaming run without creating a new run:
 
 ```json
-{ "id": "sa_...", "prompt": "Focus on the authorization boundary.", "isSteer": true }
+{ "name": "reviewer", "prompt": "Focus on the authorization boundary.", "isSteer": true }
 ```
 
-Steering can adjust the direction of an actively streaming run or add new context. Both `subagent` and `ask_subagent` tool results remind the caller of this option. Steering returns the current run ID with `status: "steered"`. It does not create a separate report. Idle, released, finalizing, or waiting-for-children agents are not steerable.
+Steering can adjust the direction of an actively streaming run or add new context. Both `subagent` and `ask_subagent` tool results remind the caller of this option. Steering returns the same name with `status: "steered"`. It does not create a separate report. Idle, released, finalizing, or waiting-for-children agents are not steerable.
+
+See [the delegation examples](examples/delegation.md) for parallel tasks, exact-name follow-ups, and active steering.
 
 ## Agent types
 
@@ -89,7 +93,7 @@ The built-in `explore` uses `disallowedTools: [edit, write, bash]`, preserving i
 
 Policies apply by exact tool name to the SDK registry, not only the initial active tools. Dynamic extension registration/re-registration and `setActiveTools()` cannot re-enable excluded names. Runtime delegation restrictions still apply: same-cwd and depth-limited children exclude `subagent`/`ask_subagent`; denylisting `subagent` disables descendant delegation, while denylisting only `ask_subagent` leaves creation available.
 
-The selected policy is included in the saved role snapshot and content hash. Existing snapshots without `disallowedTools` need no migration; old `explore` snapshots retain their saved allowlist. Later role file changes affect newly created logical subagents only, not subsequent asks or root recovery.
+The selected policy is included in the saved role snapshot and content hash. Later role file changes affect newly created logical subagents only, not subsequent asks or root recovery.
 
 ## Configuration and storage
 
@@ -118,28 +122,24 @@ A missing file uses built-in defaults. There is no global configuration layer. `
 
 Delegation authorization is session-local. If A permits B and B permits C, `A → B → C` is allowed even when A does not mention C. A never preloads B's agents or C configuration. Same-cwd children are leaves; external children may delegate when depth, role tools, and runtime policy permit it. Canonical cwd ancestor repetition, such as `A → B → A`, is rejected.
 
-After Pi trusts a project, the extension creates this layout when needed:
+Configuration loading does not create project session directories or `.gitignore`. Metadata and histories use:
 
 ```text
-<rootProject>/.pi/subagents/
-  setting.json
-  .gitignore
-  sessions/<rootKey>/
-    root.json
-    agents/<agentId>/
-      agent.json
-      runs/<runId>.json
-      sessions/<pi-session-file>.jsonl
+<getAgentDir()>/subagents/
+  sessions/<parent-session-key>.json
+  locks/<root-session-key>/
+<Pi SDK default cwd-grouped session directory>/<actual-session-file>.jsonl
 ```
 
-The root project stores the only authoritative copy of the complete descendant tree. For `A → B → C`, all logical identities, runs, reports, and child histories stay under A's `rootKey`; B and C do not receive mirrors. Different root sessions in the same project use different `rootKey` scopes and locks.
+Each parent JSON contains only its directly owned children, with each child's actual Pi session identity/path, full creation-time role snapshot, and latest state. For `A → B → C`, A's JSON stores B and B's JSON stores C. An optional branch marker diagnoses missing previously initialized owner files. There are no separate run records, result copies, or delivery records. The whole tree shares one root writer lock; owner updates are serialized and atomically replaced. New metadata is private (0600 files, 0700 directories on POSIX). Unsafe paths, damaged owner headers, permission failures, and lock conflicts fail closed with no legacy-store fallback.
 
-The generated local `.gitignore` ignores `/sessions/`. Existing ignore files are not overwritten; `/sessions/` must be their final active rule so a later negation cannot expose history. In a Git project, unignored or already tracked session data, unsafe symlinks, path escapes, read-only storage, permission failures, and lock conflicts make this extension fail closed without crashing Pi or falling back to the user agent directory.
+Child history uses the directory allocated by public `SessionManager.create(cwd)`, under the SDK's current agentDir. It deliberately **does not** honor or inherit CLI `--session-dir`, `PI_CODING_AGENT_SESSION_DIR`, or global/project `sessionDir` settings. Root history is not relocated. Child files are privately initialized with valid headers before their identity is saved. Native Pi discovery can list these histories; independently opening a child is allowed, but the tree writer lock does not coordinate independent manual edits to its history.
 
 ## Background lifecycle
 
 - Final responses are reported automatically to the direct parent as Pi custom messages (`customType: "subagent-report"`). Older histories may contain `bykwp-subagent-report` messages; the extension does not rewrite them.
-- Tool results list the caller's direct subagents as running, done, or interrupted, alongside current shared live usage. `SUBAGENT_BUSY` and `LIVE_AGENT_LIMIT` results include the same snapshot. Lists include every direct subagent; names are shortened when long.
+- Tool results list the caller's direct subagents as running, done, or interrupted, alongside current shared live usage. `SUBAGENT_BUSY` and `LIVE_AGENT_LIMIT` results include the same snapshot. Lists include every direct subagent and its saved creation-time role (`agentType`); names are shortened when long. Role-file changes do not change existing subagents' displayed roles.
+- Automatic reports include the validated absolute JSONL path on a `Complete conversation: ...` line before the result, without a separate `Full session` heading. Missing, unsafe, malformed, or identity-mismatched history is explicitly marked unavailable; reports do not expand the file contents. This is persisted conversation history, not a complete system-prompt/tool-definition snapshot.
 - Automatic reports show the direct parent's subagent statuses (including the reporting agent as done) and remind the direct parent that it can use `ask_subagent` with any idle subagent listed above for related follow-up work. While relevant reports are pending, the caller is instructed to provide only a brief progress update and defer its final answer.
 - An idle parent waiting for children remains loaded; it is not cold-released.
 - Stopping only the root model response does not stop accepted background work.
@@ -147,7 +147,11 @@ The generated local `.gitignore` ignores `/sessions/`. Existing ignore files are
 - Completed logical identities and histories remain available when the exact persistent root session is resumed.
 - Interrupted work is not automatically replayed.
 
-Cross-restart recovery requires a file-backed root session and the same project-local root scope. Child history paths are stored relative to that scope. A new, forked, cloned, or imported root cannot take ownership of another root's subagents. Project moves do not automatically relocate stored canonical cwd values, and deleting the project deletes its subagent history. Legacy data under `<getAgentDir()>/.bykwp-pi-subagents/` is not migrated or used as a fallback.
+Cross-restart recovery requires the exact file-backed root identity (Pi ID plus normalized absolute file path). A new, forked, cloned, or imported root cannot take ownership of another root's children. Recovery loads identities and saved roles, marks unfinished accepted work interrupted, and clears prepared opening state to idle; it does not mount children, replay tasks, or redeliver old reports. Completed results that were not delivered before shutdown remain available only in child history. Deleting a project's directory does not delete global metadata/history, but missing or moved cwd values cause follow-up asks to fail rather than relocate automatically.
+
+Ordinary asks derive cwd, model selection, thinking, and conversation from the child's validated Pi history; current parent settings never replace the historical selection. Header-only history, missing historical selection/thinking, unavailable model/authentication, and SDK fallback produce explicit errors. Target tools/resources/configuration are rebuilt, while the saved role remains unchanged. Reports carry persisted conversation paths, not complete system-prompt or tool-definition snapshots.
+
+**BREAKING upgrade:** `ask_subagent.id` and public agent/run IDs are removed. Existing agents in the old project-local store or legacy agentDir store are not loaded, migrated, or used as a fallback; they cannot be asked after this upgrade. Old files are left untouched. Names may be reused in the new empty registry, creating independent histories.
 
 ## UI support
 
@@ -172,7 +176,7 @@ Child extensions still cannot create or mutate root widgets.
 
 `external_directory` is cwd admission, not a filesystem sandbox. Bash, extension code, and third-party tools can access paths outside cwd unless their own policy prevents it. External project configuration and resources are not read until Pi project trust succeeds.
 
-`.pi/subagents/sessions/` contains prompts, responses, tool results, and other potentially sensitive history. Git-ignore checks do not replace filesystem access control, backup policy, or disk encryption. Projects must be writable to use persistent subagents.
+Global subagent metadata and Pi JSONL histories contain potentially sensitive prompts, replies, tool results, and role snapshots. Private file modes do not replace backup policy, filesystem access control, or disk encryption. Global storage and SDK history directories must be writable; project configuration reading does not require generating project storage.
 
 Children run in the same Node.js process. This package keeps its own state session-scoped, but cannot isolate third-party extensions that use process-global singletons, mutate environment variables, or terminate the process.
 

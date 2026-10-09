@@ -29,9 +29,14 @@ describe("delegation context", () => {
     expect(description).toContain("configured shared limit is 6 live subagents");
     expect(description).toMatch(/Give the final answer only after all relevant\s+reports arrive/);
     expect(description).toContain("prefer ask_subagent to reuse a directly owned idle");
-    expect(description).toContain(
+    expect(description).not.toContain(
       "Create a new subagent only for independent context or parallel work.",
     );
+    expect(description).not.toContain("Set isSteer to true to steer an actively executing run.");
+    expect(description).toContain(
+      "tasks. Parallel editing tasks must have mutually exclusive boundaries.",
+    );
+    expect(description).toContain("Do not poll, redo, or re-delegate accepted work.");
     expect(description).toContain("- general: General work");
     expect(description).toContain("- tester: Run tests");
     expect(description).toContain("- /workspace/B");

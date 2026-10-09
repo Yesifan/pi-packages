@@ -1,12 +1,31 @@
 # Spec 0002：Subagent 提示优化与按父会话存储
 
-- 状态：草案；已确认目标与待决策项分别标注，尚未实施。
+---
+
+status: completed
+execution_time: "2026-10-08 / 2026-10-09"
+commit: null
+version: null
+related_documents:
+  - "[权威规格](yesifan-pi-subagents-spec.md)"
+  - "[领域模型](../domain-model.md)"
+  - "[ADR-0003](../adr/0003-sdk-sessions-and-parent-metadata.md)"
+  - "[后续 Spec 0003](0003-terminal-exit-reporting.md)"
+
+---
+
+- 实施状态：completed，完成日期 2026-10-09。用户明确要求“先标记为完成，然后提交 PR”，接受在实际交互 TUI/print 手动验收前关闭本规格；手测未运行，延期跟进，不宣称 §14 全部验收通过。
 - 影响包：`@yesifan/pi-subagents`。
 - 需求来源：[Notion 需求](https://app.notion.com/p/alan66/pi-subagents-prompt-optimize-3eb0f77a346d8016ab08d23fc00fd084)及后续讨论。
-- 当前实现基线：[领域模型](../domain-model.md)、[实现规格](yesifan-pi-subagents-spec.md)、[ADR-0001](../adr/0001-project-local-subagent-storage.md)。
+- 当前术语与权威索引：[领域模型](../domain-model.md)、[实现规格](yesifan-pi-subagents-spec.md)；其中 V1 大节仅为历史资料。
+- 存储决策：[ADR-0003](../adr/0003-sdk-sessions-and-parent-metadata.md) 替代 [ADR-0001](../adr/0001-project-local-subagent-storage.md) 的相关存储决定，保留旧理由。
 - SDK 基线：最新 `origin/main`（`0fabea0`）catalog / lockfile 的 Pi `1.0.0`。本次 SDK 核对使用同版本发布产物；实施时安装产物须与 lockfile 一致。
 
-本文定义目标方案，不描述当前已实现行为。“必须”“不得”为目标验收要求，“建议”为实现选择。第 12 节未确认决策阻塞对应实现，不得把推荐选项当成用户授权。本文不立即替换现行实现规格；实施前按第 11 节同步规范，避免两个权威版本冲突。
+本文是当前重写的权威行为与验收规格。工作区已实现 description/role/history 路径展示、name 工具接口、SDK 默认 history、按直接 parent 最小 metadata 和 Execution/RootScope 对象生命周期；旧 ID 工具接口、独立 run/mount/report identity、project-local store 与补投恢复契约不再是当前行为。主代理已独立重跑当前 typecheck 与 21 个文件 / 241 项测试，全部通过；runtime 修正后的 pack 已成功。独立最终复审确认此前 5 项问题已解决、未发现新的具体缺陷；实际交互 TUI/print 手动验收仍未运行，不据此宣称 §14 全部通过。“必须”“不得”为验收要求，“建议”为可选选择，不由批准/代码存在自动推导验收通过。D1–D6 均已确认；冲突处以本文和 ADR-0003 为准。
+
+[Spec 0003](0003-terminal-exit-reporting.md) 是仍未开始的异常退出通知扩展；其现场证据和测试/日志计划原样保留，本文不宣称该扩展已实施。
+
+优先采用简单的 SDK 行为和有用诊断日志。不为手动打开、discovery 或额外 crash-window 政策增加 owned-child guard、全局索引或状态框架；未批准的边缘策略延后，遇到 SDK 无法支持的核心契约时提供证据再讨论。
 
 ## 1. 目标与范围
 
@@ -163,7 +182,7 @@ Pi session ID、文件身份在持久化内部保留，不与“移除 run/mount
 
 对于 A→B→D、A→C：A 保存 B/C，B 保存 D；B 自身的 child 元数据只在 A 文件。叶节点无需空 owner 文件。B 首次创建 D 时就可创建自己的 owner JSON，不等待 B 完成任务。
 
-全部 metadata 在全局目录，不在 external projects 保存镜像，不另外维护一份权威 relations.json。目录策略受 D4 决策，显式 Pi sessionDir 不一定按 cwd 分组。
+全部 metadata 在全局目录，不在 external projects 保存镜像，不另外维护一份权威 relations.json。child history 使用 D4 批准的 SDK 内建 cwd 分组目录，不传 CLI/env/settings sessionDir override。
 
 ### 4.2 Schema
 
@@ -183,7 +202,7 @@ interface ChildRecord {
   sessionFile: string;
   roleSnapshot: AgentDefinitionSnapshot;
   state: ChildState;
-  // 若采用 §9.1 的分支缺失诊断建议，记录曾初始化 owner 文件。
+  // 当前实现记录曾初始化 owner 文件，用于分支缺失诊断。
   hasChildren?: true;
 }
 ```
@@ -209,9 +228,9 @@ state 只表达可恢复的最新事实，不包含持久化依赖或调度器�
 - SDK factory 未传 SessionManager 时，直接使用 `SessionManager.create(cwd, getDefaultSessionDir(cwd, agentDir))`，不自动应用上述 CLI/env/setting 覆盖。
 - getDefaultSessionDir 不读取 sessionDir setting/env；显式传入 SessionManager 的目录是最终目录，不再追加 cwd 分组。
 
-D4 决定 child 使用哪一层配置、是否继承 root CLI override、external child setting 来源和相对目录基准。不能把“遵循 Pi 配置”与“无条件调用内建目录 helper”当同义。
+**D4 已批准：** child 使用 `SessionManager.create(cwd)` 的 SDK 内建默认 cwd 分组目录；不读取或传播 `--session-dir`、`PI_CODING_AGENT_SESSION_DIR`、global/project settings 的 `sessionDir`，也不继承 root CLI override。`PI_CODING_AGENT_DIR` 仍决定 SDK agentDir（及本包 metadata 的 `<getAgentDir()>`）；它不是 sessionDir override。其余目标 cwd 的 settings/resources 仍正常加载，不因忽略 sessionDir 而全部禁用。
 
-root 现有会话不搬迁；不硬编码 `~/.pi/agent` 或手写 cwd 编码。
+root 现有会话不搬迁；不硬编码 `~/.pi/agent` 或手写 cwd 编码。若需 §5.2 的私有文件适配，应从 SDK 默认 manager 获取实际目录/路径，不重实现 CLI 配置优先级。
 
 ### 5.2 ID、header 和权限
 
@@ -219,7 +238,7 @@ SDK 自动生成 ID 时从新建 manager 获取；NewSessionOptions.id 也支持
 
 create 会立即分配 ID、内存 header 和预定路径，但 setup entries 不触发新文件落盘；首个 user 或 assistant message 才创建文件。
 
-本包要求保存可恢复 child identity 前已有有效 header，POSIX JSONL mode 为 0600。经 smoke test 验证，排他预创建 0600 空文件再 `SessionManager.open(file, directory, cwd)` 会通过 SDK 立即写有效 header并保留权限。可采用此适配，不调用私有 flush，也不把权限保证归给 SDK 默认 create。
+本包保存可恢复 child identity 前建立有效 header，POSIX JSONL mode 为 0600。当前采用排他预创建 0600 空文件再 `SessionManager.open(file, directory, cwd)` 的适配，由 SDK 写有效 header 并保留权限；不调用私有 flush，也不把权限保证归给 SDK 默认 create。
 
 ### 5.3 History 恢复
 
@@ -244,15 +263,17 @@ create 会立即分配 ID、内存 header 和预定路径，但 setup entries �
 ```ts
 interface RootScope {
   closing: boolean;
-  agents: Map<string, Agent>; // 内部按 Pi ID，caller 下另有 name 索引
-  deliveries: Set<ReportDelivery>; // 持有已提交在线报告，直到确认或 scope 关闭
+  children: Map<string, Agent>; // root 的直接 name 索引
+  agents: Set<Agent>; // 整树内存实体；各 Agent 自有 children name 索引
+  deliveries: Set<ReportDelivery>; // nested 持有至处理确认；root 持有至宿主提交成功；scope 关闭则释放
 }
 
 interface Agent {
   name: string;
-  identity: SessionIdentity;
+  identity?: SessionIdentity; // opening 占位可尚未分配 Pi identity
   roleSnapshot: AgentDefinitionSnapshot;
-  parent: Agent | RootScope;
+  parent: Agent | null; // null 表示 root；Execution 捕获具体发起方
+  children: Map<string, Agent>;
   currentExecution?: Execution;
 }
 
@@ -272,7 +293,7 @@ interface ReportDelivery {
   source: Execution;
   target: Execution | RootScope;
   submitted: boolean;
-  processed: boolean;
+  processed: boolean; // nested SDK barrier 确认；root 不据此证明模型已处理
 }
 ```
 
@@ -295,7 +316,9 @@ E1 完成后 E2 成为 currentExecution，E1 迟到的 callback 不能更新 E2�
 
 清理回调可幂等收尾其捕获的旧资源，但不得释放新 currentExecution 的名额/状态。
 
-**已提交报告的投递/确认不使用上述 sender currentExecution guard。** finalizing 阶段将最终 envelope 移交给 scope.deliveries 中的 ReportDelivery，由它持有至确认或 scope关闭；sender 随后可退出 busy、清除 currentExecution并释放mount。投递/确认只检查当前scope有效、delivery仍归该scope、捕获的target Execution仍是对应parent当前执行（root target则校验scope）。即使sender E2已开始，E1的已提交报告仍可送给原parent，但不得修改E2。
+**已提交报告的投递/确认不使用上述 sender currentExecution guard。** finalizing 阶段将最终 envelope 移交给 scope.deliveries 中的 ReportDelivery；sender 随后可退出 busy、清除 currentExecution 并释放 mount。nested target 是 Execution，delivery 持有至公开 SDK 消息/Pi entry + settled barrier 确认处理或 scope 关闭；root target 是 RootScope，宿主 `sendReport` 返回 void，无 processing receipt，成功返回仅表示 submitted，不能证明 recorded/processed，随后释放 scope 中的 delivery。root 没有本包管理的 parent mount finalize 依赖，不为此新建 inbox 或 receipt 协议。
+
+投递/确认只检查当前 scope 有效、delivery 仍归该 scope、捕获的 target Execution 仍是对应 parent 当前执行（root target 则校验 scope）。即使 sender E2 已开始，E1 的已提交报告仍可送给原 parent，但不得修改 E2。
 
 ### 6.3 RootScope 替代 epoch
 
@@ -312,6 +335,8 @@ child Execution.parent 直接捕获发起它的 parent Execution，root caller �
 parent 等待 children 时保留 AgentSession，SDK settled 不直接代表 logical execution 结束。child 不可继续失败时，取消其本次执行的活跃后代，不留下无接收方的任务。
 
 ### 6.5 在线报告唯一性和处理 barrier
+
+以下 pendingChildren/pendingReports 与处理确认要求适用于 nested parent Execution；root submission 边界按 §6.2，不把 void 宿主返回视为 processing receipt。
 
 - 同步取得 finalizing 权后才提取/提交最终结果；重复 settled/callback 不再终结一次。
 - 每个 Execution 最多设置一次 reportSubmitted，ReportDelivery 在内存中防止重复投递。
@@ -334,7 +359,7 @@ parent 等待 children 时保留 AgentSession，SDK settled 不直接代表 logi
 - 同 original root 第二 writer 被拒绝；不同 root 可以并行。
 - descendants 不创建新的独立 root runtime/lock owner。
 - 进程内队列不能替代跨进程锁；原子 rename 也不能防止两个进程各自覆盖状态。
-- 整树锁不自动阻止用户绕过插件直接打开 child，D2 必须说明边界。
+- 整树锁只保护本包对原 root 树的 metadata 管理；D2 允许用户独立打开 child，不增设 owned-child guard 或索引，不承诺排除宿主直接写 JSONL 的竞争。
 
 ### 7.2 更新串行化与接受
 
@@ -349,9 +374,9 @@ Pi 1.0.0 preflight 参数是 `"handled" | "queued" | "started"`：
 - handled 表示 input extension 消费请求，不等于本包任务已启动/排队，不能 truthy 判断。
 - 普通任务意外收到 queued，或 steering意外收到 started，是受控异常disposition，必须明确结束工具等待并诊断，不伪装成预期成功。SDK已实际排队/启动，不按纯未接受rollback删除history/identity；执行进入失败收尾，保留可能已变的历史，不能声称撤销排队、历史或extension副作用。具体停止行为须限于本包可安全管理的mount，不能不加检查取消别的执行。
 - rejection 按异常处理，不能等待不存在的 boolean false callback。
-- D6 确认 handled 的具体工具结果/清理；扩展已有副作用不声称可回滚。
+- **D6 已批准：** handled 返回明确“未启动/未排队”的工具错误/诊断，不返回 started/steered，不生成 accepted Execution 或报告。普通请求按 §7.3 清理 prepared；steering 保持原 Execution、状态及名额不变，不 abort 原任务。仅清理本包可确认的未接受准备资源；不声称回滚 input extension 的历史或外部副作用，也不无条件 abort 扩展自行启动的处理。
 
-原 `src/runtime.ts` 两处使用 boolean/truthy 判断，这是 1.0.0 实施适配项；本 spec 不声称代码已经修正。
+当前 `src/runtime.ts` 已按 disposition 类型分支处理，不沿用旧 boolean/truthy 判断。可靠 running 提交采用 `store.setChildSync`，基于同一 child 已持久 opening；普通写队列通过 revision 防止被同步接受超越的旧 child mutation 覆盖新状态。
 
 接受线性化点必须完成对应 owner record 的可靠 running 提交；不可把失败持久化伪装为接受前无事发生。提交方法需兼容 preflight 同步回调与写队列，不仅把 callback 改成异步后立即返回成功。
 
@@ -406,7 +431,9 @@ owner JSON 按需创建；已存在时每个写入口必须校验 root/owner/par
 
 ### 8.3 Steering
 
-只在当前 Execution executing/streaming 时接受；普通 prompt 的 slash/template 展开禁用保持现有行为。queued 后返回原 name/steered，不新建 Execution、history 或独立报告。其他状态拒绝，不修改原执行；handled 按 D6。
+只在当前 Execution executing/streaming 时接受；普通 prompt 的 slash/template 展开禁用保持现有行为。queued 后返回原 name/steered，不新建 Execution、history 或独立报告。其他状态拒绝，不修改原执行；handled 返回未排队诊断且原 Execution 不变（D6）。
+
+**异步 input hook / 取消边界（修正、自动测试与复审已完成）：** prompt 调用前检查 signal 与捕获的执行归属；hook 等待期间状态可能变化，未排队路径需再次校验，不能把意外 started 当成成功 steering。Pi 1.0.0 的 queued preflight 在 `_queueSteer` 完成后调用，因此 queued 是不可逆接受边界：即使 tool signal 在异步 hook 期间取消或 callback 到达时已取消，也不能据此返回“未排队”/ABORTED、撤销原执行或宣称 rollback；应返回已排队 steered。root shutdown 仍可按正常生命周期中止工作，但不改写已发生的排队事实。不新增独立任务、队列撤回或持久 inbox；相关取消、SDK prompt disposition 与竞争顺序已由当前自动测试及独立复审验证，不代替实际交互 TUI/print 手测。
 
 ### 8.4 完成
 
@@ -438,13 +465,13 @@ scope 失效后 callback只能幂等收尾自己的资源，不更新新 scope�
 
 不扫描全局目录拼树、不自动接管未链接记录。恢复 tree 需要读取 header来得到 cwd/父链，不加载 target extensions/模型，不批量 mount。
 
-leaf 无 owner JSON正常。建议 child record 使用可选 hasChildren 历史标记诊断已存在分支丢失；若采用首次创建下一层顺序：
+leaf 无 owner JSON 正常。当前实现采用可选 hasChildren 历史标记诊断已存在分支丢失；首次创建下一层顺序：
 
 1. 创建并校验空 owner文件；失败不继续。
 2. 直接 parent 中提交该 child 的 hasChildren=true；失败不写新 child，允许留下空 owner。
 3. 才保存下一层 opening record并提交任务。
 
-每步独立原子写，不是事务；空文件或标记已写但尚无 children均合法。标记不因最后 child rollback而清除；标记为 true但 owner丢失时拒绝恢复。不采用此建议时必须明确缺失诊断能力，不自动加全局索引。
+每步独立原子写，不是事务；空文件或标记已写但尚无 children 均合法。标记不因最后 child rollback 而清除；标记为 true 但 owner 丢失时拒绝恢复。该标记不是独立打开防护或全局索引。
 
 首次加载 root owner不存在，无法区分从未初始化与两次运行之间被删除，只能按空树处理，不承诺诊断；运行中已加载 owner或目录消失须 fail closed。
 
@@ -473,9 +500,10 @@ leaf 无 owner JSON正常。建议 child record 使用可选 hasChildren 历史�
 
 保留现有业务错误分类，模型可见错误使用name，不附内部ID：
 
-- 重复name：建议 `SUBAGENT_NAME_EXISTS`，说明作用域并提示ask；实现前固定测试。
+- 重复 name：`SUBAGENT_NAME_EXISTS`，说明直接 parent 作用域并提示 ask。
 - name不存在：`SUBAGENT_NOT_FOUND`；不跨parent搜索。
 - `SUBAGENT_BUSY` / `SUBAGENT_NOT_STEERABLE`：状态限制不变。
+- `SUBAGENT_NOT_STEERABLE` 必须在模型可见 message 中解释当前具体拒绝原因，而不只重复“不可 steering / not actively streaming”：区分 idle（无当前执行）、interrupted（已停止/中断）、实例已释放、opening、等待 children、等待 reports、closing/finalizing，以及 SDK 当前未 streaming。多个等待条件同时存在时须说明 children 和 reports；SDK 未 streaming 且已 settled 时须如实说明。不得仅凭该错误码声称任务已停止，也不得对尚在执行/等待的任务建议当作 idle 重新 ask。诊断不改变原执行、队列、名额或报告契约，不暴露内部 identity。
 - `ROOT_SCOPE_IN_USE`：另一进程管理同original root。
 - `STORE_ERROR`：owner header不匹配、损坏、不可写或不安全路径。
 - `SESSION_HISTORY_UNAVAILABLE`：history缺失/空文件/ID mismatch/cwd不可恢复。
@@ -485,7 +513,7 @@ leaf 无 owner JSON正常。建议 child record 使用可选 hasChildren 历史�
 
 ## 11. 与旧规范和兼容的关系
 
-| 当前契约 | 目标契约 |
+| 历史契约（不再实现） | 当前 Spec 0002 契约 |
 | --- | --- |
 | sa ID、ask.id、公开run_id | name接口，无模型操作ID，Pi ID仅内部定位 |
 | run/mount UUID、root epoch | Execution / RootScope 对象身份保护 |
@@ -498,28 +526,32 @@ leaf 无 owner JSON正常。建议 child record 使用可选 hasChildren 历史�
 
 这是 **BREAKING**：ask参数、成功/错误details、存储、恢复承诺均改变。功能PR用Changeset按仓库规则minor，不在文档任务手动改package版本。
 
-实施前新增ADR关联并替代ADR-0001相关决策，不覆盖旧理由。同步现行spec §2/§3/§6–§10/§12/§13/§17及附录、领域模型、README/示例；ADR-0002进度widget继续有效。不提前把目标草案写成README当前事实。
+[ADR-0003](../adr/0003-sdk-sessions-and-parent-metadata.md) 已关联并替代 ADR-0001 相关存储决策，不覆盖旧理由。权威 spec 顶部与领域模型已同步当前实现，V1 全部大节/附录仅为历史资料；ADR-0002 进度 widget 继续有效。独立最终复审已完成；2026-10-09 用户明确接受手动 CLI 验收延期并关闭本规格，status 为 completed，不将关闭状态解释为全部验收已通过。
 
-## 12. 已决策与待确认项
+## 12. 最终批准的选择
 
-以下已决定，不再阻塞实施：
+D1–D6 均已决定，不再阻塞实施：
 
 - **D1：不兼容旧实现、不迁移旧数据。** 新实现不读取、复制或转换旧项目 store / 旧 agentDir store，不双写、不 fallback、不维护旧 ID 或参数别名。升级后旧 agents 不进入新 registry，无法继续 ask；恢复旧 root 时仅加载新布局记录，未初始化新记录则从空的 subagent registry 开始。旧 name 可以在新 registry 重新创建，但得到独立新 history，不继承旧角色/任务。旧 JSONL / metadata 不自动删除；“会话丢失”指新实现不再恢复管理，不要求破坏性擦除磁盘文件。用户文档必须明确该 BREAKING 边界。
 - **D5：不保存 runRecord/delivery，不承诺恢复后补投。**
 
-| ID | 待确认问题 | 推荐与边界 |
+| ID | 最终选择 | 边界 |
 | --- | --- | --- |
-| D2 | 手动resume owned child如何处理？ | 推荐识别后拒绝继续聊天/管理，不承诺零写入。before-switch可cancel但CLI初始打开不经过旧runtime，session_start不能cancel，SDK无通用file-backed readonly；加载前迁移/命名可能写盘，shutdown依赖宿主。leaf识别仍需单独选择标记/可重建索引等，不自动加权威关系表。 |
-| D3 | discovery扫描到child时，接受picker/continue影响吗？ | discovery无subagent过滤，header-only也可见；recent按mtime/header，自定义目录按cwd过滤，listAll(customDir)只扫该目录。按D4实际目录组合确认，不无条件声称external cwd互抢，不改mtime隐藏。 |
-| D4 | child采用CLI等效配置还是SDK内建目录？ | 确认root CLI override是否传播、external child settings来源和相对目录基准。显式目录不追加cwd分组；不能忽略用户setting后仍声称遵循配置。 |
-| D6 | input hook返回handled的工具结果？ | 推荐明确未启动/未排队说明，使用既有错误类别，不生成accepted执行或假steered；普通请求清理prepared，steering不改原Execution。扩展副作用不可假装回滚，不无条件abort其自行启动的处理。 |
+| D2 | 允许 child 被独立打开、resume 和继续聊天。 | 不新增 owned-child guard、标记或索引，不禁止普通 Pi 管理。独立打开不会接管原 root 的 metadata/ask 权限；整树锁不覆盖宿主直接写 child JSONL，不承诺此类并发无冲突。 |
+| D3 | 接受 Pi 原生 discovery、picker 和 continue 行为。 | 不过滤 child、不修改 mtime 隐藏；header-only 也可能可见，同 cwd child 可能被 recent/continue 选中。不同 cwd 按 SDK 默认分组，实际是否可见取决于宿主查询目录，不声称所有 external cwd 互抢。 |
+| D4 | child 采用 `SessionManager.create(cwd)` 的 SDK 内建默认 cwd 分组。 | `PI_CODING_AGENT_DIR` 仍作用于 agentDir；不应用 CLI `--session-dir`、`PI_CODING_AGENT_SESSION_DIR` 或 settings `sessionDir`，不继承 root CLI override。root 原文件不搬迁。 |
+| D6 | handled 是未接受，不是假 started/steered。 | 普通请求清理 prepared（新 child rollback、既有 ask 恢复先前 state）；steering 不改原 Execution、不 abort 原任务。不保证回滚 extension 历史或外部副作用。 |
+
+采用简单 SDK 默认行为并记录有用诊断；不为 D2/D3 添加额外边缘防护策略。当前采用 §9.1 的可选分支缺失标记；它不是 owned-child 索引，不用于拒绝独立打开。
 
 恢复model/thinking和在线处理barrier的SDK验证属于实施门槛，不是增加产品功能；若无法支持已定目标则停止并提供证据讨论。
 
-## 13. 实施阶段
+## 13. 实施阶段与当前进度
+
+阶段 1–4 的 runtime 已实现；阶段 5 当前 typecheck、21 个文件 / 241 项测试与修正后的 pack 均成功，独立最终复审已完成。用户于 2026-10-09 接受关闭本规格，实际交互 TUI/print 手动验收未运行、延期跟进；不把关闭或已完成的自动验证/复审等同 §14 全部通过，也不实施后续 Spec 0003。以下保留实施顺序供审查定位。
 
 1. **展示**：`delegation.ts`删两句；`status.ts`/types/runtime增加role和无标题history路径。
-2. **SDK/架构门槛**：确认D2/D3/D4/D6，新增ADR；验证history model/thinking恢复、preflight disposition、report处理barrier。
+2. **SDK/架构门槛**：落实已批准 D2/D3/D4/D6 与 ADR-0003；验证 history model/thinking 恢复、preflight disposition、report 处理 barrier。
 3. **工具与内存生命周期**：tools改name；runtime实现name reservation、Execution/RootScope对象guards和capture parent；删除公开IDs及原UUID/epoch依赖，保留现有并发/清理保护。
 4. **持久化**：store改owner文件最小schema/整树锁/递归恢复；child-session创建批准的Pi目录history；config/project-storage/index解耦项目runtime写入。不读取或迁移旧store，不保留兼容分支；旧文件原样保留。
 5. **回归与文档**：验证cwd/roles/tools/steering/UI/widget/shutdown，更新当前行为文档、Changeset、tarball。每阶段源码改动立即按根Biome格式化，之后类型检查/测试。
@@ -541,6 +573,7 @@ leaf 无 owner JSON正常。建议 child record 使用可选 hasChildren 历史�
 | F03 | 创建/写入口已存在owner必须校验归属，错误root不可覆盖；name不用作文件路径。 |
 | F04 | preaccept rollback只清本次新数据；普通ask不删旧history，sibling不误删；opening恢复不制造accepted任务。 |
 | E01 | 普通ask创建新Execution+session实例，Pi identity/name不变；steering复用原Execution。 |
+| E06 | steering 拒绝返回 SUBAGENT_NOT_STEERABLE 和具体状态原因，覆盖 idle/interrupted/released/opening/waiting children/reports/closing/finalizing/SDK not streaming（含 settled）；不能把所有拒绝等同停止，拒绝不修改原执行或调用 SDK prompt。 |
 | E02 | E1迟到callback不能改E2，旧session清理不能释放新execution名额；root新scope拒绝旧回调；E1退出busy且E2已开始后，E1已提交报告仍投给原parent、不修改E2。 |
 | E03 | dependency绑定具体Execution，不按name重新路由；parent已关闭时不把旧report转交新任务。 |
 | E04 | 重复settled/finalize只提交一次report；pendingChildren到pendingReports无空窗，不把send返回当processed。 |
@@ -551,8 +584,8 @@ leaf 无 owner JSON正常。建议 child record 使用可选 hasChildren 历史�
 | C01 | trust先于项目读取/执行；缺setting不强制建project sessions/ignore，旧数据不自动删除。 |
 | C02 | global不可写/损坏/运行中文件或目录删除failclosed，不退回旧store。 |
 | D01 | 有旧store时新registry不加载旧agent，旧ID不能ask，旧name可创建独立新会话；不读取/迁移/删除旧数据，无兼容参数/alias/fallback，README明确旧agents无法继续使用。 |
-| D02 | D2批准的继续聊天/管理限制在适用宿主验证；明确CLI初始/扩展禁用/加载前写入边界。 |
-| D03 | D4实际默认/自定义目录、同/不同cwd组合下，picker/continue影响按D3如实验证。 |
+| D02 | 独立打开/resume child 不被本包 owned-child guard 拒绝；无 owned-child 索引，不接管原 root metadata，直接 JSONL 写入竞争边界有文档。 |
+| D03 | 临时 agentDir 下验证 child 按 SDK 默认 cwd 分组；CLI/env/settings sessionDir 不传播，root override 不继承；原生 picker/continue 可见性按 D3 如实记录，不过滤或隐藏。 |
 | D04 | started/queued按类型接受，handled按D6处理；非预期queued/started不挂起工具、不假成功、不按纯preaccept删除已变history，无phantom execution/report或假steered。 |
 | G01 | 原permissions/cwd/tools/roles/steering/UI/progress/shutdown回归通过；不用mock声称真实CLI验证。 |
 
@@ -560,9 +593,16 @@ leaf 无 owner JSON正常。建议 child record 使用可选 hasChildren 历史�
 
 ## 15. 验证和交付
 
-本次只更新文档，执行本地链接/围栏/差异检查。根Biome不处理Markdown，不声称Markdown格式检查通过；不以未改runtime的测试当实现验证。
+当前验证记录：主代理独立重跑 typecheck 成功，21 个测试文件 / 241 项测试全部通过；runtime 修正后 pack 已成功。SDK prompt 取消、报告拒绝与处理顺序等已测试；独立最终复审确认此前 5 项问题已解决、未发现新的具体缺陷。本次文档同步只检查 Markdown 链接/围栏/差异，不冒充再次运行 runtime 测试，根 Biome 不处理 Markdown。
 
-实施后至少：
+实现、自动验证与独立复审已完成。用户于 2026-10-09 明确要求先标记完成再提交 PR，并接受在实际交互 TUI/print 手动验收前关闭本规格；status 为 completed，execution_time 记录创建日期 / 完成日期。手动验收实际未运行，延期跟进，不声称 §14 CLI 全验收、发布完成或 Spec 0003 已实现。已知边界：
+
+- root void sendReport 成功仅为 submitted，无 processing receipt；nested Execution 才使用 SDK 处理 barrier，不新增 inbox。
+- queued callback 在实际排队后发生，取消不能撤回已排队 steering；接受后不假报未接受。
+- 不合作的异步 input hook 仍未退出时，shutdown 保留整树 writer lock，避免新 writer 接管仍可能写入的旧工作；不保证任意扩展可强制终止或关闭立即完成。
+- symlink/realpath/header 检查是正常路径与身份校验，不是 filesystem sandbox，也不承诺抵抗恶意并发路径替换的全部 TOCTOU 攻击。
+
+后续手动验收及复验可使用以下命令；关闭本规格不补造验证记录：
 
 ```bash
 pnpm exec biome check --write <本阶段实际修改的源码与测试路径>
@@ -572,7 +612,7 @@ pnpm --filter @yesifan/pi-subagents build
 pnpm --filter @yesifan/pi-subagents pack --pack-destination /tmp
 ```
 
-检查tarball、SDK smoke test和必要CLI手测，记录命令结果/失败/超时/未验证范围。D2/D3/D4/D6已决定、SDK门槛及相关验收通过、规范与实现同步、新ADR/Changeset完成，才可声称实现完成。不发布、不push、不创建tag。
+后续必要 CLI 手测需记录实际结果/失败/超时/未验证范围；D2/D3/D4/D6 的既定边界不变。本次 completed 是用户在实现、自动验证与独立复审完成后明确接受手测延期的关闭决定，不是 §14 全通过证明；后续行为变更新建规格，未运行手测继续列为延期事项。本次文档同步不执行 commit、push、PR 创建、发布或 tag 操作。
 
 ## 16. Pi 1.0.0 核对记录
 
@@ -591,4 +631,4 @@ pnpm --filter @yesifan/pi-subagents pack --pack-destination /tmp
 2. 0600排他空文件open立即写header并保留权限：通过。
 3. list发现header-only文件；可控mtime下recent选择对应文件：通过。
 
-这些结果不证明新的name接口/Execution对象/barrier/最小metadata已实现。未验证：新model/thinking完整恢复测试、真实TUI/print-mode child防护、D6 input-hook集成、新schema/name/并发回归。
+这些早期 smoke test 仅证明 SDK 目录/header/discovery 事实。此后 name/Execution/最小 metadata 及复审修正已实现，主代理独立重跑当前 typecheck 与 21 个文件 / 241 项测试通过，修正后 pack 成功，独立最终复审已完成。实际交互 TUI/print 手测未运行，不能沿用早期“仅展示已实施”或“复审进行中”状态，也不能据自动验证声称 §14 CLI 全面通过。D2 明确不实现 child 防护，不将独立打开的已接受边界重新变成防护要求。Spec 0003 仍为未开始计划。
