@@ -1,5 +1,7 @@
 # pi-subagents 文档
 
+需求与实现规格统一存放在 `specs/`，架构决策保留在 `adr/`。
+
 ## 当前实现基线
 
 1. [`domain-model.md`](domain-model.md) — 实体、值对象、所有权、生命周期和术语基准。
@@ -15,4 +17,4 @@
 ## 已实施的设计
 
 - [`ADR-0001`](adr/0001-project-local-subagent-storage.md) — 使用项目本地的单一权威 subagent store，不复制 external descendant 分支。
-- [`需求 0001`](requirements/0001-project-local-subagent-storage.md) — 项目本地配置、自动初始化、fail-closed、路径安全和恢复验收要求。
+- [`需求 0001`](specs/0001-project-local-subagent-storage.md) — 项目本地配置、自动初始化、fail-closed、路径安全和恢复验收要求。

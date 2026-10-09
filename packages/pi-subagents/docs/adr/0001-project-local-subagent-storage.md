@@ -3,7 +3,7 @@
 - 状态：✅ 已接受并实施（Accepted，`0.2.0`）
 - 日期：2026-09-11
 - 目标版本：0.2.0
-- 关联：[`requirements/0001-project-local-subagent-storage.md`](../requirements/0001-project-local-subagent-storage.md)
+- 关联：[`specs/0001-project-local-subagent-storage.md`](../specs/0001-project-local-subagent-storage.md)
 - 规格：已同步 `docs/specs/yesifan-pi-subagents-spec.md` 第 4、12、13 节及关联不变量
 
 ## 背景

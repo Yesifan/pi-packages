@@ -7,7 +7,8 @@ AgentSession，并提供 `subagent` 与 `ask_subagent` 工具。实现基线为
 先阅读 [`docs/domain-model.md`](docs/domain-model.md) 统一实体和变量术语，再查阅权威行为规范
 [`docs/specs/yesifan-pi-subagents-spec.md`](docs/specs/yesifan-pi-subagents-spec.md)。修改公开语义、生命周期、
 持久化格式或委派边界前必须先更新或核对该规范；发现文档内部冲突时暂停实现并与用户讨论，
-不自行选择新语义。
+不自行选择新语义。需求与实现规格统一存放在 `docs/specs/`，新增或移动文档时同步维护
+[`docs/README.md`](docs/README.md) 索引及相关引用。
 
 ## 核心模型与不变量
 
