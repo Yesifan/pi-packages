@@ -432,7 +432,9 @@ describe("exact root restoration", () => {
       ),
     ).resolves.toMatchObject({ name: "old-worker", status: "started" });
     const newAgent = (Reflect.get(restored, "scope") as RootScope).children.get("old-worker")!;
-    expect(newAgent.identity!.sessionFile).toContain(path.join(h.agentDir, "sessions"));
+    expect(newAgent.identity!.sessionFile).toContain(
+      path.join(h.agentDir, "subagents", "histories"),
+    );
     expect(await readFile(newAgent.identity!.sessionFile, "utf8")).toContain(
       "new independent history",
     );

@@ -1,5 +1,5 @@
 import { constants } from "node:fs";
-import { chmod, lstat, open, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, lstat, open, realpath, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { type Api, clampThinkingLevel, type Model } from "@earendil-works/pi-ai";
 import {
@@ -141,13 +141,12 @@ export class ChildSessionFactory {
     let sessionFile: string | undefined;
     let precreated = false;
     try {
-      // Observe existing directories before the SDK creates its default path. Do not
-      // reproduce cwd encoding or use the CLI/env/settings sessionDir resolver.
-      // getAgentDir handles SDK tilde/file URL/shell-path normalization; the
-      // default allocator additionally resolves relative agentDir against process.cwd().
-      const sessionsRoot = path.join(path.resolve(getAgentDir()), "sessions");
+      // Keep new histories outside native Pi discovery, without changing JSONL
+      // semantics or applying CLI/env/settings sessionDir overrides. getAgentDir
+      // handles SDK path normalization; resolve also supports a relative agentDir.
+      const historyDirectory = path.join(path.resolve(getAgentDir()), "subagents", "histories");
       const existing = new Set<string>();
-      let ancestor = sessionsRoot;
+      let ancestor = historyDirectory;
       while (true) {
         try {
           const entry = await lstat(ancestor);
@@ -164,21 +163,7 @@ export class ChildSessionFactory {
         if (parent === ancestor) break;
         ancestor = parent;
       }
-      try {
-        // The public allocator has no read-only directory lookup. Check existing
-        // cwd groups before calling it, rather than duplicating SDK cwd encoding.
-        for (const name of await readdir(sessionsRoot)) {
-          const directory = path.join(sessionsRoot, name);
-          const entry = await lstat(directory);
-          if (entry.isSymbolicLink()) {
-            throw new Error(`History group must not be a symlink: ${directory}`);
-          }
-          if (entry.isDirectory()) existing.add(directory);
-        }
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      }
-      const allocated = SessionManager.create(cwd);
+      const allocated = SessionManager.create(cwd, historyDirectory);
       sessionFile = allocated.getSessionFile();
       if (!sessionFile) throw new Error("SDK did not allocate a persistent child history");
       let directory = path.dirname(sessionFile);

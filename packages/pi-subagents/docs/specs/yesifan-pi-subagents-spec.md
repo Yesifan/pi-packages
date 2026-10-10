@@ -12,7 +12,7 @@
 
 ## 当前契约与规格优先级
 
-本节、[Spec 0002](0002-prompt-and-session-storage.md)、[领域模型](../domain-model.md) 和 [ADR-0003](../adr/0003-sdk-sessions-and-parent-metadata.md) 定义当前契约。下文 V1 第 1–19 节及附录均为历史资料，不是当前实现指令或当前验收清单；其 ID、project-local store、metadata model/thinking/cwd 和补投承诺已废止。共同的 cwd/trust、角色 snapshot、当前资源、并发、等待 barrier、UI/widget、shutdown 和非 sandbox 边界按 Spec 0002 继续执行，不要求兼容旧 TS 类型/示例。
+本节、[Spec 0002](0002-prompt-and-session-storage.md)、[领域模型](../domain-model.md) 和 [ADR-0003](../adr/0003-sdk-sessions-and-parent-metadata.md) 定义当前契约；新 history 位置与普通发现行为以 [Spec 0004](0004-private-child-history.md) / [ADR-0004](../adr/0004-private-child-history.md) 为准，其余 Spec 0002 决策保持不变。下文 V1 第 1–19 节及附录均为历史资料，不是当前实现指令或当前验收清单；其 ID、project-local store、metadata model/thinking/cwd 和补投承诺已废止。共同的 cwd/trust、角色 snapshot、当前资源、并发、等待 barrier、UI/widget、shutdown 和非 sandbox 边界按 Spec 0002 继续执行，不要求兼容旧 TS 类型/示例。
 
 | 历史章节（非当前要求） | 当前 Spec 0002 契约 |
 | --- | --- |
@@ -20,12 +20,12 @@
 | §6/§7/§12：metadata cwd/model/thinking、私有 history | cwd/model/thinking 由 Pi header/history/SDK 恢复，完整 role snapshot 保留；创建继承优先级不变，ask 不用 parent 后来设置覆盖 history。 |
 | §8/§9/§13：run/mount ID、epoch | 内存 Execution/RootScope 对象身份和捕获的 parent 执行保护，steering 复用原 Execution；不生成本包 run/mount/report ID 或 epoch。 |
 | §10/§12/§13：完整 run/result/delivery | 每 parent session 一个最小 name-keyed children JSON，不保存历史 runRecord/result/delivery；在线报告至多一次，重启不补投、不自动续跑，running→interrupted。 |
-| §12：root 项目存全树/相对 history | metadata 在 `<getAgentDir()>/subagents/` 按直接 parent 分开；history 使用 `SessionManager.create(cwd)` 的 SDK 默认 cwd 分组，实际绝对 ID+file 身份用于恢复。无项目镜像，仍有一个整树 writer lock、串行原子 owner 写入，无跨文件事务。 |
+| §12：root 项目存全树/相对 history | metadata 在 `<getAgentDir()>/subagents/` 按直接 parent 分开；新 history 使用 `SessionManager.create(cwd, privateDir)` 存于 `<getAgentDir()>/subagents/histories`，存量 history 不搬迁；实际绝对 ID+file 身份用于恢复。无项目镜像，仍有一个整树 writer lock、串行原子 owner 写入，无跨文件事务。 |
 | §4/§7/§12：项目运行目录/ignore 初始化 | `.pi/subagents/setting.json` 和 caller-local/root-only 作用域不变，读取配置不强制新建项目 sessions/.gitignore；新 store 失败不回退旧 store。 |
 | §3/§8：boolean preflight | 普通仅 started 接受，steering 仅 queued 接受；handled 未接受：普通清 prepared，steering 原 Execution 不变。不伪装回滚扩展历史或外部副作用。 |
 | §17–§19/附录 A：旧存储/ID/补投验收 | 相关旧验收由 Spec 0002 §14 替代；共同行为继续回归。实施顺序与完成条件采用 Spec 0002 §13/§15 和当前锁定 Pi 1.0.0，不照抄历史 0.85.1 步骤。 |
 
-D2 允许 child 独立打开/resume/继续聊天，不增加 owned-child guard 或索引，不接管原 root metadata；整树锁不覆盖宿主直接写 JSONL 的竞争。D3 接受原生 discovery/picker/continue，不过滤或改 mtime 隐藏。D4 不应用 CLI `--session-dir`、`PI_CODING_AGENT_SESSION_DIR` 或 settings `sessionDir`，不继承 root CLI override；`PI_CODING_AGENT_DIR` 仍决定 agentDir，root 原文件不搬迁。D6 的 handled 清理只针对本包未接受准备资源，steering 不 abort 原任务。
+D2 允许 child 独立打开/resume/继续聊天，不增加 owned-child guard 或索引，不接管原 root metadata；整树锁不覆盖宿主直接写 JSONL 的竞争。Spec 0004 替代 D3 的新 history 普通发现行为和 D4 的默认 cwd 分组位置：新 history 在普通扫描根之外，默认 discovery/picker/continue 不选取；显式 private-directory 查询/custom sessionDir 与 explicit file open 仍允许。存量 Spec 0002 history 原样保留、exact-path 恢复不变，可能仍被普通发现；不迁移、删除、改 mtime 或新增 marker/index/guard。D4 的覆盖规则不变：不应用 CLI `--session-dir`、`PI_CODING_AGENT_SESSION_DIR` 或 settings `sessionDir`，不继承 root CLI override；`PI_CODING_AGENT_DIR` 仍决定 agentDir，root 原文件不搬迁。D6 的 handled 清理只针对本包未接受准备资源，steering 不 abort 原任务。
 
 这是 BREAKING：旧 agents 不在新 registry 恢复、无法继续 ask；不迁移、不兼容、不删除旧文件。优先简单 SDK 行为和有用日志，未批准边缘策略延后。当前实现与独立最终复审已完成，Spec 0002 按用户决定关闭；实际交互 TUI/print 手动验收未运行、延期跟进。
 

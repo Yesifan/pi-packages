@@ -2,7 +2,7 @@
 
 > Spec 0002 实现与独立最终复审已完成；主代理独立重跑 typecheck、21 个文件 / 241 项测试通过，修正后 pack 成功。用户于 2026-10-09 明确接受手动 TUI/print 验收延期，Spec 0002 已标记 completed；手测实际未运行，不宣称全部验收通过。
 
-行为以[权威实现规格](specs/yesifan-pi-subagents-spec.md)、[Spec 0002](specs/0002-prompt-and-session-storage.md) 和 [ADR-0003](adr/0003-sdk-sessions-and-parent-metadata.md) 为准。[Spec 0003](specs/0003-terminal-exit-reporting.md) 的异常退出通知扩展仍为未开始计划，不属于本文的已实现承诺。旧 project-local store、sa/run/mount/report ID、epoch 和持久 delivery 属于历史实现，不是当前不变量。
+行为以[权威实现规格](specs/yesifan-pi-subagents-spec.md)、[Spec 0002](specs/0002-prompt-and-session-storage.md) 和 [ADR-0003](adr/0003-sdk-sessions-and-parent-metadata.md) 为准；新 history 位置与普通发现行为由 [Spec 0004](specs/0004-private-child-history.md) / [ADR-0004](adr/0004-private-child-history.md) 替代，独立打开仍允许。[Spec 0003](specs/0003-terminal-exit-reporting.md) 的异常退出通知扩展仍为未开始计划，不属于本文的已实现承诺。旧 project-local store、sa/run/mount/report ID、epoch 和持久 delivery 属于历史实现，不是当前不变量。
 
 ## 1. 核心实体
 
@@ -70,16 +70,14 @@ same-cwd child 为叶节点；external child 仅在角色工具、depth 与 runt
 <getAgentDir()>/subagents/
   sessions/<owner-sessionKey>.json   # 仅 owner 的直接 children
   locks/<rootKey>/                  # 一个原 root 的整树 writer lock target
-
-<SDK 默认 cwd 分组的会话目录>/
-  <Pi 实际会话文件>.jsonl
+  histories/<Pi 实际会话文件>.jsonl # 新 child，普通 discovery 根之外
 ```
 
 ParentSessionRecord（schemaVersion 1）包含 root、owner、parent 与 name-keyed children。ChildRecord 仅含 Pi sessionId/sessionFile、完整 roleSnapshot、最新 state 与可选 hasChildren。当前实现使用 hasChildren 记录曾初始化下一层 owner，诊断已声明分支文件缺失；它不是 owned-child 索引，也不是第二份关系表。
 
 A→B→D、A→C 时，A 文件只有 B/C，B 文件只有 D；无项目镜像、全局权威关系索引或跨文件事务。同 owner 更新串行、同目录临时文件原子替换；同步 preflight 接受提交基于已持久 opening，避免排队旧写覆盖 running。metadata 为 0600、本包目录为 0700；损坏、路径不安全、不可写、运行中删除或锁冲突明确失败，不 fallback 到旧布局。
 
-child history 使用 `SessionManager.create(cwd)` 的 SDK 默认 cwd 分组语义，不应用 CLI --session-dir、PI_CODING_AGENT_SESSION_DIR 或 settings sessionDir，也不继承 root CLI override。PI_CODING_AGENT_DIR 仍决定 agentDir。私有文件权限/header 适配采用 SDK 给出的实际路径；恢复验证非空普通文件、Pi ID/header/cwd，不猜 recent。
+新 child history 使用 `SessionManager.create(cwd, privateDir)`，privateDir 为 `<getAgentDir()>/subagents/histories`，SDK 不追加 cwd 分组；不应用 CLI --session-dir、PI_CODING_AGENT_SESSION_DIR 或 settings sessionDir，也不继承 root CLI override。PI_CODING_AGENT_DIR 仍决定 agentDir。私有文件权限/header 适配采用 SDK 给出的实际路径；恢复验证非空普通文件、Pi ID/header/cwd，不猜 recent。存量 Spec 0002 histories 按已保存 exact paths 恢复，不搬迁、迁移或删除，可能继续被普通 discovery 列出。
 
 项目配置仍在 `.pi/subagents/setting.json`，缺失用默认值；配置读取不生成项目 sessions/.gitignore。旧 agents 不迁移、不兼容、不恢复；旧文件不自动删除。
 
@@ -109,7 +107,7 @@ SUBAGENT_NOT_STEERABLE 解释 idle/interrupted/released/opening/waiting children
 5. 每次执行的在线最终报告至多一次；不从历史较早成功回复替代本次失败。
 6. 已提交 delivery 与 sender mount 生命周期分开；旧 callback 只幂等清旧资源，不能释放新执行名额或更新新 scope。
 7. 普通 ask 按当前 cwd/trust/工具资源重校验，完整 role snapshot 不替换；模型/thinking 从历史恢复。
-8. 整树锁保护本包管理，不阻止用户独立打开/resume child 或宿主直接写 JSONL。原生 discovery/picker/continue 不过滤、不改 mtime 隐藏；同 cwd child 可成为 recent 候选，不承诺并发直接打开无冲突。
+8. 整树锁保护本包管理，不阻止用户独立打开/resume child 或宿主直接写 JSONL。新 child 位于普通 discovery 根之外，默认 list/listAll/picker/continue 不选取它们；显式 private-directory 查询/custom sessionDir 和 explicit file open 仍允许，不改 mtime，不添加 owned-child guard/marker/index，不承诺并发直接打开无冲突或访问隔离。
 9. 仅停止 root 当前模型响应不停止已接受后台工作；root shutdown/replacement 标 closing、取消 UI、abort/dispose descendants、保存终态、清进度并最后释放锁。
 10. exact root resume 只递归加载轻量关系/history，不恢复 SDK 对象/pending 集合/旧 Promise，不续跑、不对账或补投报告；保存 idle 后投递前退出可能丢在线报告。首次 root owner 文件缺失按空树处理，不承诺诊断历史删除。
 

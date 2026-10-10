@@ -20,9 +20,11 @@
     "docs/specs/yesifan-pi-subagents-spec.md",
     "docs/specs/0001-project-local-subagent-storage.md",
     "docs/specs/0002-prompt-and-session-storage.md",
+    "docs/specs/0004-private-child-history.md",
     "docs/adr/0001-project-local-subagent-storage.md",
     "docs/adr/0002-native-widget-for-background-progress.md",
     "docs/adr/0003-sdk-sessions-and-parent-metadata.md",
+    "docs/adr/0004-private-child-history.md",
     "README.md",
     "CHANGELOG.md",
     "LICENSE"

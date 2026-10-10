@@ -128,12 +128,14 @@ Configuration loading does not create project session directories or `.gitignore
 <getAgentDir()>/subagents/
   sessions/<parent-session-key>.json
   locks/<root-session-key>/
-<Pi SDK default cwd-grouped session directory>/<actual-session-file>.jsonl
+  histories/<actual-SDK-session-file>.jsonl
 ```
 
 Each parent JSON contains only its directly owned children, with each child's actual Pi session identity/path, full creation-time role snapshot, and latest state. For `A → B → C`, A's JSON stores B and B's JSON stores C. An optional branch marker diagnoses missing previously initialized owner files. There are no separate run records, result copies, or delivery records. The whole tree shares one root writer lock; owner updates are serialized and atomically replaced. New metadata is private (0600 files, 0700 directories on POSIX). Unsafe paths, damaged owner headers, permission failures, and lock conflicts fail closed with no legacy-store fallback.
 
-Child history uses the directory allocated by public `SessionManager.create(cwd)`, under the SDK's current agentDir. It deliberately **does not** honor or inherit CLI `--session-dir`, `PI_CODING_AGENT_SESSION_DIR`, or global/project `sessionDir` settings. Root history is not relocated. Child files are privately initialized with valid headers before their identity is saved. Native Pi discovery can list these histories; independently opening a child is allowed, but the tree writer lock does not coordinate independent manual edits to its history.
+New child history uses public `SessionManager.create(cwd, privateDir)`, with `privateDir` at `<getAgentDir()>/subagents/histories`, outside Pi's ordinary session discovery directories. It deliberately **does not** honor or inherit CLI `--session-dir`, `PI_CODING_AGENT_SESSION_DIR`, or global/project `sessionDir` settings. Root history is not relocated. Child files are privately initialized as native JSONL with valid headers and 0600 permissions; newly created directories use 0700 on POSIX.
+
+Default native discovery, picker, and continue do not select these new histories. Explicit file opening/resume and explicit discovery with a custom session directory pointing at the private directory remain allowed; this is not an access-control boundary. Existing Spec 0002 histories stay at their saved paths, remain recoverable, and may still appear in ordinary discovery. No existing files are migrated, relocated, or deleted. The tree writer lock does not coordinate independent manual edits to child history. See [Spec 0004](docs/specs/0004-private-child-history.md) and [ADR-0004](docs/adr/0004-private-child-history.md).
 
 ## Background lifecycle
 

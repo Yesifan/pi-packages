@@ -186,7 +186,7 @@ function physicalReply(): AssistantMessage {
 }
 
 describe("ChildSessionFactory session history", () => {
-  it("uses the SDK allocated cwd directory, private valid header, and opened actual identity", async () => {
+  it("uses the private SDK directory, valid header, and opened actual identity", async () => {
     const h = await harness();
     process.env.PI_CODING_AGENT_SESSION_DIR = path.join(h.root, "env-override");
     await writeFile(
@@ -200,12 +200,12 @@ describe("ChildSessionFactory session history", () => {
     const create = vi.spyOn(sdk.SessionManager, "create");
     const sdkOpen = vi.spyOn(sdk.SessionManager, "open");
     const manager = await h.factory.createSessionManager(h.cwd);
-    expect(create).toHaveBeenCalledWith(h.cwd);
+    expect(create).toHaveBeenCalledWith(h.cwd, path.join(h.agentDir, "subagents", "histories"));
     const allocated = create.mock.results[0]?.value as sdk.SessionManager;
     const saved = identity(manager);
     expect(saved.sessionFile).toBe(allocated.getSessionFile());
     expect(path.dirname(saved.sessionFile)).toBe(allocated.getSessionDir());
-    expect(saved.sessionFile.startsWith(path.join(h.agentDir, "sessions") + path.sep)).toBe(true);
+    expect(path.dirname(saved.sessionFile)).toBe(path.join(h.agentDir, "subagents", "histories"));
     expect(sdkOpen).toHaveBeenCalledWith(saved.sessionFile, path.dirname(saved.sessionFile), h.cwd);
     expect(saved.sessionId).not.toBe(allocated.getSessionId());
     const header = JSON.parse(await readFile(saved.sessionFile, "utf8"));
@@ -214,27 +214,68 @@ describe("ChildSessionFactory session history", () => {
     if (process.platform !== "win32") {
       expect((await stat(saved.sessionFile)).mode & 0o777).toBe(0o600);
       expect((await stat(path.dirname(saved.sessionFile))).mode & 0o777).toBe(0o700);
-      expect((await stat(path.join(h.agentDir, "sessions"))).mode & 0o777).toBe(0o700);
+      expect((await stat(path.join(h.agentDir, "subagents"))).mode & 0o777).toBe(0o700);
     }
     expect((await h.factory.openSessionManager(saved)).getSessionId()).toBe(saved.sessionId);
-    // D3: header-only children remain discoverable; no filtering or timestamp hiding.
+  });
+
+  it("excludes new histories from default discovery and continue, but permits explicit discovery/open", async () => {
+    const h = await harness();
+    const ordinary = sdk.SessionManager.create(h.cwd);
+    addHistory(ordinary);
+    const child = await h.factory.createSessionManager(h.cwd);
+    const saved = identity(child);
+    // Header-only files are included by native discovery when their directory is queried.
+    expect((await sdk.SessionManager.list(h.cwd)).map((entry) => entry.id)).toEqual([
+      ordinary.getSessionId(),
+    ]);
+    expect((await sdk.SessionManager.listAll()).map((entry) => entry.id)).toEqual([
+      ordinary.getSessionId(),
+    ]);
+    expect(sdk.SessionManager.continueRecent(h.cwd).getSessionId()).toBe(ordinary.getSessionId());
+    addHistory(child);
+    expect((await sdk.SessionManager.list(h.cwd)).map((entry) => entry.id)).not.toContain(
+      saved.sessionId,
+    );
+    expect((await sdk.SessionManager.listAll()).map((entry) => entry.id)).not.toContain(
+      saved.sessionId,
+    );
+    expect(sdk.SessionManager.continueRecent(h.cwd).getSessionId()).toBe(ordinary.getSessionId());
+    expect(
+      (await sdk.SessionManager.list(h.cwd, child.getSessionDir())).map((entry) => entry.id),
+    ).toContain(saved.sessionId);
+    expect(
+      (await sdk.SessionManager.listAll(child.getSessionDir())).map((entry) => entry.id),
+    ).toContain(saved.sessionId);
+    expect(sdk.SessionManager.continueRecent(h.cwd, child.getSessionDir()).getSessionId()).toBe(
+      saved.sessionId,
+    );
+    expect(sdk.SessionManager.open(saved.sessionFile).getSessionId()).toBe(saved.sessionId);
+  });
+
+  it("recovers an existing default-directory history without relocating it", async () => {
+    const h = await harness();
+    const ordinary = sdk.SessionManager.create(h.cwd);
+    addHistory(ordinary);
+    const saved = identity(ordinary);
+    const before = await readFile(saved.sessionFile, "utf8");
+    expect((await h.factory.openSessionManager(saved)).getSessionFile()).toBe(saved.sessionFile);
+    expect(await readFile(saved.sessionFile, "utf8")).toBe(before);
     expect((await sdk.SessionManager.list(h.cwd)).map((entry) => entry.id)).toContain(
       saved.sessionId,
     );
   });
 
-  it.each(["agent", "sessions", "cwd-group"])(
+  it.each(["agent", "subagents", "histories"])(
     "rejects a preexisting %s directory symlink before SDK allocation writes outside history",
     async (target) => {
       const h = await harness();
       const outside = path.join(h.root, "outside");
       await mkdir(outside);
       let directory = h.agentDir;
-      if (target === "sessions") directory = path.join(h.agentDir, "sessions");
-      if (target === "cwd-group") {
-        // Obtain the grouping from the public SDK, never reproduce its cwd encoding.
-        directory = sdk.SessionManager.create(h.cwd).getSessionDir();
-      }
+      if (target === "subagents") directory = path.join(h.agentDir, "subagents");
+      if (target === "histories") directory = path.join(h.agentDir, "subagents", "histories");
+      await mkdir(path.dirname(directory), { recursive: true });
       await rm(directory, { recursive: true, force: true });
       await symlink(outside, directory, "dir");
       const create = vi.spyOn(sdk.SessionManager, "create");
@@ -248,11 +289,17 @@ describe("ChildSessionFactory session history", () => {
     },
   );
 
-  it.each(["agent", "sessions"])(
+  it.each(["agent", "subagents", "histories"])(
     "rejects a non-directory %s ancestor before SDK allocation",
     async (target) => {
       const h = await harness();
-      const directory = target === "agent" ? h.agentDir : path.join(h.agentDir, "sessions");
+      const directory =
+        target === "agent"
+          ? h.agentDir
+          : target === "subagents"
+            ? path.join(h.agentDir, "subagents")
+            : path.join(h.agentDir, "subagents", "histories");
+      await mkdir(path.dirname(directory), { recursive: true });
       await rm(directory, { recursive: true, force: true });
       await writeFile(directory, "not a directory");
       const create = vi.spyOn(sdk.SessionManager, "create");
@@ -264,16 +311,27 @@ describe("ChildSessionFactory session history", () => {
     },
   );
 
-  it("preserves existing directory permissions and permits unrelated ordinary files in sessions", async () => {
+  it("preserves existing history directory permissions and unrelated files", async () => {
     const h = await harness();
-    const existingGroup = sdk.SessionManager.create(h.cwd).getSessionDir();
-    const before = (await stat(existingGroup)).mode;
-    const unrelated = path.join(h.agentDir, "sessions", "unrelated.jsonl");
+    const directory = path.join(h.agentDir, "subagents", "histories");
+    await mkdir(directory, { recursive: true });
+    const before = (await stat(directory)).mode;
+    const unrelated = path.join(directory, "unrelated.jsonl");
     await writeFile(unrelated, "existing history");
     const manager = await h.factory.createSessionManager(h.cwd);
-    expect(manager.getSessionDir()).toBe(existingGroup);
-    expect((await stat(existingGroup)).mode).toBe(before);
+    expect(manager.getSessionDir()).toBe(directory);
+    expect((await stat(directory)).mode).toBe(before);
     expect(await readFile(unrelated, "utf8")).toBe("existing history");
+  });
+
+  it("does not inspect or reject an unrelated default sessions directory symlink", async () => {
+    const h = await harness();
+    const outside = path.join(h.root, "ordinary-sessions");
+    await mkdir(outside);
+    await symlink(outside, path.join(h.agentDir, "sessions"), "dir");
+    const manager = await h.factory.createSessionManager(h.cwd);
+    expect(manager.getSessionDir()).toBe(path.join(h.agentDir, "subagents", "histories"));
+    expect(await readdir(outside)).toEqual([]);
   });
 
   it("uses SDK normalization for a relative agentDir and initializes missing directories privately", async () => {
@@ -282,7 +340,9 @@ describe("ChildSessionFactory session history", () => {
     process.env.PI_CODING_AGENT_DIR = path.relative(process.cwd(), agentDir);
     const manager = await h.factory.createSessionManager(h.cwd);
     expect(
-      identity(manager).sessionFile.startsWith(path.join(agentDir, "sessions") + path.sep),
+      identity(manager).sessionFile.startsWith(
+        path.join(agentDir, "subagents", "histories") + path.sep,
+      ),
     ).toBe(true);
     expect(await h.factory.openSessionManager(identity(manager))).toBeInstanceOf(
       sdk.SessionManager,
@@ -291,7 +351,7 @@ describe("ChildSessionFactory session history", () => {
       for (const directory of [
         path.dirname(agentDir),
         agentDir,
-        path.join(agentDir, "sessions"),
+        path.join(agentDir, "subagents"),
         manager.getSessionDir(),
       ])
         expect((await stat(directory)).mode & 0o777).toBe(0o700);
