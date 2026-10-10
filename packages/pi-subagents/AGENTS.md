@@ -11,13 +11,13 @@ AgentSession，并提供 `subagent` 与 `ask_subagent` 工具。实现基线为
 [`docs/README.md`](docs/README.md) 索引及相关引用。
 新增、编辑或实施规格前先阅读并遵守 [`规格索引与维护规则`](docs/specs/README.md)，同步规格 metadata 与索引。
 
-当前工作区已实现 [`Spec 0002`](docs/specs/0002-prompt-and-session-storage.md) 的 runtime 重写，独立最终复审已完成，主代理重跑当前 typecheck 与 21 个文件 / 241 项测试通过，修正后 pack 成功；实际交互 TUI/print 手测未运行，用户明确接受延期并要求关闭，Spec 0002 status 已标记 completed；不能因此声称 §14 真实 CLI 全验收通过。权威规格中的 V1 大节仅保留历史理由/约定，当前行为采用其顶部摘要、Spec 0002 和 [`ADR-0003`](docs/adr/0003-sdk-sessions-and-parent-metadata.md)；新 history 位置与普通 discovery 以 [`Spec 0004`](docs/specs/0004-private-child-history.md) / [`ADR-0004`](docs/adr/0004-private-child-history.md) 为准，独立打开仍允许。[`Spec 0003`](docs/specs/0003-terminal-exit-reporting.md) 仍为未开始的异常退出通知计划，未经授权不要顺带实施。
+当前工作区已实现 [`Spec 0002`](docs/specs/0002-prompt-and-session-storage.md) 的 runtime 重写与私有 history 目录；最新 typecheck、21 个文件 / 245 项测试、build 与 pack 通过。此前 runtime 独立最终复审已完成，不将其冒充最新目录修订已复审；该审查由主代理记录。实际交互 TUI/print 手测未运行，用户明确接受延期并关闭 Spec 0002（completed），不能因此声称 §14 CLI 全验收通过。PR #11 尚未合并，用户要求把最终目录/discovery 直接整合进原 Spec 0002 和 [`ADR-0003`](docs/adr/0003-sdk-sessions-and-parent-metadata.md)，不另立后续规格/决策。权威规格中的 V1 大节仅保留真实历史资料；当前按顶部摘要、Spec 0002/ADR-0003 执行，独立打开仍允许。[`Spec 0003`](docs/specs/0003-terminal-exit-reporting.md) 仍为未开始的异常退出通知计划，未经授权不要顺带实施。
 
 ## 核心模型与不变量
 
 - 每个 file-backed root Pi session 对应一个 `RootRuntime` 和新的内存 `RootScope`，持有 `<getAgentDir()>/subagents/locks/<rootKey>/` 整树 writer lock；metadata 按直接 parent session 保存于全局 `subagents/sessions/<sessionKey>.json`，无项目镜像。
 - logical subagent 以直接 parent 下 trim、大小写敏感唯一 name 寻址；`ask_subagent` 使用 name，不支持旧 id。身份可跨 ask/exact root resume 保留，每次普通 ask 使用新的 `Execution` 与 AgentSession；不生成本包 agent/run/mount/report ID 或 epoch。
-- 新 child history 采用 SDK `SessionManager.create(cwd, privateDir)`，privateDir 为 `<getAgentDir()>/subagents/histories`，不追加 cwd 分组、不应用 CLI/env/settings sessionDir、不继承 root CLI override；`PI_CODING_AGENT_DIR` 仍决定 agentDir。存量 Spec 0002 history 按已保存 exact paths 恢复，不迁移、搬迁或删除。cwd/model/thinking 从 Pi header/history 恢复，不在 metadata 重复保存。
+- 新 child history 采用 SDK `SessionManager.create(cwd, privateDir)`，privateDir 为 `<getAgentDir()>/subagents/histories`，不追加 cwd 分组、不应用 CLI/env/settings sessionDir、不继承 root CLI override；`PI_CODING_AGENT_DIR` 仍决定 agentDir。存量新 schema metadata 引用的默认目录 history 按已保存 exact paths 恢复，不迁移、搬迁或删除。cwd/model/thinking 从 Pi header/history 恢复，不在 metadata 重复保存。
 - caller 只使用自己的 session-local `DelegationContext`：自己的 cwd、agent registry 和 external cwd 配置。
 - child 角色在创建时从 caller registry 解析并保存完整 snapshot；后续 ask 不得重新解析同名角色替换 snapshot。
 - tool 的 `cwd` 只接受绝对路径；canonicalize 后必须精确等于 caller cwd 或 caller 当前配置中的一个 external cwd。授权不包含子目录或路径前缀。

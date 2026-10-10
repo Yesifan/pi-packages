@@ -1,8 +1,8 @@
 # 领域模型（Domain Model）
 
-> Spec 0002 实现与独立最终复审已完成；主代理独立重跑 typecheck、21 个文件 / 241 项测试通过，修正后 pack 成功。用户于 2026-10-09 明确接受手动 TUI/print 验收延期，Spec 0002 已标记 completed；手测实际未运行，不宣称全部验收通过。
+> Spec 0002 原 runtime 独立复审已完成；最新私有目录修订的 typecheck、21 个文件 / 245 项测试、build 与 pack 通过，不冒充该修订已独立复审。PR #11 未合并，最终目录/discovery 直接整合进原规格。用户于 2026-10-09 接受手动 TUI/print 验收延期，Spec 0002 保持 completed；手测未运行，不宣称全部验收通过。
 
-行为以[权威实现规格](specs/yesifan-pi-subagents-spec.md)、[Spec 0002](specs/0002-prompt-and-session-storage.md) 和 [ADR-0003](adr/0003-sdk-sessions-and-parent-metadata.md) 为准；新 history 位置与普通发现行为由 [Spec 0004](specs/0004-private-child-history.md) / [ADR-0004](adr/0004-private-child-history.md) 替代，独立打开仍允许。[Spec 0003](specs/0003-terminal-exit-reporting.md) 的异常退出通知扩展仍为未开始计划，不属于本文的已实现承诺。旧 project-local store、sa/run/mount/report ID、epoch 和持久 delivery 属于历史实现，不是当前不变量。
+行为以[权威实现规格](specs/yesifan-pi-subagents-spec.md)、[Spec 0002](specs/0002-prompt-and-session-storage.md) 和 [ADR-0003](adr/0003-sdk-sessions-and-parent-metadata.md) 为准；原 Spec 0002/ADR-0003 已包含新 history 私有目录、普通发现排除与独立打开允许的最终决定。[Spec 0003](specs/0003-terminal-exit-reporting.md) 的异常退出通知扩展仍为未开始计划，不属于本文的已实现承诺。旧 project-local store、sa/run/mount/report ID、epoch 和持久 delivery 属于历史实现，不是当前不变量。
 
 ## 1. 核心实体
 
@@ -77,7 +77,7 @@ ParentSessionRecord（schemaVersion 1）包含 root、owner、parent 与 name-ke
 
 A→B→D、A→C 时，A 文件只有 B/C，B 文件只有 D；无项目镜像、全局权威关系索引或跨文件事务。同 owner 更新串行、同目录临时文件原子替换；同步 preflight 接受提交基于已持久 opening，避免排队旧写覆盖 running。metadata 为 0600、本包目录为 0700；损坏、路径不安全、不可写、运行中删除或锁冲突明确失败，不 fallback 到旧布局。
 
-新 child history 使用 `SessionManager.create(cwd, privateDir)`，privateDir 为 `<getAgentDir()>/subagents/histories`，SDK 不追加 cwd 分组；不应用 CLI --session-dir、PI_CODING_AGENT_SESSION_DIR 或 settings sessionDir，也不继承 root CLI override。PI_CODING_AGENT_DIR 仍决定 agentDir。私有文件权限/header 适配采用 SDK 给出的实际路径；恢复验证非空普通文件、Pi ID/header/cwd，不猜 recent。存量 Spec 0002 histories 按已保存 exact paths 恢复，不搬迁、迁移或删除，可能继续被普通 discovery 列出。
+新 child history 使用 `SessionManager.create(cwd, privateDir)`，privateDir 为 `<getAgentDir()>/subagents/histories`，SDK 不追加 cwd 分组；不应用 CLI --session-dir、PI_CODING_AGENT_SESSION_DIR 或 settings sessionDir，也不继承 root CLI override。PI_CODING_AGENT_DIR 仍决定 agentDir。私有文件权限/header 适配采用 SDK 给出的实际路径；恢复验证非空普通文件、Pi ID/header/cwd，不猜 recent。存量新 schema metadata 引用的默认目录 histories 按已保存 exact paths 恢复，不搬迁、迁移或删除，可能继续被普通 discovery 列出。
 
 项目配置仍在 `.pi/subagents/setting.json`，缺失用默认值；配置读取不生成项目 sessions/.gitignore。旧 agents 不迁移、不兼容、不恢复；旧文件不自动删除。
 

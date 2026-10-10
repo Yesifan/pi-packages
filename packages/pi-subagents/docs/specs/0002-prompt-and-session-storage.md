@@ -15,13 +15,14 @@ related_documents:
 ---
 
 - 实施状态：completed，完成日期 2026-10-09。用户明确要求“先标记为完成，然后提交 PR”，接受在实际交互 TUI/print 手动验收前关闭本规格；手测未运行，延期跟进，不宣称 §14 全部验收通过。
+- 未合并 PR 内修订：PR #11 尚未合并，按用户要求将新 history 的私有目录与普通 discovery 边界直接整合进本规格和 ADR-0003，不另立后续规格/ADR，也不把 PR 内目录试选写成已发布历史决定。原完成日期与手测延期决定保留；最新验证见 §15。
 - 影响包：`@yesifan/pi-subagents`。
 - 需求来源：[Notion 需求](https://app.notion.com/p/alan66/pi-subagents-prompt-optimize-3eb0f77a346d8016ab08d23fc00fd084)及后续讨论。
 - 当前术语与权威索引：[领域模型](../domain-model.md)、[实现规格](yesifan-pi-subagents-spec.md)；其中 V1 大节仅为历史资料。
 - 存储决策：[ADR-0003](../adr/0003-sdk-sessions-and-parent-metadata.md) 替代 [ADR-0001](../adr/0001-project-local-subagent-storage.md) 的相关存储决定，保留旧理由。
 - SDK 基线：最新 `origin/main`（`0fabea0`）catalog / lockfile 的 Pi `1.0.0`。本次 SDK 核对使用同版本发布产物；实施时安装产物须与 lockfile 一致。
 
-本文是当前重写的权威行为与验收规格。工作区已实现 description/role/history 路径展示、name 工具接口、SDK 默认 history、按直接 parent 最小 metadata 和 Execution/RootScope 对象生命周期；旧 ID 工具接口、独立 run/mount/report identity、project-local store 与补投恢复契约不再是当前行为。主代理已独立重跑当前 typecheck 与 21 个文件 / 241 项测试，全部通过；runtime 修正后的 pack 已成功。独立最终复审确认此前 5 项问题已解决、未发现新的具体缺陷；实际交互 TUI/print 手动验收仍未运行，不据此宣称 §14 全部通过。“必须”“不得”为验收要求，“建议”为可选选择，不由批准/代码存在自动推导验收通过。D1–D6 均已确认；冲突处以本文和 ADR-0003 为准。
+本文是当前重写的权威行为与验收规格。工作区已实现 description/role/history 路径展示、name 工具接口、SDK 原生私有目录 history、按直接 parent 最小 metadata 和 Execution/RootScope 对象生命周期；旧 ID 工具接口、独立 run/mount/report identity、project-local store 与补投恢复契约不再是当前行为。最新目录修订已通过 typecheck、21 个文件 / 245 项测试、build 与 pack；此前 runtime 独立最终复审确认 5 项问题已解决、未发现新的具体缺陷，不将该旧复审冒充最新目录修订已复审。实际交互 TUI/print 手动验收仍未运行，不据此宣称 §14 全部通过。“必须”“不得”为验收要求，“建议”为可选选择，不由批准/代码存在自动推导验收通过。D1–D6 均已确认；冲突处以本文和 ADR-0003 为准。
 
 [Spec 0003](0003-terminal-exit-reporting.md) 是仍未开始的异常退出通知扩展；其现场证据和测试/日志计划原样保留，本文不宣称该扩展已实施。
 
@@ -35,7 +36,7 @@ related_documents:
 2. 模型可见的直接 children 状态列表携带 role。
 3. 自动 report 直接附完整 JSONL 实际路径，不增加 `Full session` 标题。
 4. 模型通过 name 创建、查看和 ask，不通过 ID 操作 agent。
-5. child JSONL 遵循批准的 Pi 会话目录规则，不再保存在项目私有 subagent scope。
+5. 新 child JSONL 通过 SDK 显式创建于 `<getAgentDir()>/subagents/histories`，不在普通 discovery/picker/continue 扫描根内；独立打开与显式目录 discovery 仍允许。存量默认目录 history 不搬迁、迁移或删除，按已有实际路径恢复。
 6. `<getAgentDir()>/subagents/` 内每个父 session 一个 JSON，只保存直接 children；孙子保存于其直接父 session 的 JSON。
 7. 元数据仅保留恢复需要、Pi 历史没有完整表达的信息；不重复保存 cwd、model、thinking、消息或结果。
 8. 不生成 `sa_*`、run ID、mount ID、report ID 或 root epoch；Pi session ID 只用于内部定位。
@@ -175,14 +176,13 @@ Pi session ID、文件身份在持久化内部保留，不与“移除 run/mount
     <B-sessionKey>.json             # B 的直接 children：D
   locks/
     <A-rootKey>/                    # A 整棵树的 writer lock target
-
-<Pi 批准的会话目录>/
-  <各会话的实际文件>.jsonl
+  histories/
+    <Pi 实际会话文件>.jsonl          # 新 child，普通 discovery 扫描根之外
 ```
 
 对于 A→B→D、A→C：A 保存 B/C，B 保存 D；B 自身的 child 元数据只在 A 文件。叶节点无需空 owner 文件。B 首次创建 D 时就可创建自己的 owner JSON，不等待 B 完成任务。
 
-全部 metadata 在全局目录，不在 external projects 保存镜像，不另外维护一份权威 relations.json。child history 使用 D4 批准的 SDK 内建 cwd 分组目录，不传 CLI/env/settings sessionDir override。
+全部 metadata 在全局目录，不在 external projects 保存镜像，不另外维护一份权威 relations.json。新 child history 使用 D4 批准的 SDK 显式 privateDir，不追加 cwd 分组、不传 CLI/env/settings sessionDir override。存量新 schema 记录中的实际 history 路径原样保留，default-directory history 仍可恢复；这不改变 D1 对更早 legacy stores 的排除。
 
 ### 4.2 Schema
 
@@ -228,9 +228,9 @@ state 只表达可恢复的最新事实，不包含持久化依赖或调度器�
 - SDK factory 未传 SessionManager 时，直接使用 `SessionManager.create(cwd, getDefaultSessionDir(cwd, agentDir))`，不自动应用上述 CLI/env/setting 覆盖。
 - getDefaultSessionDir 不读取 sessionDir setting/env；显式传入 SessionManager 的目录是最终目录，不再追加 cwd 分组。
 
-**D4 已批准：** child 使用 `SessionManager.create(cwd)` 的 SDK 内建默认 cwd 分组目录；不读取或传播 `--session-dir`、`PI_CODING_AGENT_SESSION_DIR`、global/project settings 的 `sessionDir`，也不继承 root CLI override。`PI_CODING_AGENT_DIR` 仍决定 SDK agentDir（及本包 metadata 的 `<getAgentDir()>`）；它不是 sessionDir override。其余目标 cwd 的 settings/resources 仍正常加载，不因忽略 sessionDir 而全部禁用。
+**D4 已批准：** 新 child 使用 public `SessionManager.create(cwd, privateDir)`，privateDir 为 `<getAgentDir()>/subagents/histories`，位于普通 `<agentDir>/sessions` 扫描根之外。显式目录不追加 cwd 分组，目标 cwd 仍存于 SDK header；SDK 管理原生 JSONL 文件名、entries 和恢复上下文。不读取或传播 `--session-dir`、`PI_CODING_AGENT_SESSION_DIR`、global/project settings 的 `sessionDir`，也不继承 root CLI override。`PI_CODING_AGENT_DIR` 仍决定 SDK agentDir；其余目标 cwd 的 settings/resources 正常加载。
 
-root 现有会话不搬迁；不硬编码 `~/.pi/agent` 或手写 cwd 编码。若需 §5.2 的私有文件适配，应从 SDK 默认 manager 获取实际目录/路径，不重实现 CLI 配置优先级。
+root 与已有 child 文件不搬迁、迁移或删除，记录中实际路径不重写；不硬编码 `~/.pi/agent` 或手写 cwd 编码。§5.2 的私有文件适配使用 SDK 在显式 privateDir 分配的实际路径，不重实现 CLI 优先级。
 
 ### 5.2 ID、header 和权限
 
@@ -239,6 +239,8 @@ SDK 自动生成 ID 时从新建 manager 获取；NewSessionOptions.id 也支持
 create 会立即分配 ID、内存 header 和预定路径，但 setup entries 不触发新文件落盘；首个 user 或 assistant message 才创建文件。
 
 本包保存可恢复 child identity 前建立有效 header，POSIX JSONL mode 为 0600。当前采用排他预创建 0600 空文件再 `SessionManager.open(file, directory, cwd)` 的适配，由 SDK 写有效 header 并保留权限；不调用私有 flush，也不把权限保证归给 SDK 默认 create。
+
+检查实际 privateDir 及其 ancestor chain 为普通非 symlink 目录；SDK 创建后仅将本次新建目录设为 0700，既有目录权限不改。不扫描无关普通 sessions/cwd groups，其 symlink 不应阻止 private history 创建。不安全、非目录或不可写的实际路径 fail closed；这些校验不是 sandbox 或全部 TOCTOU 防护。
 
 ### 5.3 History 恢复
 
@@ -253,6 +255,14 @@ create 会立即分配 ID、内存 header 和预定路径，但 setup entries �
 **实施验证门槛：**用 Pi 1.0.0 真正验证 model/thinking 已有 history entries 和 factory 的恢复行为，包括 parent 后来换模型、首次回复前取消、模型不可用/认证失败，以及旧 history 缺少有效值。不允许 SDK 默认 fallback 后仍声称恢复了固定模型。缺少有效恢复值时应给明确诊断；若需要改变产品 fallback 策略，应先确认，而不是重新加一份 metadata 绕过问题。
 
 普通资源加载发生在 target trust 后；读取会话 header 不等于信任或执行该项目资源。
+
+### 5.4 普通发现、显式访问与存量路径
+
+默认 `list(cwd)` 扫描普通 cwd group，默认 `listAll()` 只扫描普通 sessions 根的直接子目录及其中 JSONL，默认 `continueRecent(cwd)` 从其选定目录找历史。因此新 privateDir histories 不成为普通 discovery/picker/continue 候选，包括 header-only 文件；不新增过滤 hook、owned-child guard、marker/index 或 mtime 隐藏。
+
+允许 `list(cwd, privateDir)`、`listAll(privateDir)`、`continueRecent(cwd, privateDir)` 等显式目录查询，以及 `--session /explicit/file.jsonl` / public open 后独立 resume、继续聊天。用户显式把 CLI/env/settings sessionDir 指向 privateDir 时也能发现；本包新建 child 不继承这些 overrides。不承诺隐藏于所有第三方 discovery，也不提供访问隔离。
+
+已有新 schema metadata 引用的 default-directory histories 保持实际路径/内容/权限，不迁移、搬迁、删除、marker backfill 或重写 identity；恢复仍按已存 ID+file 验证后 exact-path 打开，它们可能继续被普通 discovery 列出。新旧位置可共存；D1 对旧 project-local/legacy store 不加载的边界不变。
 
 ## 6. 无 run/mount/epoch 的内存执行模型
 
@@ -519,7 +529,7 @@ leaf 无 owner JSON 正常。当前实现采用可选 hasChildren 历史标记�
 | run/mount UUID、root epoch | Execution / RootScope 对象身份保护 |
 | 独立agent/run JSON与投递记录 | 每父owner JSON最小child record，无历史runRecord |
 | metadata model/thinking/cwd | Pi history/header/SDK恢复，不重复保存 |
-| root项目保存全树JSONL | Pi会话目录history + 全局每父直接children JSON |
+| root项目保存全树JSONL | SDK privateDir 新 history + 全局每父直接children JSON；存量实际路径不搬迁 |
 | pending report恢复对账/补入 | 不补投、不自动续跑，完整历史按需读取 |
 | role-free列表 | name + 创建时role |
 | report无完整会话定位 | 一行实际JSONL路径，无Full session标题 |
@@ -538,17 +548,17 @@ D1–D6 均已决定，不再阻塞实施：
 | ID | 最终选择 | 边界 |
 | --- | --- | --- |
 | D2 | 允许 child 被独立打开、resume 和继续聊天。 | 不新增 owned-child guard、标记或索引，不禁止普通 Pi 管理。独立打开不会接管原 root 的 metadata/ask 权限；整树锁不覆盖宿主直接写 child JSONL，不承诺此类并发无冲突。 |
-| D3 | 接受 Pi 原生 discovery、picker 和 continue 行为。 | 不过滤 child、不修改 mtime 隐藏；header-only 也可能可见，同 cwd child 可能被 recent/continue 选中。不同 cwd 按 SDK 默认分组，实际是否可见取决于宿主查询目录，不声称所有 external cwd 互抢。 |
-| D4 | child 采用 `SessionManager.create(cwd)` 的 SDK 内建默认 cwd 分组。 | `PI_CODING_AGENT_DIR` 仍作用于 agentDir；不应用 CLI `--session-dir`、`PI_CODING_AGENT_SESSION_DIR` 或 settings `sessionDir`，不继承 root CLI override。root 原文件不搬迁。 |
+| D3 | 普通 discovery/picker/continue 不选取新 child histories；独立打开与显式目录 discovery 仍允许。 | 用 privateDir 在普通扫描根之外的目录位置实现，不加 filter/guard/marker/index、不改 mtime。显式 custom-directory 查询仍能发现；存量默认目录 history 可能仍被普通发现，不搬迁、迁移或删除。 |
+| D4 | 新 child 采用 SDK `SessionManager.create(cwd, privateDir)`；privateDir 为 `<getAgentDir()>/subagents/histories`，不追加 cwd 分组。 | `PI_CODING_AGENT_DIR` 仍作用于 agentDir；不应用 CLI `--session-dir`、`PI_CODING_AGENT_SESSION_DIR` 或 settings `sessionDir`，不继承 root CLI override。root 及存量 child 按已有实际路径保留与恢复。 |
 | D6 | handled 是未接受，不是假 started/steered。 | 普通请求清理 prepared（新 child rollback、既有 ask 恢复先前 state）；steering 不改原 Execution、不 abort 原任务。不保证回滚 extension 历史或外部副作用。 |
 
-采用简单 SDK 默认行为并记录有用诊断；不为 D2/D3 添加额外边缘防护策略。当前采用 §9.1 的可选分支缺失标记；它不是 owned-child 索引，不用于拒绝独立打开。
+采用简单 SDK 原生行为与显式目录并记录有用诊断；不为 D2/D3 添加额外边缘防护策略。当前采用 §9.1 的可选分支缺失标记；它不是 owned-child 索引，不用于拒绝独立打开。
 
 恢复model/thinking和在线处理barrier的SDK验证属于实施门槛，不是增加产品功能；若无法支持已定目标则停止并提供证据讨论。
 
 ## 13. 实施阶段与当前进度
 
-阶段 1–4 的 runtime 已实现；阶段 5 当前 typecheck、21 个文件 / 241 项测试与修正后的 pack 均成功，独立最终复审已完成。用户于 2026-10-09 接受关闭本规格，实际交互 TUI/print 手动验收未运行、延期跟进；不把关闭或已完成的自动验证/复审等同 §14 全部通过，也不实施后续 Spec 0003。以下保留实施顺序供审查定位。
+阶段 1–4 的 runtime 已实现；阶段 5 最新 typecheck、21 个文件 / 245 项测试、build 与 pack 均成功。此前 runtime 的独立最终复审已完成；本 PR 内 privateDir 修订的独立审查由主代理记录，不在本文冒充已执行。用户于 2026-10-09 接受关闭本规格，实际交互 TUI/print 手动验收未运行、延期跟进；不把关闭或已完成的自动验证/复审等同 §14 全部通过，也不实施后续 Spec 0003。以下保留实施顺序供审查定位。
 
 1. **展示**：`delegation.ts`删两句；`status.ts`/types/runtime增加role和无标题history路径。
 2. **SDK/架构门槛**：落实已批准 D2/D3/D4/D6 与 ADR-0003；验证 history model/thinking 恢复、preflight disposition、report 处理 barrier。
@@ -585,7 +595,8 @@ D1–D6 均已决定，不再阻塞实施：
 | C02 | global不可写/损坏/运行中文件或目录删除failclosed，不退回旧store。 |
 | D01 | 有旧store时新registry不加载旧agent，旧ID不能ask，旧name可创建独立新会话；不读取/迁移/删除旧数据，无兼容参数/alias/fallback，README明确旧agents无法继续使用。 |
 | D02 | 独立打开/resume child 不被本包 owned-child guard 拒绝；无 owned-child 索引，不接管原 root metadata，直接 JSONL 写入竞争边界有文档。 |
-| D03 | 临时 agentDir 下验证 child 按 SDK 默认 cwd 分组；CLI/env/settings sessionDir 不传播，root override 不继承；原生 picker/continue 可见性按 D3 如实记录，不过滤或隐藏。 |
+| D03 | 临时 agentDir/真实锁定 SDK 下验证新 header-only/有消息 child 都在 privateDir；默认 list/listAll 不列出、continueRecent 选普通 session；显式 private-directory 查询/continue 和独立 open 正常。CLI/env/settings sessionDir、root override 不传播；存量 default-directory history exact-path 恢复且原文件不改，仍可普通发现。 |
+| D05 | 实际 privateDir ancestor symlink/non-directory 拒绝，无关普通 sessions symlink 不拒绝；新目录 0700、history 0600，既有目录权限保留，metadata schema/identity 不变。 |
 | D04 | started/queued按类型接受，handled按D6处理；非预期queued/started不挂起工具、不假成功、不按纯preaccept删除已变history，无phantom execution/report或假steered。 |
 | G01 | 原permissions/cwd/tools/roles/steering/UI/progress/shutdown回归通过；不用mock声称真实CLI验证。 |
 
@@ -593,7 +604,7 @@ D1–D6 均已决定，不再阻塞实施：
 
 ## 15. 验证和交付
 
-当前验证记录：主代理独立重跑 typecheck 成功，21 个测试文件 / 241 项测试全部通过；runtime 修正后 pack 已成功。SDK prompt 取消、报告拒绝与处理顺序等已测试；独立最终复审确认此前 5 项问题已解决、未发现新的具体缺陷。本次文档同步只检查 Markdown 链接/围栏/差异，不冒充再次运行 runtime 测试，根 Biome 不处理 Markdown。
+最新验证记录（2026-10-10）：tests-first 确认目录修订前 9 项相关测试失败；修订后 39 项 child-session 测试通过，包 typecheck、完整 21 个测试文件 / 245 项测试、build 与 pack 成功。默认/显式 discovery、存量 exact-path 恢复、私有路径/权限使用隔离状态和真实锁定 SDK API 验证，未调用真实模型、未运行实际交互 TUI/print 手测。此前 runtime 的独立最终复审确认 5 项问题已解决、未发现新具体缺陷；不以该旧复审冒充最新 privateDir 修订已复审，主代理另行记录该审查。本次文档同步只检查链接/围栏/差异与定向 package.json 格式，不冒充重跑 runtime 测试，根 Biome 不处理 Markdown。
 
 实现、自动验证与独立复审已完成。用户于 2026-10-09 明确要求先标记完成再提交 PR，并接受在实际交互 TUI/print 手动验收前关闭本规格；status 为 completed，execution_time 记录创建日期 / 完成日期。手动验收实际未运行，延期跟进，不声称 §14 CLI 全验收、发布完成或 Spec 0003 已实现。已知边界：
 
@@ -612,7 +623,7 @@ pnpm --filter @yesifan/pi-subagents build
 pnpm --filter @yesifan/pi-subagents pack --pack-destination /tmp
 ```
 
-后续必要 CLI 手测需记录实际结果/失败/超时/未验证范围；D2/D3/D4/D6 的既定边界不变。本次 completed 是用户在实现、自动验证与独立复审完成后明确接受手测延期的关闭决定，不是 §14 全通过证明；后续行为变更新建规格，未运行手测继续列为延期事项。本次文档同步不执行 commit、push、PR 创建、发布或 tag 操作。
+后续必要 CLI 手测需记录实际结果/失败/超时/未验证范围；D2/D3/D4/D6 的既定边界不变。本次 completed 是用户在实现、自动验证与独立复审完成后明确接受手测延期的关闭决定，不是 §14 全通过证明；PR #11 尚未合并，本次按用户明确要求直接更新原 Spec 0002/ADR-0003；合并后的行为变更再遵守新建规格规则，未运行手测继续列为延期事项。本次文档同步不执行 commit、push、PR 创建、发布或 tag 操作。
 
 ## 16. Pi 1.0.0 核对记录
 
@@ -631,4 +642,4 @@ pnpm --filter @yesifan/pi-subagents pack --pack-destination /tmp
 2. 0600排他空文件open立即写header并保留权限：通过。
 3. list发现header-only文件；可控mtime下recent选择对应文件：通过。
 
-这些早期 smoke test 仅证明 SDK 目录/header/discovery 事实。此后 name/Execution/最小 metadata 及复审修正已实现，主代理独立重跑当前 typecheck 与 21 个文件 / 241 项测试通过，修正后 pack 成功，独立最终复审已完成。实际交互 TUI/print 手测未运行，不能沿用早期“仅展示已实施”或“复审进行中”状态，也不能据自动验证声称 §14 CLI 全面通过。D2 明确不实现 child 防护，不将独立打开的已接受边界重新变成防护要求。Spec 0003 仍为未开始计划。
+这些早期 smoke test 仅证明 SDK 目录/header/discovery 事实，不是当前 history 采用默认目录的契约。当前新 child 使用 SDK 显式 privateDir；最新 typecheck、21 个文件 / 245 项测试、build 和 pack 成功记录见 §15，其中普通/显式 discovery 与存量 exact-path 恢复由真实 SDK API 测试覆盖。实际交互 TUI/print 手测未运行，不据自动验证声称 §14 CLI 全面通过。D2 明确不实现 child 防护，不将独立打开的已接受边界重新变成防护要求。Spec 0003 仍为未开始计划。
