@@ -1,6 +1,6 @@
 # 需求 0001：项目本地 subagent 配置与权威存储
 
-- 状态：✅ 已完成
+- 状态：历史需求，已在 0.2.0 完成；相关存储目标已由 [Spec 0002](0002-prompt-and-session-storage.md) 和 [ADR-0003](../adr/0003-sdk-sessions-and-parent-metadata.md) 替代（重写已在当前工作区实现，独立最终复审完成，手动 CLI 验收未运行）。
 - 目标版本：0.2.0
 - 决策：[`ADR-0001`](../adr/0001-project-local-subagent-storage.md)
 - SDK 基线：`@earendil-works/pi-coding-agent@0.85.1`

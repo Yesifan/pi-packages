@@ -4,125 +4,79 @@ import {
   formatDelegationStatus,
   formatSubagentReport,
 } from "../../src/status.js";
+import type { SubagentReport } from "../../src/types.js";
 
-describe("delegation status", () => {
-  it("formats active direct subagents and shared live usage", () => {
-    expect(
-      formatDelegationStatus({
-        activeDirectSubagents: [
-          { id: "sa_worker", name: "worker" },
-          { id: "sa_reviewer", name: "reviewer" },
-        ],
-        activeDirectSubagentCount: 2,
-        directSubagents: [
-          { id: "sa_worker", name: "worker", state: "running" },
-          { id: "sa_reviewer", name: "reviewer", state: "running" },
-        ],
-        directSubagentCount: 2,
-        interruptedDirectSubagentCount: 0,
-        liveAgents: 3,
-        maxLiveAgents: 8,
-      }),
-    ).toBe(
-      "**2 running, 0 done; shared usage: 3/8.**\n- worker (`sa_worker`): running\n- reviewer (`sa_reviewer`): running",
-    );
-  });
-
-  it("reports an empty active list", () => {
-    expect(
-      formatDelegationStatus({
-        activeDirectSubagents: [],
-        activeDirectSubagentCount: 0,
-        directSubagents: [],
-        directSubagentCount: 0,
-        interruptedDirectSubagentCount: 0,
-        liveAgents: 0,
-        maxLiveAgents: 8,
-      }),
-    ).toBe("**0 running, 0 done; shared usage: 0/8.**\n- None");
-  });
-
-  it("suggests any idle listed subagent for related follow-up work without repeating an ID", () => {
-    const formatted = formatSubagentReport(
-      {
-        schemaVersion: 1,
-        reportId: "report_1",
-        rootSessionId: "root_1",
-        agentId: "sa_worker",
-        runId: "run_1",
-        parentAgentId: null,
-        parentRunId: null,
-        name: "worker",
-        agentType: "general",
-        cwd: "/project",
-        outcome: "completed",
-        result: "Done.",
-        completedAt: "2026-01-01T00:00:00Z",
-      },
-      createDelegationStatusSnapshot([], 0, 8, [
-        { id: "sa_worker", name: "worker", state: "done" },
-        { id: "sa_reviewer", name: "reviewer", state: "done" },
-      ]),
-    );
-    expect(formatted).toContain(
-      "**Follow-up:** For related work, you can use `ask_subagent` to give a new task to any idle subagent listed above.",
-    );
-    expect(formatted.split("**Follow-up:**")[1]).not.toContain("sa_worker");
-    expect(formatted.split("**Follow-up:**")[1]).not.toContain("sa_reviewer");
-  });
-
-  it("lists running and done direct subagents together", () => {
-    const snapshot = createDelegationStatusSnapshot([{ id: "sa_worker", name: "worker" }], 1, 8, [
-      { id: "sa_done", name: "completed", state: "done" },
-      { id: "sa_worker", name: "worker", state: "running" },
+const worker = { name: "worker", agentType: "explore" };
+const reviewer = { name: "reviewer", agentType: "general" };
+const report: SubagentReport = {
+  name: "worker",
+  agentType: "explore",
+  cwd: "/project",
+  outcome: "completed",
+  result: "Done.",
+};
+describe("name/role status snapshots", () => {
+  it("orders running before done and includes initialization in shared usage", () => {
+    const snapshot = createDelegationStatusSnapshot([worker], 3, 8, [
+      { ...reviewer, state: "done" },
+      { ...worker, state: "running" },
+    ]);
+    expect(snapshot.directSubagents).toEqual([
+      { ...worker, state: "running" },
+      { ...reviewer, state: "done" },
     ]);
     expect(formatDelegationStatus(snapshot)).toBe(
-      "**1 running, 1 done; shared usage: 1/8.**\n- worker (`sa_worker`): running\n- completed (`sa_done`): done",
+      "**1 running, 1 done; shared usage: 3/8 (includes initialization).**\n- worker (role: explore): running\n- reviewer (role: general): done",
     );
   });
-
-  it("labels an interrupted direct subagent", () => {
-    const snapshot = createDelegationStatusSnapshot([], 0, 8, [
-      { id: "sa_failed", name: "worker", state: "interrupted" },
-    ]);
-    expect(formatDelegationStatus(snapshot)).toBe(
-      "**0 running, 0 done, 1 interrupted; shared usage: 0/8.**\n- worker (`sa_failed`): interrupted",
-    );
+  it("shows none for an empty list", () => {
+    expect(formatDelegationStatus(createDelegationStatusSnapshot([], 0, 8))).toContain("\n- None");
   });
-
-  it("lists all direct subagents, including a reporting agent beyond the old limit", () => {
-    const direct = Array.from({ length: 12 }, (_, index) => ({
-      id: `sa_${index}`,
+  it("counts interrupted entries and never omits direct children", () => {
+    const children = Array.from({ length: 12 }, (_, index) => ({
       name: `worker-${index}`,
+      agentType: "explore",
       state: index === 11 ? ("interrupted" as const) : ("done" as const),
     }));
-    const snapshot = createDelegationStatusSnapshot([], 0, 8, direct);
-    expect(snapshot.directSubagents).toHaveLength(12);
-    const formatted = formatDelegationStatus(snapshot);
-    expect(formatted).toContain("**0 running, 11 done, 1 interrupted; shared usage: 0/8.**");
-    for (const { id, name, state } of direct) {
-      expect(formatted).toContain(`- ${name} (\`${id}\`): ${state}`);
-    }
-    expect(formatted).not.toContain("…and");
+    const snapshot = createDelegationStatusSnapshot([], 0, 8, children);
+    expect(snapshot.directSubagentCount).toBe(12);
+    expect(snapshot.interruptedDirectSubagentCount).toBe(1);
+    const content = formatDelegationStatus(snapshot);
+    expect(content).toContain("0 running, 11 done, 1 interrupted");
+    for (const child of children)
+      expect(content).toContain(`- ${child.name} (role: explore): ${child.state}`);
   });
-
-  it("shows every active subagent while compacting model-visible names", () => {
-    const activeDirectSubagents = Array.from({ length: 12 }, (_, index) => ({
-      id: `sa_${index}`,
-      name: index === 0 ? `worker\n${"x".repeat(100)}` : `worker-${index}`,
-    }));
-    const snapshot = createDelegationStatusSnapshot(activeDirectSubagents, 12, 20);
+  it("compacts display labels only, preserving the full name for precise asks", () => {
+    const name = `worker\n${"x".repeat(100)}`;
+    const snapshot = createDelegationStatusSnapshot([{ name, agentType: "explore" }], 1, 8);
+    expect(snapshot.activeDirectSubagents[0]?.name).toBe(name);
+    expect(snapshot.directSubagents[0]?.name).toBe(name);
     const formatted = formatDelegationStatus(snapshot);
-
-    expect(snapshot.activeDirectSubagentCount).toBe(12);
-    expect(snapshot.activeDirectSubagents).toHaveLength(12);
-    expect(snapshot.activeDirectSubagents[0]?.name).not.toContain("\n");
-    expect(snapshot.activeDirectSubagents[0]?.name.length).toBeLessThanOrEqual(80);
-    expect(formatted).not.toContain("worker\n");
-    expect(formatted).toContain("worker x");
-    expect(formatted).toContain("worker-10");
-    expect(formatted).toContain("worker-11");
-    expect(formatted).not.toContain("…and");
-    expect(formatted).toContain("shared usage: 12/20.");
+    expect(formatted).not.toContain(name);
+    expect(formatted).toContain("… (role: explore)");
+  });
+});
+describe("automatic reports", () => {
+  const status = createDelegationStatusSnapshot([], 0, 8, [{ ...worker, state: "done" }]);
+  it.each(["completed", "failed"] as const)(
+    "puts the %s history path before results without a separate title or business IDs",
+    (outcome) => {
+      const formatted = formatSubagentReport(
+        { ...report, outcome, sessionFile: "/history/session.jsonl" },
+        status,
+      );
+      const line =
+        "Complete conversation: `/history/session.jsonl`. Read it if more context is needed.";
+      expect(formatted).toContain(line);
+      expect(formatted.indexOf(line)).toBeGreaterThan(formatted.indexOf("> role:"));
+      expect(formatted.indexOf(line)).toBeLessThan(formatted.indexOf("## Result"));
+      expect(formatted).not.toContain("Full session");
+      expect(formatted).not.toMatch(/agentId|runId|reportId/);
+      expect(formatted).toContain("full name of any idle subagent");
+    },
+  );
+  it("marks unavailable histories instead of guessing", () => {
+    expect(formatSubagentReport(report, status)).toContain("Complete conversation unavailable:");
+    expect(formatSubagentReport(report, status)).not.toContain("Complete conversation: `");
   });
 });

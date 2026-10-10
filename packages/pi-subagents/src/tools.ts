@@ -23,7 +23,10 @@ const thinkingSchema = StringEnum(SUBAGENT_THINKING_LEVELS, {
 });
 
 const subagentParameters = Type.Object({
-  name: Type.String({ minLength: 1, description: "Display name for the subagent." }),
+  name: Type.String({
+    minLength: 1,
+    description: "Unique name among this caller's direct subagents; preserved for future asks.",
+  }),
   prompt: Type.String({ minLength: 1, description: "Task for the subagent." }),
   agent_type: Type.Optional(
     Type.String({
@@ -41,17 +44,24 @@ const subagentParameters = Type.Object({
   ),
 });
 
-const askParameters = Type.Object({
-  id: Type.String({ minLength: 1, description: "ID of a directly owned subagent." }),
-  prompt: Type.String({ minLength: 1, description: "New task or steering input." }),
-  isSteer: Type.Optional(
-    Type.Boolean({
-      default: false,
-      description:
-        "When true, steer the currently executing run instead of creating a new run. The target must be actively streaming.",
+// Warning Cache Broke: name-only lookup replaces the old ID tool schema.
+const askParameters = Type.Object(
+  {
+    name: Type.String({
+      minLength: 1,
+      description: "Exact full name of a directly owned subagent (case-sensitive).",
     }),
-  ),
-});
+    prompt: Type.String({ minLength: 1, description: "New task or steering input." }),
+    isSteer: Type.Optional(
+      Type.Boolean({
+        default: false,
+        description:
+          "When true, steer the currently executing run instead of creating a new run. The target must be actively streaming.",
+      }),
+    ),
+  },
+  { additionalProperties: false },
+);
 
 export interface DelegationRuntimeApi {
   getMaxLiveAgents(): number | undefined;
@@ -69,7 +79,7 @@ export interface DelegationRuntimeApi {
   ): Promise<AcceptedResult>;
   askSubagent(
     caller: CallerBinding,
-    input: { id: string; prompt: string; isSteer?: boolean },
+    input: { name: string; prompt: string; isSteer?: boolean },
     ctx: ExtensionContext,
     signal: AbortSignal | undefined,
   ): Promise<AcceptedResult>;
@@ -108,7 +118,7 @@ export function createDelegationExtension(
               content: [
                 {
                   type: "text",
-                  text: `Started background subagent ${result.name} (${result.id}).`,
+                  text: `Started background subagent ${result.name} (role: ${result.agent_type}).`,
                 },
                 { type: "text", text: completionGuidance() },
                 ...statusContent(result.delegation_status),
@@ -139,8 +149,8 @@ export function createDelegationExtension(
                   type: "text",
                   text:
                     result.status === "steered"
-                      ? `Steered background subagent ${result.name} (${result.id}).`
-                      : `Started background subagent ${result.name} (${result.id}).`,
+                      ? `Steered background subagent ${result.name} (role: ${result.agent_type}).`
+                      : `Started background subagent ${result.name} (role: ${result.agent_type}).`,
                 },
                 { type: "text", text: completionGuidance() },
                 ...statusContent(result.delegation_status),

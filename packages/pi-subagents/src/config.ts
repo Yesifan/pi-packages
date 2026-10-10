@@ -3,11 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { SubagentError } from "./errors.js";
 import { canonicalizeDirectory, findProjectRoot } from "./paths.js";
-import {
-  assertProjectStorageAvailable,
-  getProjectSubagentsStorage,
-  initializeProjectSubagents,
-} from "./project-storage.js";
 import type { SubagentsConfig } from "./types.js";
 
 const DEFAULTS = {
@@ -116,23 +111,14 @@ async function normalizeExternalDirectories(values: readonly string[]): Promise<
   return normalized;
 }
 
-export async function loadSubagentsConfig(
-  cwdInput: string,
-  options: { initializeStorage?: boolean } = {},
-): Promise<SubagentsConfig> {
+export async function loadSubagentsConfig(cwdInput: string): Promise<SubagentsConfig> {
   const cwd = await canonicalizeDirectory(cwdInput, {
     missing: "CWD_NOT_FOUND",
     notDirectory: "CWD_NOT_DIRECTORY",
   });
   const projectRoot = await findProjectRoot(cwd);
-  const storage =
-    options.initializeStorage === false
-      ? await getProjectSubagentsStorage(projectRoot)
-      : await initializeProjectSubagents(projectRoot);
-  if (options.initializeStorage === false) {
-    await assertProjectStorageAvailable(storage.projectRoot, storage.directory);
-  }
-  const projectConfig = (await readConfigFile(storage.settingsFile)) ?? {};
+  const projectConfig =
+    (await readConfigFile(path.join(projectRoot, ".pi", "subagents", "setting.json"))) ?? {};
   const effective: Required<RawConfig> = {
     external_directory: projectConfig.external_directory ?? DEFAULTS.external_directory,
     max_depth: projectConfig.max_depth ?? DEFAULTS.max_depth,
@@ -144,7 +130,6 @@ export async function loadSubagentsConfig(
     maxDepth: effective.max_depth,
     maxLiveAgents: effective.max_live_agents,
     uiTimeoutMs: effective.ui_timeout_ms,
-    projectRoot: storage.projectRoot,
-    storageDirectory: storage.directory,
+    projectRoot,
   };
 }

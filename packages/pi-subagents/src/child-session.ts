@@ -1,19 +1,29 @@
-import { randomUUID } from "node:crypto";
-import { writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { chmod, lstat, open, realpath, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { Api, Model } from "@earendil-works/pi-ai";
+import { type Api, clampThinkingLevel, type Model } from "@earendil-works/pi-ai";
 import {
   type AgentSession,
   createAgentSession,
   DefaultResourceLoader,
   type Extension,
+  getAgentDir,
   ModelRuntime,
+  type SessionEntry,
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { SubagentError } from "./errors.js";
 import { createDelegationExtension, type DelegationRuntimeApi } from "./tools.js";
-import type { CallerBinding, DelegationContext, StoredSubagent, ThinkingLevel } from "./types.js";
+import {
+  type Agent,
+  type AgentDefinitionSnapshot,
+  type CallerBinding,
+  type DelegationContext,
+  type SessionIdentity,
+  THINKING_LEVELS,
+  type ThinkingLevel,
+} from "./types.js";
 import type { RootUiBroker, SubagentUiProxy } from "./ui.js";
 
 const BUILTIN_TOOL_NAMES = new Set([
@@ -54,15 +64,62 @@ function assertRoleToolsAvailable(
   }
 }
 
+// SDK 1.0.0's branch selection is not exported. Mirror its selection using public
+// entries/catalog only: a registered virtual model_change holds over physical replies.
+function historicalModel(branch: SessionEntry[], runtime: ModelRuntime): Model<Api> {
+  let selection: { provider: string; modelId: string } | undefined;
+  let change: typeof selection;
+  for (const entry of branch) {
+    if (entry.type === "model_change") {
+      change = { provider: entry.provider, modelId: entry.modelId };
+      selection = change;
+    } else if (
+      entry.type === "message" &&
+      entry.message.role === "assistant" &&
+      entry.message.api !== "pi-virtual"
+    ) {
+      selection =
+        change && runtime.getModel(change.provider, change.modelId)?.api === "pi-virtual"
+          ? change
+          : { provider: entry.message.provider, modelId: entry.message.model };
+    }
+  }
+  if (
+    !selection ||
+    typeof selection.provider !== "string" ||
+    !selection.provider ||
+    typeof selection.modelId !== "string" ||
+    !selection.modelId
+  ) {
+    throw new SubagentError(
+      "MODEL_UNAVAILABLE",
+      "Child history has no valid historical model selection",
+    );
+  }
+  const model = runtime.getModel(selection.provider, selection.modelId);
+  if (!model) {
+    throw new SubagentError(
+      "MODEL_UNAVAILABLE",
+      `Historical model is unavailable: ${selection.provider}/${selection.modelId}`,
+    );
+  }
+  return model;
+}
+
 export interface OpenChildOptions {
-  stored: StoredSubagent;
-  runId: string;
+  name: string;
+  roleSnapshot: AgentDefinitionSnapshot;
+  cwd: string;
+  depth: number;
+  ancestorCwds: string[];
   runtime: DelegationRuntimeApi;
+  callerAgent: Agent;
   delegationContext?: DelegationContext;
   canDelegate: boolean;
   sessionManager: SessionManager;
   model?: Model<Api>;
-  thinking: ThinkingLevel;
+  thinking?: ThinkingLevel;
+  restoring?: boolean;
 }
 
 export interface OpenedChild {
@@ -80,81 +137,161 @@ export class ChildSessionFactory {
     private readonly resolveTrust: (cwd: string) => Promise<boolean>,
   ) {}
 
-  async createSessionManager(cwd: string, sessionsDirectory: string): Promise<SessionManager> {
-    // Warning Cache Broke: SessionManager must create the canonical header/history prefix;
-    // the pre-created empty file only guarantees private permissions and a fixed safe path.
-    const sessionFile = path.join(sessionsDirectory, `${Date.now()}_${randomUUID()}.jsonl`);
+  async createSessionManager(cwd: string): Promise<SessionManager> {
+    let sessionFile: string | undefined;
+    let precreated = false;
     try {
+      // Keep new histories outside native Pi discovery, without changing JSONL
+      // semantics or applying CLI/env/settings sessionDir overrides. getAgentDir
+      // handles SDK path normalization; resolve also supports a relative agentDir.
+      const historyDirectory = path.join(path.resolve(getAgentDir()), "subagents", "histories");
+      const existing = new Set<string>();
+      let ancestor = historyDirectory;
+      while (true) {
+        try {
+          const entry = await lstat(ancestor);
+          if (!entry.isDirectory() || entry.isSymbolicLink()) {
+            throw new Error(
+              `History ancestor must be an ordinary nonsymlink directory: ${ancestor}`,
+            );
+          }
+          existing.add(ancestor);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
+        const parent = path.dirname(ancestor);
+        if (parent === ancestor) break;
+        ancestor = parent;
+      }
+      const allocated = SessionManager.create(cwd, historyDirectory);
+      sessionFile = allocated.getSessionFile();
+      if (!sessionFile) throw new Error("SDK did not allocate a persistent child history");
+      let directory = path.dirname(sessionFile);
+      while (!existing.has(directory)) {
+        await chmod(directory, 0o700);
+        directory = path.dirname(directory);
+      }
+      // Warning Cache Broke: the SDK owns header/history initialization. Opening the
+      // exclusively precreated private file assigns the actual identity (not the allocator's ID).
       await writeFile(sessionFile, "", { flag: "wx", mode: 0o600 });
-      return SessionManager.open(sessionFile, sessionsDirectory, cwd);
+      precreated = true;
+      return SessionManager.open(sessionFile, path.dirname(sessionFile), cwd);
     } catch (error) {
+      if (precreated && sessionFile) await rm(sessionFile, { force: true });
       throw new SubagentError(
         "STORE_ERROR",
-        `Cannot create child session history: ${sessionFile}`,
+        `Cannot create child session history for ${cwd}`,
         undefined,
         error instanceof Error ? { cause: error } : undefined,
       );
     }
   }
 
-  openSessionManager(stored: StoredSubagent, sessionFile: string): SessionManager {
-    let sessionManager: SessionManager;
+  async openSessionManager(identity: SessionIdentity): Promise<SessionManager> {
     try {
-      sessionManager = SessionManager.open(sessionFile);
+      const sessionFile = path.resolve(identity.sessionFile);
+      const fileStat = await lstat(sessionFile);
+      if (
+        !path.isAbsolute(identity.sessionFile) ||
+        !fileStat.isFile() ||
+        fileStat.isSymbolicLink() ||
+        fileStat.size === 0 ||
+        (await realpath(sessionFile)) !== sessionFile
+      ) {
+        throw new Error(
+          "History must be a nonempty ordinary nonsymlink file at its canonical absolute path",
+        );
+      }
+      const file = await open(sessionFile, constants.O_RDONLY | constants.O_NOFOLLOW);
+      let content: string;
+      try {
+        if (!(await file.stat()).isFile()) throw new Error("History is not an ordinary file");
+        content = await file.readFile("utf8");
+      } finally {
+        await file.close();
+      }
+      // Validate before SDK open: missing/empty history must never allocate a new identity.
+      const lines = content.split("\n").filter((line) => line.trim());
+      const header = JSON.parse(lines[0] ?? "");
+      // The SDK tolerantly skips broken JSONL lines. Validate first so restoration and
+      // complete-conversation reports cannot silently omit malformed persisted history.
+      for (const line of lines.slice(1)) {
+        const entry: unknown = JSON.parse(line);
+        if (
+          !entry ||
+          typeof entry !== "object" ||
+          Array.isArray(entry) ||
+          typeof (entry as { type?: unknown }).type !== "string"
+        )
+          throw new Error("History contains an invalid JSONL entry");
+      }
+      if (
+        !header ||
+        header.type !== "session" ||
+        typeof header.id !== "string" ||
+        !header.id ||
+        header.id !== identity.sessionId ||
+        typeof header.cwd !== "string" ||
+        !path.isAbsolute(header.cwd)
+      ) {
+        throw new Error("History header identity or cwd is invalid");
+      }
+      const cwd = await realpath(header.cwd);
+      if (cwd !== header.cwd || !(await stat(cwd)).isDirectory()) {
+        throw new Error("History header cwd is no longer an existing canonical directory");
+      }
+      const manager = SessionManager.open(sessionFile, path.dirname(sessionFile), cwd);
+      if (
+        manager.getSessionId() !== identity.sessionId ||
+        manager.getCwd() !== cwd ||
+        manager.getHeader()?.cwd !== cwd ||
+        manager.getSessionFile() !== sessionFile
+      ) {
+        throw new Error("Opened history identity or cwd does not match");
+      }
+      return manager;
     } catch (error) {
       throw new SubagentError(
         "SESSION_HISTORY_UNAVAILABLE",
-        `Cannot open stored child session: ${sessionFile}`,
-        stored.id,
+        `Cannot restore child history: ${error instanceof Error ? error.message : String(error)}`,
+        undefined,
         error instanceof Error ? { cause: error } : undefined,
       );
     }
-    if (
-      path.resolve(sessionManager.getCwd()) !== path.resolve(stored.cwd) ||
-      sessionManager.getSessionId() !== stored.sessionId
-    ) {
-      throw new SubagentError(
-        "SESSION_HISTORY_UNAVAILABLE",
-        `Stored session identity does not match subagent ${stored.id}: ${sessionFile}`,
-        stored.id,
-      );
-    }
-    return sessionManager;
   }
 
   async open(options: OpenChildOptions): Promise<OpenedChild> {
-    const { stored } = options;
-    const trusted = await this.resolveTrust(stored.cwd);
-    if (!trusted) {
-      throw new SubagentError("PROJECT_NOT_TRUSTED", `Project is not trusted: ${stored.cwd}`);
-    }
-    const settingsManager = SettingsManager.create(stored.cwd, this.agentDir);
+    const { cwd, roleSnapshot } = options;
+    const trusted = await this.resolveTrust(cwd);
+    if (!trusted) throw new SubagentError("PROJECT_NOT_TRUSTED", `Project is not trusted: ${cwd}`);
+    const settingsManager = SettingsManager.create(cwd, this.agentDir);
     const childBinding: CallerBinding | undefined =
       options.canDelegate && options.delegationContext
         ? {
-            agentId: stored.id,
-            depth: stored.depth,
-            ancestorCwds: stored.ancestorCwds,
+            agent: options.callerAgent,
+            execution: options.callerAgent.currentExecution,
+            depth: options.depth,
+            ancestorCwds: options.ancestorCwds,
             delegation: options.delegationContext,
           }
         : undefined;
     const internalFactory = childBinding
       ? createDelegationExtension(options.runtime, childBinding)
       : undefined;
-    const runtimePrompt = `You are subagent "${stored.name}", delegated by a parent agent.
+    const runtimePrompt = `You are subagent "${options.name}", delegated by a parent agent.
 
 Your final response is automatically reported to your direct parent.`;
 
-    // Warning Cache Broke: changing this append order changes the stable system-prompt prefix
-    // for every restored logical subagent. Current-role identity must remain snapshot-backed.
+    // Warning Cache Broke: preserve append order on restoration. Current target resources
+    // are rebuilt, but the current role is always the saved snapshot, never a role-file reload.
     const resourceLoader = new DefaultResourceLoader({
-      cwd: stored.cwd,
+      cwd,
       agentDir: this.agentDir,
       settingsManager,
       ...(internalFactory
         ? {
             extensionFactories: [
-              { name: `pi-subagents:${stored.id}`, factory: internalFactory, hidden: true },
+              { name: "pi-subagents:child", factory: internalFactory, hidden: true },
             ],
           }
         : {}),
@@ -164,19 +301,13 @@ Your final response is automatically reported to your direct parent.`;
           (extension) => !isOwnExtension(extension, this.ownExtensionPath),
         ),
       }),
-      appendSystemPromptOverride: (base) => [
-        ...base,
-        runtimePrompt,
-        stored.agentDefinitionSnapshot.prompt,
-      ],
+      appendSystemPromptOverride: (base) => [...base, runtimePrompt, roleSnapshot.prompt],
     });
     await resourceLoader.reload({ resolveProjectTrust: async () => trusted });
     const extensionsResult = resourceLoader.getExtensions();
-    const extensions = extensionsResult.extensions;
-    assertRoleToolsAvailable(stored.agentDefinitionSnapshot.tools, extensions);
+    assertRoleToolsAvailable(roleSnapshot.tools, extensionsResult.extensions);
 
-    // Each mounted child gets a fresh model runtime. Provider registrations are mutable;
-    // sharing one here would leak one cwd's extension-provided providers into another session.
+    // Provider registrations are mutable: each mount gets a fresh target-cwd runtime.
     const modelRuntime = await ModelRuntime.create({
       authPath: path.join(this.agentDir, "auth.json"),
       modelsPath: path.join(this.agentDir, "models.json"),
@@ -189,38 +320,61 @@ Your final response is automatically reported to your direct parent.`;
       modelRuntime.registerNativeProvider(registration.provider);
     }
     extensionsResult.runtime.pendingNativeProviderRegistrations = [];
+    for (const registration of extensionsResult.runtime.pendingVirtualModelRegistrations) {
+      modelRuntime.registerVirtualModel(registration.definition);
+    }
+    extensionsResult.runtime.pendingVirtualModelRegistrations = [];
     await modelRuntime.refresh({ allowNetwork: false });
-    const model =
-      modelRuntime.getModel(stored.model.provider, stored.model.id) ??
-      (options.model?.provider === stored.model.provider && options.model.id === stored.model.id
-        ? options.model
-        : undefined);
-    if (!model || !modelRuntime.hasConfiguredAuth(stored.model.provider)) {
+
+    let model: Model<Api> | undefined;
+    let expectedThinking: ThinkingLevel | undefined;
+    if (options.restoring) {
+      const context = options.sessionManager.buildSessionContext();
+      const branch = options.sessionManager.getBranch();
+      if (context.messages.length === 0) {
+        throw new SubagentError(
+          "SESSION_HISTORY_UNAVAILABLE",
+          "Child history has no restorable conversation context",
+        );
+      }
+      const thinkingEntry = branch.findLast((entry) => entry.type === "thinking_level_change");
+      if (
+        !thinkingEntry ||
+        !THINKING_LEVELS.includes(thinkingEntry.thinkingLevel as ThinkingLevel)
+      ) {
+        throw new SubagentError(
+          "SESSION_HISTORY_UNAVAILABLE",
+          "Child history has no valid historical thinking entry",
+        );
+      }
+      model = historicalModel(branch, modelRuntime);
+      expectedThinking = clampThinkingLevel(model, context.thinkingLevel as ThinkingLevel);
+    } else {
+      if (!options.model)
+        throw new SubagentError("PARENT_MODEL_UNAVAILABLE", "Parent model is unavailable");
+      model = modelRuntime.getModel(options.model.provider, options.model.id) ?? options.model;
+    }
+    if (!model || !modelRuntime.hasConfiguredAuth(model.provider)) {
       throw new SubagentError(
         "MODEL_AUTH_UNAVAILABLE",
-        `Model or authentication is unavailable for ${stored.model.provider}/${stored.model.id}`,
-        stored.id,
+        `Model authentication is unavailable for ${model?.provider ?? "parent model"}`,
       );
     }
 
     let session: AgentSession | undefined;
-    const ui = this.uiBroker.proxy(stored.id, stored.name);
+    const ui = this.uiBroker.proxy(options.sessionManager.getSessionId(), options.name);
     try {
       const created = await createAgentSession({
-        cwd: stored.cwd,
+        cwd,
         agentDir: this.agentDir,
         modelRuntime,
-        model,
-        thinkingLevel: options.thinking,
-        ...(stored.agentDefinitionSnapshot.tools
-          ? { tools: stored.agentDefinitionSnapshot.tools }
-          : {}),
-        // Warning Cache Broke: current tool context may change on remount, but role
-        // policy stays snapshot-backed. SDK 0.87.1 applies excludeTools to the full
-        // registry on every refresh, including dynamic extension re-registration;
-        // setActiveTools cannot re-enable a name absent from that registry.
+        // Restoration must take the SDK's normal branch path, with no settings/parent overrides.
+        ...(options.restoring ? {} : { model, thinkingLevel: options.thinking ?? "off" }),
+        ...(roleSnapshot.tools ? { tools: roleSnapshot.tools } : {}),
+        // Warning Cache Broke: SDK 1.0.0 applies exclusions to the full registry on
+        // every refresh, including dynamic registration; setActiveTools cannot bypass it.
         excludeTools: [
-          ...(stored.agentDefinitionSnapshot.disallowedTools ?? []),
+          ...(roleSnapshot.disallowedTools ?? []),
           ...(options.canDelegate ? [] : ["subagent", "ask_subagent"]),
         ],
         resourceLoader,
@@ -229,6 +383,21 @@ Your final response is automatically reported to your direct parent.`;
         sessionStartEvent: { type: "session_start", reason: "startup" },
       });
       session = created.session;
+      const assertRestoredSelection = () => {
+        if (
+          options.restoring &&
+          (created.modelFallbackMessage ||
+            session?.model?.provider !== model.provider ||
+            session.model.id !== model.id ||
+            session.thinkingLevel !== expectedThinking)
+        ) {
+          throw new SubagentError(
+            "MODEL_UNAVAILABLE",
+            `SDK did not restore the historical model/thinking${created.modelFallbackMessage ? `: ${created.modelFallbackMessage}` : ""}`,
+          );
+        }
+      };
+      assertRestoredSelection();
       await session.bindExtensions({
         uiContext: ui,
         mode: "tui",
@@ -242,6 +411,7 @@ Your final response is automatically reported to your direct parent.`;
           ui.notify(`${error.event}: ${error.error}`, "error");
         },
       });
+      assertRestoredSelection();
       const openedSession = session;
       return {
         session: openedSession,

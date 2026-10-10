@@ -1,18 +1,14 @@
-import { randomUUID } from "node:crypto";
+import { realpath, rm } from "node:fs/promises";
 import path from "node:path";
-import type { Api, Model } from "@earendil-works/pi-ai";
 import type {
+  AgentSessionEvent,
   ExtensionContext,
-  ModelRuntime as ModelRuntimeType,
+  SessionManager,
 } from "@earendil-works/pi-coding-agent";
-import {
-  getAgentDir,
-  ModelRuntime,
-  ProjectTrustStore,
-  SettingsManager,
-} from "@earendil-works/pi-coding-agent";
+import { getAgentDir, ProjectTrustStore, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { resolveAgentDefinition } from "./agents.js";
-import { ChildSessionFactory, type OpenedChild } from "./child-session.js";
+import { ChildSessionFactory } from "./child-session.js";
+import { loadSubagentsConfig } from "./config.js";
 import { buildDelegationContext } from "./delegation.js";
 import { asSubagentError, SubagentError } from "./errors.js";
 import {
@@ -26,20 +22,20 @@ import {
   buildProgressWidgetLines,
   createSubagentProgressState,
 } from "./progress.js";
-import { initializeProjectSubagents } from "./project-storage.js";
 import { createDelegationStatusSnapshot, formatSubagentReport } from "./status.js";
 import { PersistentSubagentStore } from "./store.js";
 import type { DelegationRuntimeApi } from "./tools.js";
 import type {
   AcceptedResult,
-  AgentDefinitionSnapshot,
+  Agent,
   CallerBinding,
-  DelegationStatusSnapshot,
-  DeliveredSubagentReport,
-  LiveAgent,
+  ChildRecord,
+  ChildState,
+  Execution,
+  ReportDelivery,
   RootHostBinding,
-  StoredRun,
-  StoredSubagent,
+  RootScope,
+  SessionIdentity,
   SubagentReport,
   SubagentsConfig,
   SubagentThinkingLevel,
@@ -47,123 +43,265 @@ import type {
 } from "./types.js";
 import { RootUiBroker } from "./ui.js";
 
-function now(): string {
-  return new Date().toISOString();
-}
-
-function id(prefix: string): string {
-  return `${prefix}_${randomUUID().replaceAll("-", "")}`;
-}
-
-function isNonEmpty(value: string): boolean {
-  return value.trim().length > 0;
-}
-
-async function awaitPreflight(
-  accepted: Promise<void>,
-  signal: AbortSignal | undefined,
-  isAccepted: () => boolean,
-  onAbort?: () => void | Promise<void>,
-): Promise<void> {
-  if (!signal || isAccepted()) return accepted;
-  signal.throwIfAborted();
-  return new Promise<void>((resolve, reject) => {
-    let settled = false;
-    const finish = (callback: () => void): void => {
-      if (settled) return;
-      settled = true;
-      signal.removeEventListener("abort", abort);
-      callback();
-    };
-    const abort = (): void => {
-      if (isAccepted()) {
-        finish(resolve);
-        return;
-      }
-      finish(() => {
-        void onAbort?.();
-        reject(new SubagentError("ABORTED", "Tool call was aborted before Pi accepted the prompt"));
-      });
-    };
-    signal.addEventListener("abort", abort, { once: true });
-    void accepted.then(
-      () => finish(resolve),
-      (error) => finish(() => reject(error)),
+function identity(agent: Agent): SessionIdentity {
+  if (!agent.identity)
+    throw new SubagentError(
+      "SESSION_HISTORY_UNAVAILABLE",
+      `History is not initialized for ${agent.name}`,
     );
-  });
+  return agent.identity;
 }
-
-function roleAllowsDelegation(definition: AgentDefinitionSnapshot): boolean {
+function childRecord(agent: Agent): ChildRecord {
+  return {
+    ...identity(agent),
+    roleSnapshot: agent.roleSnapshot,
+    state: agent.state,
+    ...(agent.hasChildren ? { hasChildren: true } : {}),
+  };
+}
+function validName(name: string): string {
+  if (typeof name !== "string" || !name.trim())
+    throw new SubagentError("INVALID_ARGUMENT", "name must be non-empty");
+  return name.trim();
+}
+function validPrompt(prompt: string): void {
+  if (typeof prompt !== "string" || !prompt.trim())
+    throw new SubagentError("INVALID_ARGUMENT", "prompt must be non-empty");
+}
+function correlation(details: unknown, delivery: ReportDelivery): boolean {
+  if (!details || typeof details !== "object") return false;
+  const value = details as { sourceSessionId?: string; sourceEntryId?: string };
   return (
-    (definition.tools === undefined || definition.tools.includes("subagent")) &&
-    !definition.disallowedTools?.includes("subagent")
+    value.sourceSessionId === delivery.source.agent.identity?.sessionId &&
+    value.sourceEntryId === delivery.sourceEntryId
   );
-}
-
-function deliveredReport(
-  report: SubagentReport,
-  status: DelegationStatusSnapshot,
-): DeliveredSubagentReport {
-  return { ...report, delegation_status: status };
 }
 
 export class RootRuntime implements DelegationRuntimeApi {
   private readonly agentDir = getAgentDir();
+  private scope?: RootScope;
   private host!: RootHostBinding;
   private rootConfig!: SubagentsConfig;
   private store!: PersistentSubagentStore;
   private uiBroker!: RootUiBroker;
   private childFactory!: ChildSessionFactory;
-  private modelRuntime!: ModelRuntimeType;
-  private initialized = false;
-  private readonly agents = new Map<string, StoredSubagent>();
-  private readonly live = new Map<string, LiveAgent>();
-  private readonly opened = new Map<string, OpenedChild>();
-  private readonly runs = new Map<string, StoredRun>();
   private readonly trustDecisions = new Map<string, boolean>();
-  private readonly initializedProjectScopes = new Set<string>();
-  private closing = false;
-  private epoch = randomUUID();
-
+  private shutdownPromise?: Promise<void>;
+  private initialization?: Promise<void>;
+  private initialized = false;
+  private readonly pendingPrompts = new WeakMap<Execution, number>();
+  private readonly abortTasks = new WeakMap<Execution, Promise<void>>();
+  private readonly branchInitializations = new WeakMap<Agent, Promise<void>>();
   constructor(private readonly ownExtensionPath: string) {}
 
-  async initialize(host: RootHostBinding, config: SubagentsConfig): Promise<void> {
-    if (this.initialized)
-      throw new SubagentError("INVALID_CONFIG", "RootRuntime is already initialized");
+  initialize(host: RootHostBinding, config: SubagentsConfig): Promise<void> {
+    if (this.initialization)
+      return Promise.reject(
+        new SubagentError("INVALID_CONFIG", "RootRuntime is already initialized"),
+      );
+    this.initialization = this.initializeScope(host, config);
+    return this.initialization;
+  }
+  private async initializeScope(host: RootHostBinding, config: SubagentsConfig): Promise<void> {
+    if (this.scope) throw new SubagentError("INVALID_CONFIG", "RootRuntime is already initialized");
     this.host = host;
     this.rootConfig = config;
-    this.initializedProjectScopes.add(config.projectRoot);
-    this.trustDecisions.set(config.projectRoot, true);
-    const rootCwd = await canonicalizeDirectory(host.ctx.cwd, {
-      missing: "CWD_NOT_FOUND",
-      notDirectory: "CWD_NOT_DIRECTORY",
-    });
-    this.trustDecisions.set(rootCwd, host.ctx.isProjectTrusted());
+    const scope: RootScope = {
+      identity: { sessionId: host.rootSessionId, sessionFile: path.resolve(host.rootSessionFile) },
+      closing: false,
+      children: new Map(),
+      agents: new Set(),
+      executions: new Set(),
+      openingTasks: new Set(),
+      deliveries: new Set(),
+    };
+    this.scope = scope;
     this.uiBroker = new RootUiBroker(host.ctx.ui, host.ctx.hasUI, config.uiTimeoutMs);
-    this.modelRuntime = await ModelRuntime.create({
-      authPath: path.join(this.agentDir, "auth.json"),
-      modelsPath: path.join(this.agentDir, "models.json"),
-    });
-    this.store = new PersistentSubagentStore(
-      config.projectRoot,
-      config.storageDirectory,
-      host.rootSessionId,
-      host.rootSessionFile,
-    );
-    for (const agent of await this.store.open()) this.agents.set(agent.id, agent);
     this.childFactory = new ChildSessionFactory(
       this.agentDir,
       this.ownExtensionPath,
       this.uiBroker,
-      (cwd) => this.resolveTrust(cwd),
+      (target) => this.resolveTrust(target),
     );
-    this.initialized = true;
+    this.store = new PersistentSubagentStore(this.agentDir, scope.identity);
+    try {
+      const assertScope = () => {
+        if (scope.closing || this.scope !== scope)
+          throw new SubagentError("ROOT_CLOSING", "Root initialization was interrupted");
+      };
+      const cwd = await canonicalizeDirectory(host.ctx.cwd, {
+        missing: "CWD_NOT_FOUND",
+        notDirectory: "CWD_NOT_DIRECTORY",
+      });
+      assertScope();
+      this.trustDecisions.set(cwd, host.ctx.isProjectTrusted());
+      this.trustDecisions.set(config.projectRoot, true);
+      const root = await this.store.open();
+      assertScope();
+      const seen = new Set([scope.identity.sessionId]);
+      const restore = async (
+        owner: Agent | null,
+        records: Record<string, ChildRecord>,
+        ancestors: string[],
+        admission: CallerBinding["delegation"],
+      ): Promise<void> => {
+        for (const [name, record] of Object.entries(records)) {
+          if (seen.has(record.sessionId))
+            throw new SubagentError(
+              "STORE_ERROR",
+              "Duplicate or cyclic Pi session identity in subagent metadata",
+            );
+          seen.add(record.sessionId);
+          const manager = await this.childFactory.openSessionManager(record);
+          const childCwd = await canonicalizeDirectory(manager.getCwd(), {
+            missing: "CWD_NOT_FOUND",
+            notDirectory: "CWD_NOT_DIRECTORY",
+          });
+          assertScope();
+          if (ancestors.length > config.maxDepth)
+            throw new SubagentError(
+              "DEPTH_LIMIT",
+              `Recovered tree exceeds maximum depth ${config.maxDepth}`,
+            );
+          await resolveToolCwd(childCwd, admission);
+          if (childCwd !== ancestors.at(-1)) assertNoDelegationCycle(childCwd, ancestors);
+          if (!(await this.resolveTrust(childCwd)))
+            throw new SubagentError(
+              "PROJECT_NOT_TRUSTED",
+              `Recovered child project is not trusted: ${childCwd}`,
+            );
+          assertScope();
+          const state =
+            record.state === "running"
+              ? "interrupted"
+              : record.state === "opening"
+                ? "idle"
+                : record.state;
+          const agent: Agent = {
+            name,
+            identity: { sessionId: record.sessionId, sessionFile: record.sessionFile },
+            roleSnapshot: record.roleSnapshot,
+            parent: owner,
+            children: new Map(),
+            state,
+            cwd: childCwd,
+            ...(record.hasChildren ? { hasChildren: true } : {}),
+          };
+          (owner?.children ?? scope.children).set(name, agent);
+          scope.agents.add(agent);
+          if (state !== record.state) await this.saveAgent(agent);
+          const nested = await this.store.readOwner(
+            identity(agent),
+            owner ? identity(owner) : scope.identity,
+            agent.hasChildren,
+          );
+          assertScope();
+          if (nested) {
+            if (childCwd === ancestors.at(-1) && Object.keys(nested.children).length)
+              throw new SubagentError("STORE_ERROR", "Same-cwd leaf has stored descendants");
+            if (Object.keys(nested.children).length) {
+              if (
+                ancestors.length >= config.maxDepth ||
+                (agent.roleSnapshot.tools !== undefined &&
+                  !agent.roleSnapshot.tools.includes("subagent")) ||
+                agent.roleSnapshot.disallowedTools?.includes("subagent")
+              )
+                throw new SubagentError(
+                  "DELEGATION_DISABLED",
+                  `Recovered role/depth does not permit children for ${agent.name}`,
+                );
+              const projectRoot = await findProjectRoot(childCwd);
+              if (!(await this.resolveTrust(projectRoot)))
+                throw new SubagentError(
+                  "PROJECT_NOT_TRUSTED",
+                  `Recovered project root is not trusted: ${projectRoot}`,
+                );
+              const childConfig = await loadSubagentsConfig(childCwd);
+              assertScope();
+              await restore(agent, nested.children, [...ancestors, childCwd], {
+                cwd: childCwd,
+                projectRoot: childConfig.projectRoot,
+                externalDirectories: childConfig.externalDirectories,
+                agentTypes: new Map(),
+              });
+            }
+          }
+        }
+      };
+      if (root)
+        await restore(null, root.children, [cwd], {
+          cwd,
+          projectRoot: config.projectRoot,
+          externalDirectories: config.externalDirectories,
+          agentTypes: new Map(),
+        });
+      assertScope();
+      this.initialized = true;
+    } catch (error) {
+      scope.closing = true;
+      await this.store.close();
+      this.uiBroker.shutdown();
+      throw error;
+    }
   }
-
   getMaxLiveAgents(): number | undefined {
-    return this.initialized ? this.rootConfig.maxLiveAgents : undefined;
+    return this.initialized && this.scope && !this.scope.closing
+      ? this.rootConfig.maxLiveAgents
+      : undefined;
   }
-
+  private ready(): RootScope {
+    if (this.scope?.closing) throw new SubagentError("ROOT_CLOSING", "Root session is closing");
+    if (!this.scope || !this.initialized)
+      throw new SubagentError("INVALID_CONFIG", "RootRuntime is not initialized");
+    return this.scope;
+  }
+  private current(execution: Execution): boolean {
+    return (
+      this.scope === execution.scope &&
+      !execution.scope.closing &&
+      execution.agent.currentExecution === execution &&
+      execution.phase !== "closed"
+    );
+  }
+  private assertCurrent(execution: Execution): void {
+    if (!this.current(execution))
+      throw new SubagentError("ROOT_CLOSING", "The owning execution is no longer active");
+  }
+  private callerParent(caller: CallerBinding, scope: RootScope): Execution | RootScope {
+    if (!caller.agent) return scope;
+    const execution = caller.execution;
+    if (!execution || execution.agent !== caller.agent || !this.current(execution))
+      throw new SubagentError("ROOT_CLOSING", "The caller execution is no longer active");
+    return execution;
+  }
+  private reserve(agent: Agent, parent: Execution | RootScope, scope: RootScope): Execution {
+    if (scope.executions.size >= this.rootConfig.maxLiveAgents)
+      throw new SubagentError(
+        "LIVE_AGENT_LIMIT",
+        `Maximum live subagents is ${this.rootConfig.maxLiveAgents}`,
+        undefined,
+        { delegationStatus: this.statusFor(agent.parent) },
+      );
+    const execution: Execution = {
+      scope,
+      agent,
+      parent,
+      phase: "opening",
+      pendingChildren: new Set(),
+      pendingReports: new Set(),
+      finalizing: false,
+      reportSubmitted: false,
+      accepted: false,
+      sdkSettled: false,
+      startLeafId: null,
+      progress: createSubagentProgressState(),
+    };
+    agent.currentExecution = execution;
+    scope.executions.add(execution);
+    if ("agent" in parent) parent.pendingChildren.add(execution);
+    this.refreshProgress();
+    return execution;
+  }
   async createSubagent(
     caller: CallerBinding,
     input: {
@@ -174,794 +312,832 @@ export class RootRuntime implements DelegationRuntimeApi {
       cwd?: string;
     },
     ctx: ExtensionContext,
-    signal: AbortSignal | undefined,
+    signal?: AbortSignal,
   ): Promise<AcceptedResult> {
-    this.assertReady();
-    if (!isNonEmpty(input.name) || !isNonEmpty(input.prompt)) {
-      throw new SubagentError("INVALID_ARGUMENT", "name and prompt must be non-empty");
+    const scope = this.ready();
+    return this.trackOpening(scope, this.createTask(caller, input, ctx, signal));
+  }
+  async askSubagent(
+    caller: CallerBinding,
+    input: { name: string; prompt: string; isSteer?: boolean },
+    ctx: ExtensionContext,
+    signal?: AbortSignal,
+  ): Promise<AcceptedResult> {
+    const scope = this.ready();
+    return this.trackOpening(scope, this.askTask(caller, input, ctx, signal));
+  }
+  private async trackOpening<T>(scope: RootScope, task: Promise<T>): Promise<T> {
+    const openingTasks = scope.openingTasks ?? new Set();
+    scope.openingTasks = openingTasks;
+    openingTasks.add(task);
+    try {
+      return await task;
+    } finally {
+      openingTasks.delete(task);
     }
+  }
+  private async createTask(
+    caller: CallerBinding,
+    input: {
+      name: string;
+      prompt: string;
+      agent_type?: string;
+      thinking?: SubagentThinkingLevel;
+      cwd?: string;
+    },
+    ctx: ExtensionContext,
+    signal?: AbortSignal,
+  ): Promise<AcceptedResult> {
+    const scope = this.ready();
+    const name = validName(input.name);
+    validPrompt(input.prompt);
     signal?.throwIfAborted();
-    const depth = caller.depth + 1;
-    if (depth > this.rootConfig.maxDepth) {
+    const children = caller.agent?.children ?? scope.children;
+    if (children.has(name))
+      throw new SubagentError(
+        "SUBAGENT_NAME_EXISTS",
+        `${name} already exists among your direct subagents; use ask_subagent for follow-up work.`,
+      );
+    if (caller.depth >= this.rootConfig.maxDepth)
       throw new SubagentError(
         "DEPTH_LIMIT",
         `Maximum subagent depth is ${this.rootConfig.maxDepth}`,
       );
-    }
-    const definition = resolveAgentDefinition(caller.delegation.agentTypes, input.agent_type);
-    const target = await resolveToolCwd(input.cwd, caller.delegation);
-    if (target.kind === "external") assertNoDelegationCycle(target.cwd, caller.ancestorCwds);
-    const parentRunId = this.captureParentRun(caller);
-    if (this.live.size >= this.rootConfig.maxLiveAgents) {
-      throw new SubagentError(
-        "LIVE_AGENT_LIMIT",
-        `Maximum live subagents is ${this.rootConfig.maxLiveAgents}`,
-        undefined,
-        { delegationStatus: this.delegationStatusFor(caller.agentId) },
-      );
-    }
-
-    const agentId = id("sa");
-    const runId = id("run");
-    const placeholder = this.reserveLive(agentId, input.name.trim(), runId, caller.agentId);
-    this.reserveParentDependency(caller.agentId, runId);
-    try {
-      this.refreshProgressWidget();
-      signal?.throwIfAborted();
-      if (!(await this.resolveTrust(target.cwd))) {
-        throw new SubagentError("PROJECT_NOT_TRUSTED", `Project is not trusted: ${target.cwd}`);
-      }
-      const canDelegate =
-        target.kind === "external" &&
-        depth < this.rootConfig.maxDepth &&
-        roleAllowsDelegation(definition);
-      const delegation = canDelegate
-        ? await this.buildChildDelegationContext(target.cwd)
-        : undefined;
-      const model = ctx.model;
-      if (!model) throw new SubagentError("PARENT_MODEL_UNAVAILABLE", "Caller has no active model");
-      const requestedThinking =
-        input.thinking ??
-        definition.thinking ??
-        (ctx.thinkingLevel as ThinkingLevel | undefined) ??
-        "off";
-      await this.store.prepareAgent(agentId);
-      const sessionManager = await this.childFactory.createSessionManager(
-        target.cwd,
-        this.store.sessionsDirectory(agentId),
-      );
-      const sessionFile = sessionManager.getSessionFile();
-      if (!sessionFile) {
-        throw new SubagentError(
-          "STORE_ERROR",
-          "Child SessionManager did not create a session file",
-        );
-      }
-      const timestamp = now();
-      const stored: StoredSubagent = {
-        schemaVersion: 2,
-        id: agentId,
-        rootSessionId: this.host.rootSessionId,
-        parentAgentId: caller.agentId,
-        name: input.name.trim(),
-        cwd: target.cwd,
-        ancestorCwds: [...caller.ancestorCwds, target.cwd],
-        agentType: definition.id,
-        agentDefinitionSnapshot: definition,
-        depth,
-        model: { provider: model.provider, id: model.id },
-        thinking: requestedThinking,
-        sessionId: sessionManager.getSessionId(),
-        sessionPath: this.store.toSessionPath(agentId, sessionFile),
-        createdAt: timestamp,
-        updatedAt: timestamp,
-      };
-      this.agents.set(agentId, stored);
-      await this.store.saveAgent(stored);
-      const opened = await this.childFactory.open({
-        stored,
-        runId,
-        runtime: this,
-        delegationContext: delegation,
-        canDelegate,
-        sessionManager,
-        model,
-        thinking: requestedThinking,
-      });
-      stored.thinking = opened.actualThinking;
-      placeholder.session = opened.session;
-      placeholder.delegationContext = delegation;
-      this.opened.set(agentId, opened);
-      this.subscribe(placeholder);
-      return await this.startRun(stored, placeholder, input.prompt, parentRunId, signal);
-    } catch (error) {
-      await this.rollbackOpening(agentId, caller.agentId, runId, true);
-      throw error;
-    }
-  }
-
-  async askSubagent(
-    caller: CallerBinding,
-    input: { id: string; prompt: string; isSteer?: boolean },
-    ctx: ExtensionContext,
-    signal: AbortSignal | undefined,
-  ): Promise<AcceptedResult> {
-    this.assertReady();
-    if (!isNonEmpty(input.id) || !isNonEmpty(input.prompt)) {
-      throw new SubagentError("INVALID_ARGUMENT", "id and prompt must be non-empty");
-    }
-    const stored = this.getOwnedAgent(caller, input.id);
-    if (input.isSteer === true) return this.steer(stored, input.prompt, signal);
-    signal?.throwIfAborted();
-    const { live, parentRunId, runId } = this.reserveNormalAsk(caller, stored);
-    try {
-      this.refreshProgressWidget();
-      signal?.throwIfAborted();
-      const target = await resolveToolCwd(stored.cwd, caller.delegation);
-      if (!(await this.resolveTrust(stored.cwd))) {
-        throw new SubagentError("PROJECT_NOT_TRUSTED", `Project is not trusted: ${stored.cwd}`);
-      }
-      const canDelegate =
-        target.kind === "external" &&
-        stored.depth < this.rootConfig.maxDepth &&
-        roleAllowsDelegation(stored.agentDefinitionSnapshot);
-      const delegation = canDelegate
-        ? await this.buildChildDelegationContext(stored.cwd)
-        : undefined;
-      const model = this.resolveStoredModel(stored, ctx);
-      const sessionFile = await this.store.resolveSessionPath(stored.id, stored.sessionPath);
-      const sessionManager = this.childFactory.openSessionManager(stored, sessionFile);
-      const opened = await this.childFactory.open({
-        stored,
-        runId,
-        runtime: this,
-        delegationContext: delegation,
-        canDelegate,
-        sessionManager,
-        model,
-        thinking: stored.thinking,
-      });
-      live.session = opened.session;
-      live.delegationContext = delegation;
-      this.opened.set(stored.id, opened);
-      this.subscribe(live);
-      return await this.startRun(stored, live, input.prompt, parentRunId, signal);
-    } catch (error) {
-      await this.rollbackOpening(stored.id, caller.agentId, runId, false);
-      throw error;
-    }
-  }
-
-  private async steer(
-    stored: StoredSubagent,
-    prompt: string,
-    signal: AbortSignal | undefined,
-  ): Promise<AcceptedResult> {
-    signal?.throwIfAborted();
-    const live = this.live.get(stored.id);
-    if (
-      !live?.accepted ||
-      live.phase !== "executing" ||
-      !live.session ||
-      !live.session.isStreaming ||
-      live.finalizing
-    ) {
-      throw new SubagentError(
-        "SUBAGENT_NOT_STEERABLE",
-        `${stored.name} does not have an actively streaming run`,
-        stored.id,
-      );
-    }
-    let acceptedStatus: DelegationStatusSnapshot | undefined;
-    let acceptedResolve!: () => void;
-    let acceptedReject!: (error: unknown) => void;
-    const accepted = new Promise<void>((resolve, reject) => {
-      acceptedResolve = resolve;
-      acceptedReject = reject;
-    });
-    // Warning Cache Broke: steering text must remain ordinary conversation input; never
-    // splice it into system prompt/history or enable template expansion during resume.
-    const task = live.session.prompt(prompt, {
-      streamingBehavior: "steer",
-      expandPromptTemplates: false,
-      preflightResult: (success) => {
-        if (success) {
-          acceptedStatus = this.delegationStatusFor(stored.parentAgentId);
-          acceptedResolve();
-        } else {
-          acceptedReject(new SubagentError("SUBAGENT_NOT_STEERABLE", "Pi rejected steering"));
-        }
-      },
-    });
-    void task.catch((error) => {
-      acceptedReject(error);
-    });
-    await awaitPreflight(accepted, signal, () => acceptedStatus !== undefined);
-    if (!acceptedStatus) {
-      throw new SubagentError("INTERNAL_ERROR", "Steering was accepted without a status snapshot");
-    }
-    return this.acceptedResult(stored, live.runId, "steered", acceptedStatus);
-  }
-
-  private async startRun(
-    stored: StoredSubagent,
-    live: LiveAgent,
-    prompt: string,
-    parentRunId: string | null,
-    signal: AbortSignal | undefined,
-  ): Promise<AcceptedResult> {
-    signal?.throwIfAborted();
-    const session = live.session;
-    if (!session) throw new SubagentError("STORE_ERROR", "Child session was not opened");
-    live.phase = "executing";
-    live.sdkSettled = false;
-    live.runStartLeafId = session.sessionManager.getLeafId();
-    const run: StoredRun = {
-      id: live.runId,
-      agentId: stored.id,
-      parentRunId,
+    const roleSnapshot = resolveAgentDefinition(caller.delegation.agentTypes, input.agent_type);
+    const parent = this.callerParent(caller, scope);
+    const agent: Agent = {
+      name,
+      roleSnapshot,
+      parent: caller.agent,
+      children: new Map(),
       state: "opening",
     };
-    const previousLastRunId = stored.lastRunId;
-    const previousInterrupted = stored.interrupted;
-    this.runs.set(run.id, run);
-    stored.activeRunId = run.id;
-    stored.lastRunId = run.id;
-    stored.updatedAt = now();
+    const execution = this.reserve(agent, parent, scope);
+    children.set(name, agent);
+    scope.agents.add(agent);
+    let createdFile: string | undefined;
     try {
-      await this.store.saveRun(run);
-      await this.store.saveAgent(stored);
+      const target = await resolveToolCwd(input.cwd, caller.delegation);
+      this.assertCurrent(execution);
+      if (target.kind === "external") assertNoDelegationCycle(target.cwd, caller.ancestorCwds);
+      agent.cwd = target.cwd;
+      if (!(await this.resolveTrust(target.cwd)))
+        throw new SubagentError("PROJECT_NOT_TRUSTED", `Project is not trusted: ${target.cwd}`);
+      this.assertCurrent(execution);
+      const manager = await this.childFactory.createSessionManager(target.cwd);
+      createdFile = manager.getSessionFile();
+      this.assertCurrent(execution);
+      if (!createdFile)
+        throw new SubagentError(
+          "SESSION_HISTORY_UNAVAILABLE",
+          "SDK did not allocate persistent child history",
+        );
+      agent.identity = {
+        sessionId: manager.getSessionId(),
+        sessionFile: await realpath(createdFile),
+      };
+      this.assertCurrent(execution);
+      if (agent.parent) await this.ensureBranch(agent.parent);
+      this.assertCurrent(execution);
+      await this.saveAgent(agent);
+      this.assertCurrent(execution);
+      await this.mount(execution, caller, manager, ctx, false, input.thinking);
+      return await this.start(execution, input.prompt, signal);
     } catch (error) {
-      this.runs.delete(run.id);
-      stored.activeRunId = undefined;
-      stored.lastRunId = previousLastRunId;
-      stored.interrupted = previousInterrupted;
-      stored.updatedAt = now();
-      await this.store.deleteRun(stored.id, run.id).catch(() => undefined);
-      await this.store.saveAgent(stored).catch(() => undefined);
+      if (!execution.accepted) await this.rollback(execution, true, "idle", createdFile);
+      else void this.failExecution(execution, error);
       throw error;
     }
-    const rollbackPrepared = async () => {
-      this.runs.delete(run.id);
-      stored.activeRunId = undefined;
-      stored.lastRunId = previousLastRunId;
-      stored.interrupted = previousInterrupted;
-      stored.updatedAt = now();
-      await this.store.deleteRun(stored.id, run.id);
-      await this.store.saveAgent(stored);
-    };
-    let acceptedStatus: DelegationStatusSnapshot | undefined;
-    let acceptedResolve!: () => void;
-    let acceptedReject!: (error: unknown) => void;
-    const accepted = new Promise<void>((resolve, reject) => {
-      acceptedResolve = resolve;
-      acceptedReject = reject;
-    });
-    const epoch = this.epoch;
-    const mountId = live.mountId;
-    let promptFailed = false;
-    let promptFailure: unknown;
-    let task: Promise<void>;
+  }
+  private async askTask(
+    caller: CallerBinding,
+    input: { name: string; prompt: string; isSteer?: boolean },
+    ctx: ExtensionContext,
+    signal?: AbortSignal,
+  ): Promise<AcceptedResult> {
+    const scope = this.ready();
+    const name = validName(input.name);
+    validPrompt(input.prompt);
+    signal?.throwIfAborted();
+    const parent = this.callerParent(caller, scope);
+    const agent = (caller.agent?.children ?? scope.children).get(name);
+    if (!agent)
+      throw new SubagentError("SUBAGENT_NOT_FOUND", `No directly owned subagent named ${name}`);
+    if (input.isSteer) return this.steer(agent, input.prompt, signal);
+    if (caller.depth >= this.rootConfig.maxDepth)
+      throw new SubagentError(
+        "DEPTH_LIMIT",
+        `Maximum subagent depth is ${this.rootConfig.maxDepth}`,
+      );
+    if (agent.currentExecution)
+      throw new SubagentError(
+        "SUBAGENT_BUSY",
+        `${name} is ${agent.currentExecution.phase === "waiting" ? "waiting for children or reports" : "busy"}`,
+        undefined,
+        { delegationStatus: this.statusFor(caller.agent) },
+      );
+    const previousState = agent.state;
+    const execution = this.reserve(agent, parent, scope);
+    agent.state = "opening";
     try {
-      task = session.prompt(prompt, {
+      await this.saveAgent(agent);
+      this.assertCurrent(execution);
+      const manager = await this.childFactory.openSessionManager(identity(agent));
+      this.assertCurrent(execution);
+      agent.cwd = await canonicalizeDirectory(manager.getCwd(), {
+        missing: "CWD_NOT_FOUND",
+        notDirectory: "CWD_NOT_DIRECTORY",
+      });
+      const target = await resolveToolCwd(agent.cwd, caller.delegation);
+      if (target.kind === "external") assertNoDelegationCycle(target.cwd, caller.ancestorCwds);
+      this.assertCurrent(execution);
+      await this.mount(execution, caller, manager, ctx, true);
+      return await this.start(execution, input.prompt, signal);
+    } catch (error) {
+      if (!execution.accepted) await this.rollback(execution, false, previousState);
+      else void this.failExecution(execution, error);
+      throw error;
+    }
+  }
+  private async mount(
+    execution: Execution,
+    caller: CallerBinding,
+    manager: SessionManager,
+    ctx: ExtensionContext,
+    restoring: boolean,
+    thinking?: SubagentThinkingLevel,
+  ): Promise<void> {
+    const agent = execution.agent;
+    const cwd = agent.cwd!;
+    const depth = caller.depth + 1;
+    const canDelegate =
+      cwd !== caller.delegation.cwd &&
+      depth < this.rootConfig.maxDepth &&
+      (agent.roleSnapshot.tools === undefined || agent.roleSnapshot.tools.includes("subagent")) &&
+      !agent.roleSnapshot.disallowedTools?.includes("subagent");
+    if (!(await this.resolveTrust(cwd)))
+      throw new SubagentError("PROJECT_NOT_TRUSTED", `Project is not trusted: ${cwd}`);
+    this.assertCurrent(execution);
+    let delegationContext: CallerBinding["delegation"] | undefined;
+    if (canDelegate) {
+      const projectRoot = await findProjectRoot(cwd);
+      if (!(await this.resolveTrust(projectRoot)))
+        throw new SubagentError(
+          "PROJECT_NOT_TRUSTED",
+          `Git project root is not trusted: ${projectRoot}`,
+        );
+      delegationContext = (await buildDelegationContext(cwd, this.agentDir)).context;
+      this.assertCurrent(execution);
+    }
+    if (!restoring && !ctx.model)
+      throw new SubagentError("PARENT_MODEL_UNAVAILABLE", "Caller has no active model");
+    const opened = await this.childFactory.open({
+      name: agent.name,
+      roleSnapshot: agent.roleSnapshot,
+      cwd,
+      depth,
+      ancestorCwds: [...caller.ancestorCwds, cwd],
+      runtime: this,
+      callerAgent: agent,
+      delegationContext,
+      canDelegate,
+      sessionManager: manager,
+      restoring,
+      ...(!restoring
+        ? {
+            model: ctx.model,
+            thinking:
+              thinking ??
+              agent.roleSnapshot.thinking ??
+              (ctx.thinkingLevel as ThinkingLevel) ??
+              "off",
+          }
+        : {}),
+    });
+    if (!this.current(execution)) {
+      await opened.dispose();
+      throw new SubagentError("ROOT_CLOSING", "The owning execution ended while mounting");
+    }
+    execution.opened = opened;
+    execution.session = opened.session;
+    execution.startLeafId = manager.getLeafId();
+    execution.unsubscribe = opened.session.subscribe((event) => this.onEvent(execution, event));
+  }
+  private start(
+    execution: Execution,
+    prompt: string,
+    signal?: AbortSignal,
+  ): Promise<AcceptedResult> {
+    this.assertCurrent(execution);
+    return new Promise<AcceptedResult>((resolve, reject) => {
+      let finished = false;
+      const finish = (result?: AcceptedResult, error?: unknown) => {
+        if (finished) return;
+        finished = true;
+        signal?.removeEventListener("abort", abort);
+        if (error) reject(error);
+        else resolve(result!);
+      };
+      const abort = () => {
+        if (execution.accepted) return;
+        finish(
+          undefined,
+          new SubagentError("ABORTED", "Tool call was aborted before Pi accepted the prompt"),
+        );
+        void execution.session?.abort();
+      };
+      signal?.addEventListener("abort", abort, { once: true });
+      if (signal?.aborted) {
+        abort();
+        return;
+      }
+      this.holdPrompt(execution);
+      const completion = execution.session!.prompt(prompt, {
         expandPromptTemplates: false,
-        preflightResult: (success) => {
-          if (!success) {
-            acceptedReject(new SubagentError("INVALID_ARGUMENT", "Pi rejected the task prompt"));
+        preflightResult: (disposition) => {
+          if (!this.current(execution)) {
+            const error = new SubagentError(
+              "ROOT_CLOSING",
+              "Owning execution ended before acceptance",
+            );
+            finish(undefined, error);
+            throw error;
+          }
+          if (signal?.aborted && !execution.accepted) {
+            const error = new SubagentError(
+              "ABORTED",
+              "Tool call was aborted before Pi accepted the prompt",
+            );
+            finish(undefined, error);
+            throw error;
+          }
+          if (disposition === "handled") {
+            finish(
+              undefined,
+              new SubagentError(
+                "PROMPT_HANDLED",
+                "An input extension handled the request; no subagent task was started.",
+              ),
+            );
             return;
           }
-          run.state = "accepted";
-          run.acceptedAt = now();
-          stored.interrupted = false;
-          this.store.commitAcceptedRun(run);
-          live.accepted = true;
-          acceptedStatus = this.delegationStatusFor(stored.parentAgentId);
-          acceptedResolve();
+          execution.accepted = true;
+          if (disposition !== "started") {
+            const error = new SubagentError(
+              "UNEXPECTED_PREFLIGHT",
+              `Expected started but SDK returned ${disposition}; history and identity are retained.`,
+            );
+            finish(undefined, error);
+            void this.failExecution(execution, error);
+            throw error;
+          }
+          execution.phase = "executing";
+          execution.agent.state = "running";
+          try {
+            this.saveAgentSync(execution.agent);
+            finish(this.acceptedResult(execution, "started"));
+          } catch (error) {
+            finish(undefined, error);
+            // Throwing out of SDK preflight prevents the subsequent _runAgentPrompt call.
+            // The started disposition still retains identity/history rather than rollback.
+            throw error;
+          }
         },
       });
-    } catch (error) {
-      await rollbackPrepared();
-      throw error;
-    }
-    void task.catch((error) => {
-      promptFailed = true;
-      promptFailure = error;
-      acceptedReject(error);
-      if (live.accepted && this.isCurrent(epoch, live, mountId)) void this.failRun(live, error);
-    });
-    try {
-      await awaitPreflight(
-        accepted,
-        signal,
-        () => acceptedStatus !== undefined,
-        () => session.abort(),
+      void completion.then(
+        () => {
+          this.releasePrompt(execution);
+          if (!finished)
+            finish(
+              undefined,
+              new SubagentError("PROMPT_NOT_STARTED", "SDK returned without confirming acceptance"),
+            );
+          if (this.current(execution) && execution.accepted) {
+            execution.sdkSettled = execution.session!.isIdle;
+            this.maybeFinalize(execution);
+          }
+        },
+        (error) => {
+          this.releasePrompt(execution);
+          finish(undefined, error);
+          if (execution.accepted && this.current(execution))
+            void this.failExecution(execution, error);
+        },
       );
-    } catch (error) {
-      await rollbackPrepared();
-      throw error;
-    }
-    if (!acceptedStatus) {
-      throw new SubagentError("INTERNAL_ERROR", "Run was accepted without a status snapshot");
-    }
-    if (promptFailed) void this.failRun(live, promptFailure);
-    else void this.maybeFinalize(live);
-    return this.acceptedResult(stored, run.id, "started", acceptedStatus);
-  }
-
-  private subscribe(live: LiveAgent): void {
-    live.unsubscribe = live.session?.subscribe((event) => {
-      const current = this.live.get(live.id);
-      if (
-        current !== live ||
-        current.mountId !== live.mountId ||
-        live.finalizing ||
-        live.phase === "closing"
-      )
-        return;
-      if (applyProgressEvent(live.progress, event)) this.refreshProgressWidget();
-      if (event.type !== "agent_settled") return;
-      live.sdkSettled = true;
-      live.phase = "idle";
-      const pending = live.pendingChildRuns.size + live.pendingReportIds.size;
-      live.progress.latestActivity = pending > 0 ? `waiting for ${pending} subagents` : "finishing";
-      this.refreshProgressWidget();
-      void this.maybeFinalize(live);
     });
   }
-
-  private refreshProgressWidget(): void {
-    const entries = [...this.live.values()].map((live) => ({
-      name: live.name,
-      progress: live.progress,
-    }));
-    this.uiBroker.setProgressWidget(buildProgressWidgetLines(entries));
+  private async steer(agent: Agent, prompt: string, signal?: AbortSignal): Promise<AcceptedResult> {
+    const execution = agent.currentExecution;
+    let reason: string | undefined;
+    if (!execution) {
+      reason =
+        agent.state === "idle" || agent.state === "interrupted"
+          ? `is ${agent.state} with no current execution`
+          : "has no current execution; its active instance has been released";
+    } else if (this.scope !== execution.scope) {
+      reason = "has an owning root scope that is no longer active";
+    } else if (execution.scope.closing) {
+      reason = "belongs to a root session that is closing";
+    } else if (execution.phase === "closed") {
+      reason = "has a closed execution; its active instance has been released";
+    } else if (execution.finalizing || execution.phase === "closing") {
+      reason = execution.finalizing ? "is finalizing its execution" : "is closing its execution";
+    } else if (execution.phase === "opening") {
+      reason = "is opening; its SDK execution has not yet started";
+    } else if (execution.phase === "waiting") {
+      const dependencies = [
+        ...(execution.pendingChildren.size ? ["children"] : []),
+        ...(execution.pendingReports.size ? ["reports to be processed"] : []),
+      ];
+      reason = `is waiting for ${dependencies.length ? dependencies.join(" and ") : "the SDK to become idle"}`;
+    } else if (!execution.session) {
+      reason = "has no mounted SDK session; its session has been released";
+    } else if (!execution.session.isStreaming) {
+      reason = execution.sdkSettled
+        ? "has an SDK execution that has settled and is not streaming"
+        : "has an SDK execution that is currently not streaming";
+    }
+    if (reason || !execution)
+      throw new SubagentError("SUBAGENT_NOT_STEERABLE", `${agent.name} ${reason}.`);
+    signal?.throwIfAborted();
+    return new Promise((resolve, reject) => {
+      let answered = false;
+      const completion = execution.session!.prompt(prompt, {
+        streamingBehavior: "steer",
+        expandPromptTemplates: false,
+        preflightResult: (disposition) => {
+          answered = true;
+          if (!this.current(execution)) {
+            const error = new SubagentError("ROOT_CLOSING", "The target execution ended");
+            reject(error);
+            // The hook may outlive E1 and its disposed mount. Stop SDK started processing,
+            // never abort the logical agent's new E2; already queued effects cannot be undone.
+            throw error;
+          }
+          if (disposition !== "queued" && signal?.aborted) {
+            const error = new SubagentError(
+              "ABORTED",
+              "Tool call was aborted before Pi accepted steering",
+            );
+            reject(error);
+            throw error;
+          }
+          // SDK queues before this callback: queued is already accepted even if the tool
+          // was canceled during an input hook. Do not claim to undo the accepted queue.
+          if (disposition === "queued") resolve(this.acceptedResult(execution, "steered"));
+          else if (disposition === "handled")
+            reject(
+              new SubagentError(
+                "PROMPT_HANDLED",
+                "An input extension handled the steering input; the original execution is unchanged.",
+              ),
+            );
+          else {
+            const error = new SubagentError(
+              "UNEXPECTED_PREFLIGHT",
+              `Expected queued steering but SDK returned ${disposition}.`,
+            );
+            reject(error);
+            void this.failExecution(execution, error);
+            // Started preflight precedes _runAgentPrompt; throwing prevents a second run.
+            throw error;
+          }
+        },
+      });
+      void completion.then(() => {
+        if (!answered)
+          reject(new SubagentError("PROMPT_NOT_STARTED", "SDK did not queue steering input"));
+      }, reject);
+    });
   }
-
-  private async maybeFinalize(live: LiveAgent): Promise<void> {
+  private onEvent(execution: Execution, event: AgentSessionEvent): void {
+    if (!this.current(execution)) return;
+    applyProgressEvent(execution.progress, event);
+    this.refreshProgress();
+    if (event.type === "agent_start") {
+      execution.sdkSettled = false;
+      execution.phase = "executing";
+    }
     if (
-      !live.accepted ||
-      live.finalizing ||
-      !live.sdkSettled ||
-      live.session?.isStreaming ||
-      live.pendingChildRuns.size > 0 ||
-      live.pendingReportIds.size > 0
+      event.type === "message_end" &&
+      event.message.role === "custom" &&
+      event.message.customType === "subagent-report"
     ) {
-      return;
-    }
-    live.finalizing = true;
-    try {
-      await this.finalizeRun(live);
-    } catch (error) {
-      await this.emergencyFinalize(live, error);
-    }
-  }
-
-  private async failRun(live: LiveAgent, error: unknown): Promise<void> {
-    if (!live.accepted || live.finalizing) return;
-    live.finalizing = true;
-    try {
-      await this.finalizeRun(live, asSubagentError(error, "SUBAGENT_RUN_FAILED"));
-    } catch (finalizeError) {
-      await this.emergencyFinalize(live, finalizeError);
-    }
-  }
-
-  private extractResult(live: LiveAgent): {
-    outcome: StoredRun["outcome"];
-    result: string;
-    error?: { code: string; message: string };
-  } {
-    const branch = live.session?.sessionManager.getBranch() ?? [];
-    const marker = live.runStartLeafId;
-    const markerIndex = marker ? branch.findIndex((entry) => entry.id === marker) : -1;
-    const entries = branch.slice(markerIndex + 1);
-    const assistants = entries.filter(
-      (entry) => entry.type === "message" && entry.message.role === "assistant",
-    );
-    const last = assistants.at(-1);
-    if (!last || last.type !== "message" || last.message.role !== "assistant") {
-      return {
-        outcome: "failed",
-        result: "",
-        error: { code: "EMPTY_OUTPUT", message: "No assistant output" },
-      };
-    }
-    const text = last.message.content
-      .filter((part) => part.type === "text")
-      .map((part) => part.text)
-      .join("\n");
-    if (last.message.stopReason === "error") {
-      return {
-        outcome: "failed",
-        result: text,
-        error: { code: "MODEL_ERROR", message: last.message.errorMessage ?? "Model error" },
-      };
-    }
-    if (last.message.stopReason === "aborted") {
-      return {
-        outcome: "aborted",
-        result: text,
-        error: { code: "ABORTED", message: last.message.errorMessage ?? "Run aborted" },
-      };
-    }
-    if (last.message.stopReason === "length") return { outcome: "incomplete", result: text };
-    if (!text) {
-      return {
-        outcome: "incomplete",
-        result: "The final response contained no text content.",
-      };
-    }
-    return { outcome: "completed", result: text };
-  }
-
-  private async finalizeRun(live: LiveAgent, failure?: SubagentError): Promise<void> {
-    const stored = this.agents.get(live.id);
-    const run = this.runs.get(live.runId);
-    if (!stored || !run) return;
-    live.phase = "closing";
-    const extracted = failure
-      ? {
-          outcome: "failed" as const,
-          result: "",
-          error: { code: failure.code, message: failure.message },
+      for (const delivery of execution.pendingReports) {
+        if (
+          delivery.submitted &&
+          !delivery.observed &&
+          correlation(event.message.details, delivery)
+        ) {
+          delivery.observed = true;
+          break;
         }
-      : this.extractResult(live);
-    const completedAt = now();
-    const report: SubagentReport = {
-      schemaVersion: 1,
-      reportId: id("report"),
-      rootSessionId: stored.rootSessionId,
-      agentId: stored.id,
-      runId: run.id,
-      parentAgentId: stored.parentAgentId,
-      parentRunId: run.parentRunId,
-      name: stored.name,
-      agentType: stored.agentType,
-      cwd: stored.cwd,
-      outcome: extracted.outcome ?? "failed",
-      result: extracted.result,
-      ...(extracted.error ? { error: extracted.error } : {}),
-      completedAt,
-    };
-    run.state = "completed";
-    run.completedAt = completedAt;
-    run.outcome = report.outcome;
-    run.result = report.result;
-    run.error = report.error;
-    run.reportId = report.reportId;
-    run.delivery = "pending";
-    stored.activeRunId = undefined;
-    stored.updatedAt = completedAt;
-    await this.store.saveRun(run);
-    await this.store.saveAgent(stored);
-    await this.disposeMount(live.id);
-    this.live.delete(live.id);
-    this.refreshProgressWidget();
-    this.runs.delete(run.id);
-    if (!this.closing) {
-      try {
-        await this.routeReport(stored, run, report);
-      } catch (error) {
-        this.notifyRuntimeError(error);
       }
+    }
+    if (event.type === "agent_settled") {
+      execution.sdkSettled = true;
+      // SDK public message_end precedes persistence. Only a later settled with the entry on
+      // the active Pi branch acknowledges processing; a send Promise is never an acknowledgment.
+      const branch = execution.session!.sessionManager.getBranch();
+      const usedReceipts = execution.reportReceipts ?? new Set<string>();
+      execution.reportReceipts = usedReceipts;
+      for (const delivery of execution.pendingReports) {
+        if (!delivery.observed) continue;
+        const boundary = delivery.receiptBoundary
+          ? branch.findIndex((entry) => entry.id === delivery.receiptBoundary)
+          : -1;
+        if (delivery.receiptBoundary && boundary < 0) continue;
+        const entry = branch
+          .slice(boundary + 1)
+          .find(
+            (value) =>
+              value.type === "custom_message" &&
+              value.customType === "subagent-report" &&
+              !usedReceipts.has(value.id) &&
+              correlation(value.details, delivery),
+          );
+        if (!entry) continue;
+        usedReceipts.add(entry.id);
+        delivery.recordedEntryId = entry.id;
+        delivery.processed = true;
+        execution.pendingReports.delete(delivery);
+        execution.scope.deliveries.delete(delivery);
+      }
+      this.maybeFinalize(execution);
     }
   }
-
-  private async emergencyFinalize(live: LiveAgent, error: unknown): Promise<void> {
-    const stored = this.agents.get(live.id);
-    const run = this.runs.get(live.runId);
-    const failure = asSubagentError(error, "STORE_ERROR");
-    this.notifyRuntimeError(failure);
-    await this.disposeMount(live.id).catch((disposeError) => this.notifyRuntimeError(disposeError));
-    this.live.delete(live.id);
-    this.refreshProgressWidget();
-    if (!stored || !run || this.closing) {
-      if (run) this.runs.delete(run.id);
+  private holdPrompt(execution: Execution): void {
+    this.pendingPrompts.set(execution, (this.pendingPrompts.get(execution) ?? 0) + 1);
+  }
+  private releasePrompt(execution: Execution): void {
+    const remaining = (this.pendingPrompts.get(execution) ?? 1) - 1;
+    if (remaining) this.pendingPrompts.set(execution, remaining);
+    else this.pendingPrompts.delete(execution);
+  }
+  private maybeFinalize(execution: Execution): void {
+    if (
+      !this.current(execution) ||
+      !execution.accepted ||
+      execution.finalizing ||
+      !execution.sdkSettled
+    )
+      return;
+    if (
+      execution.pendingChildren.size ||
+      execution.pendingReports.size ||
+      !execution.session?.isIdle
+    ) {
+      execution.phase = "waiting";
       return;
     }
-    this.runs.delete(run.id);
-    stored.activeRunId = undefined;
+    // _runAgentPrompt emits settled from finally, before prompt's rejection is observable.
+    // Do not extract a result until the accepted prompt's completion outcome is captured.
+    if (this.pendingPrompts.has(execution)) return;
+    execution.finalizing = true;
+    execution.phase = "closing";
+    // Do not dispose inside the SDK's awaited lifecycle callback.
+    queueMicrotask(() => {
+      void this.finalize(execution).catch((error) => this.notify(error));
+    });
+  }
+  private result(execution: Execution): SubagentReport {
+    const agent = execution.agent;
     const report: SubagentReport = {
-      schemaVersion: 1,
-      reportId: id("report"),
-      rootSessionId: stored.rootSessionId,
-      agentId: stored.id,
-      runId: run.id,
-      parentAgentId: stored.parentAgentId,
-      parentRunId: run.parentRunId,
-      name: stored.name,
-      agentType: stored.agentType,
-      cwd: stored.cwd,
-      outcome: "failed",
-      result: "",
-      error: { code: failure.code, message: failure.message },
-      completedAt: now(),
+      name: agent.name,
+      agentType: agent.roleSnapshot.id,
+      cwd: agent.cwd!,
+      outcome: "incomplete",
+      result: "No final assistant text was produced for this task.",
     };
-    if (stored.parentAgentId === null) {
-      try {
-        this.host.sendReport(report, this.delegationStatusFor(stored.parentAgentId));
-      } catch (deliveryError) {
-        this.notifyRuntimeError(deliveryError);
+    const branch = execution.session!.sessionManager.getBranch();
+    const index = execution.startLeafId
+      ? branch.findIndex((entry) => entry.id === execution.startLeafId)
+      : -1;
+    if (execution.startLeafId && index < 0) {
+      report.outcome = "failed";
+      report.result = "";
+      report.error = {
+        code: "SESSION_HISTORY_UNAVAILABLE",
+        message:
+          "The task's history boundary is absent from the current branch; no earlier result was reused.",
+      };
+      return report;
+    }
+    const entries = branch.slice(index + 1);
+    execution.sourceEntryId =
+      entries.find((entry) => entry.type === "message" && entry.message.role === "user")?.id ??
+      execution.startLeafId ??
+      undefined;
+    if (execution.failure) {
+      report.outcome = "failed";
+      report.error = execution.failure;
+      report.result = "";
+      return report;
+    }
+    const last = [...entries]
+      .reverse()
+      .find((entry) => entry.type === "message" && entry.message.role === "assistant");
+    if (last?.type === "message" && last.message.role === "assistant") {
+      const message = last.message;
+      report.result = message.content
+        .filter((value) => value.type === "text")
+        .map((value) => value.text)
+        .join("\n");
+      report.outcome =
+        message.stopReason === "error"
+          ? "failed"
+          : message.stopReason === "aborted"
+            ? "aborted"
+            : message.stopReason === "length"
+              ? "incomplete"
+              : "completed";
+      if (message.errorMessage)
+        report.error = { code: "MODEL_ERROR", message: message.errorMessage };
+      if (!report.result && report.outcome === "completed") {
+        report.outcome = "incomplete";
+        report.result =
+          "The final response contains no text; inspect the complete conversation for non-text content.";
       }
+    }
+    return report;
+  }
+  private async finalize(execution: Execution): Promise<void> {
+    if (!this.current(execution)) return;
+    const report = this.result(execution);
+    const mountedManager = execution.session?.sessionManager;
+    const mountedHistory = mountedManager
+      ? {
+          sessionId: mountedManager.getSessionId(),
+          sessionFile: mountedManager.getSessionFile(),
+          cwd: mountedManager.getCwd(),
+        }
+      : undefined;
+    const target = execution.parent;
+    const delivery: ReportDelivery = {
+      source: execution,
+      target,
+      report,
+      sourceEntryId: execution.sourceEntryId,
+      submitted: false,
+      observed: false,
+      processed: false,
+    };
+    execution.scope.deliveries.add(delivery);
+    if ("agent" in target) {
+      // Transfer the dependency before the first await: never expose an empty barrier window.
+      target.pendingReports.add(delivery);
+      target.pendingChildren.delete(execution);
+    }
+    execution.agent.state = "idle";
+    try {
+      await this.saveAgent(execution.agent);
+    } catch (error) {
+      const failure = asSubagentError(error, "STORE_ERROR");
+      report.outcome = "failed";
+      report.error = { code: failure.code, message: failure.message };
+      this.notify(error);
+    }
+    await this.releaseExecution(execution);
+    if (!this.deliveryCurrent(delivery)) {
+      execution.scope.deliveries.delete(delivery);
       return;
     }
-    const parent = this.live.get(stored.parentAgentId);
-    if (!parent || parent.runId !== run.parentRunId || !parent.session) return;
-    parent.pendingChildRuns.delete(run.id);
-    parent.pendingReportIds.add(report.reportId);
-    parent.sdkSettled = false;
-    parent.phase = "executing";
-    const epoch = this.epoch;
-    const mountId = parent.mountId;
-    const status = this.delegationStatusFor(stored.parentAgentId);
-    void parent.session
-      .sendCustomMessage(
+    try {
+      const manager = await this.childFactory.openSessionManager(identity(execution.agent));
+      const file = manager.getSessionFile();
+      if (
+        file &&
+        mountedHistory?.sessionFile &&
+        mountedHistory.sessionId === identity(execution.agent).sessionId &&
+        mountedHistory.cwd === execution.agent.cwd &&
+        manager.getCwd() === execution.agent.cwd &&
+        (await realpath(mountedHistory.sessionFile)) === file
+      ) {
+        report.sessionFile = file;
+      }
+    } catch {
+      /* Unavailable history is explicitly represented by the report formatter. */
+    }
+    if (!this.deliveryCurrent(delivery)) {
+      execution.scope.deliveries.delete(delivery);
+      return;
+    }
+    execution.reportSubmitted = true;
+    delivery.submitted = true;
+    const status = this.statusFor(execution.agent.parent);
+    if (!("agent" in target)) {
+      this.host.sendReport(report, status);
+      delivery.processed = true;
+      execution.scope.deliveries.delete(delivery);
+      return;
+    }
+    if (!delivery.sourceEntryId) {
+      target.pendingReports.delete(delivery);
+      execution.scope.deliveries.delete(delivery);
+      await this.failExecution(
+        target,
+        new SubagentError(
+          "SESSION_HISTORY_UNAVAILABLE",
+          "The child task has no persisted Pi entry identity for report processing.",
+        ),
+      );
+      return;
+    }
+    delivery.receiptBoundary = target.session!.sessionManager.getLeafId();
+    target.sdkSettled = false;
+    target.phase = "executing";
+    this.holdPrompt(target);
+    void target
+      .session!.sendCustomMessage(
         {
           customType: "subagent-report",
           content: formatSubagentReport(report, status),
           display: true,
-          details: deliveredReport(report, status),
+          details: {
+            ...report,
+            delegation_status: status,
+            sourceSessionId: identity(execution.agent).sessionId,
+            sourceEntryId: delivery.sourceEntryId,
+          },
         },
         { deliverAs: "steer", triggerTurn: true },
       )
       .then(
         () => {
-          if (!this.isCurrent(epoch, parent, mountId)) return;
-          parent.pendingReportIds.delete(report.reportId);
-          void this.maybeFinalize(parent);
+          this.releasePrompt(target);
+          this.maybeFinalize(target);
         },
-        (deliveryError) => {
-          if (this.isCurrent(epoch, parent, mountId)) void this.failRun(parent, deliveryError);
+        (error) => {
+          this.releasePrompt(target);
+          // A receipt may already have removed delivery at settled, but the same owning
+          // execution still needs the subsequent SDK completion failure before finalizing.
+          if (this.current(target)) void this.failExecution(target, error);
         },
       );
   }
-
-  private async routeReport(
-    stored: StoredSubagent,
-    run: StoredRun,
-    report: SubagentReport,
+  private deliveryCurrent(delivery: ReportDelivery): boolean {
+    const scope = delivery.source.scope;
+    return (
+      this.scope === scope &&
+      !scope.closing &&
+      scope.deliveries.has(delivery) &&
+      (!("agent" in delivery.target) ||
+        (this.current(delivery.target) && !delivery.target.finalizing))
+    );
+  }
+  private async failExecution(execution: Execution, error: unknown): Promise<void> {
+    if (!this.current(execution) || execution.finalizing) return;
+    const failure = asSubagentError(error);
+    execution.failure = { code: failure.code, message: failure.message };
+    await Promise.all([...execution.pendingChildren].map((child) => this.interrupt(child)));
+    for (const delivery of execution.pendingReports) execution.scope.deliveries.delete(delivery);
+    execution.pendingReports.clear();
+    await execution.session?.abort().catch((abortError) => this.notify(abortError));
+    if (!this.current(execution)) return;
+    execution.sdkSettled = true;
+    this.maybeFinalize(execution);
+  }
+  private releaseExecution(execution: Execution): Promise<void> {
+    execution.release ??= this.releaseResources(execution);
+    return execution.release;
+  }
+  private async releaseResources(execution: Execution): Promise<void> {
+    execution.unsubscribe?.();
+    execution.unsubscribe = undefined;
+    try {
+      await execution.opened?.dispose();
+    } catch (error) {
+      this.notify(error);
+    }
+    execution.opened = undefined;
+    execution.session = undefined;
+    execution.reportReceipts?.clear();
+    execution.phase = "closed";
+    if (execution.agent.currentExecution === execution)
+      execution.agent.currentExecution = undefined;
+    execution.scope.executions.delete(execution);
+    this.refreshProgress();
+  }
+  private async rollback(
+    execution: Execution,
+    newAgent: boolean,
+    previousState: ChildState,
+    createdFile?: string,
   ): Promise<void> {
-    if (stored.parentAgentId === null) {
-      this.host?.sendReport(report, this.delegationStatusFor(stored.parentAgentId));
-      run.delivery = "submitted";
-      await this.store?.saveRun(run);
-      return;
+    if (execution.accepted) return;
+    const agent = execution.agent;
+    if ("agent" in execution.parent) execution.parent.pendingChildren.delete(execution);
+    agent.state = previousState;
+    try {
+      if (agent.identity) {
+        if (newAgent)
+          await this.store.removeChild(this.owner(agent), this.ownerParent(agent), agent.name);
+        else await this.saveAgent(agent);
+      }
+    } catch (error) {
+      this.notify(error);
     }
-    const parent = this.live.get(stored.parentAgentId);
-    if (!parent || parent.runId !== run.parentRunId || !parent.session) return;
-    parent.pendingReportIds.add(report.reportId);
-    parent.pendingChildRuns.delete(run.id);
-    parent.sdkSettled = false;
-    parent.phase = "executing";
-    const epoch = this.epoch;
-    const mountId = parent.mountId;
-    const status = this.delegationStatusFor(stored.parentAgentId);
-    const delivery = parent.session.sendCustomMessage(
-      {
-        customType: "subagent-report",
-        content: formatSubagentReport(report, status),
-        display: true,
-        details: deliveredReport(report, status),
-      },
-      { deliverAs: "steer", triggerTurn: true },
+    if (newAgent) {
+      (agent.parent?.children ?? execution.scope.children).delete(agent.name);
+      execution.scope.agents.delete(agent);
+      if (createdFile) await rm(createdFile, { force: true }).catch((error) => this.notify(error));
+    }
+    await this.releaseExecution(execution);
+    if ("agent" in execution.parent) this.maybeFinalize(execution.parent);
+  }
+  private owner(agent: Agent): SessionIdentity {
+    return agent.parent ? identity(agent.parent) : this.scope!.identity;
+  }
+  private ownerParent(agent: Agent): SessionIdentity | null {
+    return agent.parent
+      ? agent.parent.parent
+        ? identity(agent.parent.parent)
+        : this.scope!.identity
+      : null;
+  }
+  private ensureBranch(agent: Agent): Promise<void> {
+    const pending = this.branchInitializations.get(agent);
+    if (pending) return pending;
+    if (agent.hasChildren) return Promise.resolve();
+    const initialize = (async () => {
+      // Each publication is independently durable: empty owner, marker, then children.
+      // Siblings share this promise so no opening record can overtake the marker commit.
+      await this.store.ensureOwner(identity(agent), this.owner(agent));
+      await this.store.markHasChildren(this.owner(agent), this.ownerParent(agent), agent.name);
+      agent.hasChildren = true;
+    })();
+    this.branchInitializations.set(agent, initialize);
+    void initialize.then(
+      () => this.branchInitializations.delete(agent),
+      () => this.branchInitializations.delete(agent),
     );
-    run.delivery = "submitted";
-    await this.store.saveRun(run);
-    void delivery.then(
-      async () => {
-        if (!this.isCurrent(epoch, parent, mountId)) return;
-        parent.pendingReportIds.delete(report.reportId);
-        run.delivery = "recorded";
-        try {
-          await this.store?.saveRun(run);
-        } catch (error) {
-          this.notifyRuntimeError(error);
-        }
-        void this.maybeFinalize(parent);
-      },
-      (error) => {
-        if (this.isCurrent(epoch, parent, mountId)) void this.failRun(parent, error);
-      },
-    );
+    return initialize;
   }
-
-  // Keep the busy/budget checks and opening reservation in one synchronous section.
-  // A normal ask must not yield before it owns the logical agent and live slot.
-  private reserveNormalAsk(
-    caller: CallerBinding,
-    stored: StoredSubagent,
-  ): { live: LiveAgent; parentRunId: string | null; runId: string } {
-    if (this.live.has(stored.id)) {
-      throw new SubagentError(
-        "SUBAGENT_BUSY",
-        `${stored.name} still has an active delegation`,
-        stored.id,
-        { delegationStatus: this.delegationStatusFor(caller.agentId) },
-      );
-    }
-    if (this.live.size >= this.rootConfig.maxLiveAgents) {
-      throw new SubagentError(
-        "LIVE_AGENT_LIMIT",
-        `Maximum live subagents is ${this.rootConfig.maxLiveAgents}`,
-        undefined,
-        { delegationStatus: this.delegationStatusFor(caller.agentId) },
-      );
-    }
-    const parentRunId = this.captureParentRun(caller);
-    const runId = id("run");
-    const live = this.reserveLive(stored.id, stored.name, runId, caller.agentId);
-    this.reserveParentDependency(caller.agentId, runId);
-    return { live, parentRunId, runId };
-  }
-
-  private reserveLive(
-    agentId: string,
-    name: string,
-    runId: string,
-    parentAgentId: string | null,
-  ): LiveAgent {
-    const live: LiveAgent = {
-      id: agentId,
-      name,
-      parentAgentId,
-      runId,
-      mountId: id("mount"),
-      phase: "opening",
-      pendingChildRuns: new Set(),
-      pendingReportIds: new Set(),
-      runStartLeafId: null,
-      sdkSettled: false,
-      accepted: false,
-      finalizing: false,
-      progress: createSubagentProgressState(),
-    };
-    this.live.set(agentId, live);
-    return live;
-  }
-
-  private delegationStatusFor(parentAgentId: string | null): DelegationStatusSnapshot {
-    const liveAgents = [...this.live.values()];
-    const activeDirectSubagents = liveAgents
-      .filter((live) => live.parentAgentId === parentAgentId)
-      .map(({ id: agentId, name }) => ({ id: agentId, name }));
-    const directSubagents = [
-      ...liveAgents
-        .filter((live) => live.parentAgentId === parentAgentId)
-        .map(({ id, name }) => ({ id, name, state: "running" as const })),
-      ...[...this.agents.values()]
-        .filter((agent) => agent.parentAgentId === parentAgentId && !this.live.has(agent.id))
-        .map(({ id, name, interrupted }) => ({
-          id,
-          name,
-          state: interrupted ? ("interrupted" as const) : ("done" as const),
-        })),
-    ];
-    return createDelegationStatusSnapshot(
-      activeDirectSubagents,
-      liveAgents.length,
-      this.rootConfig.maxLiveAgents,
-      directSubagents,
+  private saveAgent(agent: Agent): Promise<void> {
+    return this.store.setChild(
+      this.owner(agent),
+      this.ownerParent(agent),
+      agent.name,
+      childRecord(agent),
     );
   }
-
-  private captureParentRun(caller: CallerBinding): string | null {
-    if (caller.agentId === null) return null;
-    const parent = this.live.get(caller.agentId);
-    if (!parent?.accepted || parent.finalizing) {
-      throw new SubagentError("DELEGATION_DISABLED", "Caller does not have an active run");
-    }
-    return parent.runId;
+  private saveAgentSync(agent: Agent): void {
+    this.store.setChildSync(
+      this.owner(agent),
+      this.ownerParent(agent),
+      agent.name,
+      childRecord(agent),
+    );
   }
-
-  private reserveParentDependency(parentAgentId: string | null, childRunId: string): void {
-    if (parentAgentId === null) return;
-    const parent = this.live.get(parentAgentId);
-    if (!parent) throw new SubagentError("DELEGATION_DISABLED", "Caller session is unavailable");
-    parent.pendingChildRuns.add(childRunId);
-  }
-
-  private async rollbackOpening(
-    agentId: string,
-    parentAgentId: string | null,
-    runId: string,
-    deleteIdentity: boolean,
-  ): Promise<void> {
-    const parent = parentAgentId ? this.live.get(parentAgentId) : undefined;
-    parent?.pendingChildRuns.delete(runId);
-    const live = this.live.get(agentId);
-    if (live?.session?.isStreaming) await live.session.abort().catch(() => undefined);
-    await this.disposeMount(agentId);
-    this.live.delete(agentId);
-    this.refreshProgressWidget();
-    this.runs.delete(runId);
-    if (deleteIdentity) {
-      this.agents.delete(agentId);
-      await this.store?.deleteAgent(agentId);
-    }
-  }
-
-  private async disposeMount(agentId: string): Promise<void> {
-    const live = this.live.get(agentId);
-    live?.unsubscribe?.();
-    if (live?.unsubscribe) live.unsubscribe = undefined;
-    const opened = this.opened.get(agentId);
-    this.opened.delete(agentId);
-    if (opened) await opened.dispose();
-  }
-
-  private getOwnedAgent(caller: CallerBinding, agentId: string): StoredSubagent {
-    const stored = this.agents.get(agentId);
-    if (!stored)
-      throw new SubagentError("SUBAGENT_NOT_FOUND", `Unknown subagent: ${agentId}`, agentId);
-    if (stored.parentAgentId !== caller.agentId) {
-      throw new SubagentError(
-        "SUBAGENT_NOT_OWNED",
-        `Subagent is not directly owned by caller`,
-        agentId,
-      );
-    }
-    return stored;
-  }
-
-  private resolveStoredModel(
-    stored: StoredSubagent,
-    ctx: ExtensionContext,
-  ): Model<Api> | undefined {
-    const model = this.modelRuntime?.getModel(stored.model.provider, stored.model.id);
-    if (model) return model;
-    if (ctx.model?.provider === stored.model.provider && ctx.model.id === stored.model.id) {
-      return ctx.model;
-    }
-    // A target-cwd extension may register this exact provider/model while the child opens.
-    // ChildSessionFactory performs the final identity and authentication check.
-    return undefined;
-  }
-
-  private acceptedResult(
-    stored: StoredSubagent,
-    runId: string,
-    status: "started" | "steered",
-    delegationStatus: DelegationStatusSnapshot,
-  ): AcceptedResult {
+  private acceptedResult(execution: Execution, status: "started" | "steered"): AcceptedResult {
     return {
       ok: true,
-      id: stored.id,
-      run_id: runId,
-      name: stored.name,
-      agent_type: stored.agentType,
-      cwd: stored.cwd,
+      name: execution.agent.name,
+      agent_type: execution.agent.roleSnapshot.id,
+      cwd: execution.agent.cwd!,
+      thinking: execution.opened!.actualThinking,
       status,
-      thinking: stored.thinking,
-      delegation_status: delegationStatus,
+      delegation_status: this.statusFor(execution.agent.parent),
     };
   }
-
-  private async buildChildDelegationContext(cwd: string): Promise<CallerBinding["delegation"]> {
-    const projectRoot = await findProjectRoot(cwd);
-    if (!(await this.resolveTrust(projectRoot))) {
-      throw new SubagentError(
-        "PROJECT_NOT_TRUSTED",
-        `Git project root must be trusted before pi-subagents can initialize: ${projectRoot}`,
-      );
-    }
-    if (!this.initializedProjectScopes.has(projectRoot)) {
-      await initializeProjectSubagents(projectRoot);
-      this.initializedProjectScopes.add(projectRoot);
-    }
-    return (
-      await buildDelegationContext(cwd, this.agentDir, {
-        initializeStorage: false,
-      })
-    ).context;
+  private statusFor(parent: Agent | null) {
+    const children = [...(parent?.children ?? this.scope!.children).values()];
+    const direct = children.map((agent) => ({
+      name: agent.name,
+      agentType: agent.roleSnapshot.id,
+      state: agent.currentExecution
+        ? ("running" as const)
+        : agent.state === "interrupted"
+          ? ("interrupted" as const)
+          : ("done" as const),
+    }));
+    return createDelegationStatusSnapshot(
+      direct.filter((agent) => agent.state === "running"),
+      this.scope!.executions.size,
+      this.rootConfig.maxLiveAgents,
+      direct,
+    );
   }
-
+  private refreshProgress(): void {
+    if (!this.scope || !this.host?.ctx.hasUI) return;
+    try {
+      const lines =
+        this.scope.closing || !this.scope.executions.size
+          ? undefined
+          : buildProgressWidgetLines(
+              [...this.scope.executions].map((execution) => ({
+                name: execution.agent.name,
+                progress: execution.progress,
+              })),
+            );
+      this.host.ctx.ui.setWidget("pi-subagents:progress", lines);
+    } catch (error) {
+      this.notify(error);
+    }
+  }
   private async resolveTrust(cwd: string): Promise<boolean> {
     const known = this.trustDecisions.get(cwd);
     if (known !== undefined) return known;
-    if (path.resolve(cwd) === path.resolve(this.host.ctx.cwd) && this.host.ctx.isProjectTrusted()) {
-      this.trustDecisions.set(cwd, true);
-      return true;
-    }
     const saved = new ProjectTrustStore(this.agentDir).get(cwd);
     if (saved !== null) {
       this.trustDecisions.set(cwd, saved);
@@ -974,80 +1150,80 @@ export class RootRuntime implements DelegationRuntimeApi {
       this.trustDecisions.set(cwd, true);
       return true;
     }
-    if (policy === "never" || !this.host.ctx.hasUI || !this.uiBroker) {
+    if (policy === "never" || !this.host.ctx.hasUI) {
       this.trustDecisions.set(cwd, false);
       return false;
     }
-    const projectRoot = await findProjectRoot(cwd);
     const trusted = await this.uiBroker.enqueue(`trust:${cwd}`, false, undefined, (options) =>
       this.host.ctx.ui.confirm(
         "Trust external project?",
-        `Allow this subagent session to read configuration from ${projectRoot} and load project resources for ${cwd}?`,
+        `Allow this subagent to load project configuration and resources for ${cwd}?`,
         options,
       ),
     );
     this.trustDecisions.set(cwd, trusted);
     return trusted;
   }
-
-  private notifyRuntimeError(error: unknown): void {
+  private notify(error: unknown): void {
     const failure = asSubagentError(error, "STORE_ERROR");
     try {
-      this.host.ctx.ui.notify(`pi-subagents: ${failure.code}: ${failure.message}`, "error");
+      this.host?.ctx.ui.notify(`pi-subagents: ${failure.code}: ${failure.message}`, "error");
     } catch {
-      // A failing diagnostic UI must not prevent runtime cleanup.
+      /* Diagnostic UI cannot prevent cleanup. */
     }
   }
-
-  private isCurrent(epoch: string, live: LiveAgent, mountId: string): boolean {
-    return (
-      !this.closing &&
-      this.epoch === epoch &&
-      this.live.get(live.id) === live &&
-      live.mountId === mountId
-    );
-  }
-
-  private assertReady(): void {
-    if (this.closing) throw new SubagentError("ROOT_CLOSING", "Root session is closing");
-    if (!this.initialized) {
-      throw new SubagentError("INVALID_CONFIG", "RootRuntime is not initialized");
+  private abortExecution(execution: Execution): Promise<void> {
+    let abort = this.abortTasks.get(execution);
+    if (!abort) {
+      abort = execution.session?.abort().catch((error) => this.notify(error)) ?? Promise.resolve();
+      this.abortTasks.set(execution, abort);
     }
+    return abort;
   }
-
-  async shutdown(): Promise<void> {
-    if (this.closing) return;
-    this.closing = true;
-    this.epoch = randomUUID();
-    if (!this.initialized) return;
+  private async interrupt(execution: Execution, descendants = true): Promise<void> {
+    // Signal this mount and descendants before waiting for any one abort to settle.
+    const abort = this.abortExecution(execution);
+    await Promise.all([
+      abort,
+      ...(descendants ? [...execution.pendingChildren].map((child) => this.interrupt(child)) : []),
+    ]);
+    execution.agent.state = execution.finalizing
+      ? "idle"
+      : execution.accepted
+        ? "interrupted"
+        : "idle";
+    if (execution.agent.identity)
+      await this.saveAgent(execution.agent).catch((error) => this.notify(error));
+    if ("agent" in execution.parent) execution.parent.pendingChildren.delete(execution);
+    await this.releaseExecution(execution);
+  }
+  shutdown(): Promise<void> {
+    if (this.shutdownPromise) return this.shutdownPromise;
+    const scope = this.scope;
+    if (!scope) return Promise.resolve();
+    scope.closing = true;
     this.uiBroker.shutdown();
-    const entries = [...this.live.values()];
-    await Promise.allSettled(entries.map((live) => live.session?.abort()));
-    for (const live of entries) {
-      const stored = this.agents.get(live.id);
-      const interruptedAt = now();
-      const run = this.runs.get(live.runId);
-      if (run && run.state !== "opening" && !run.completedAt) {
-        run.state = "completed";
-        run.completedAt = interruptedAt;
-        run.outcome = "interrupted";
-        run.result = run.result ?? "";
-        run.error = {
-          code: "INTERRUPTED",
-          message: "The root session ended before this run completed; it was not replayed.",
-        };
-        await this.store.saveRun(run).catch((error) => this.notifyRuntimeError(error));
-      }
-      if (stored?.activeRunId && run?.state !== "opening") {
-        stored.activeRunId = undefined;
-        stored.interrupted = true;
-        stored.updatedAt = interruptedAt;
-        await this.store.saveAgent(stored).catch((error) => this.notifyRuntimeError(error));
-      }
-      await this.disposeMount(live.id).catch((error) => this.notifyRuntimeError(error));
-    }
-    this.live.clear();
-    this.runs.clear();
-    await this.store.close().catch((error) => this.notifyRuntimeError(error));
+    this.refreshProgress();
+    // A suspended opening must not postpone cancellation of accepted siblings. Mounted
+    // openings get an abort signal too, but their task owns rollback/disposal until it returns.
+    for (const execution of scope.executions)
+      if (execution.session) void this.abortExecution(execution);
+    const acceptedCleanup = Promise.all(
+      [...scope.executions]
+        .filter((execution) => execution.accepted)
+        .map((execution) => this.interrupt(execution, false)),
+    );
+    this.shutdownPromise = (async () => {
+      await this.initialization?.catch((error) => this.notify(error));
+      await Promise.all([acceptedCleanup, Promise.allSettled([...(scope.openingTasks ?? [])])]);
+      await Promise.all(
+        [...scope.executions]
+          .filter((execution) => execution.agent.currentExecution === execution)
+          .map((execution) => this.interrupt(execution, false)),
+      );
+      scope.deliveries.clear();
+      await this.store.close();
+    })();
+    return this.shutdownPromise;
   }
 }
