@@ -37,7 +37,10 @@ export interface InboundMessage {
   senderId: string;
   messageId: string;
   contextToken?: string;
+  /** Original text used for command and UI routing. */
   text?: string;
+  /** Agent-only text with voice transcript notes; never used for control parsing. */
+  promptText?: string;
   attachments: InboundAttachment[];
   /** Media items whose download/decrypt failed; injected as a prompt note. */
   mediaFailures?: MediaFailure[];

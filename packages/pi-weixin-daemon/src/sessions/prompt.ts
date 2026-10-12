@@ -28,7 +28,7 @@ function contextNote(a: InboundAttachment): string {
  * failed media note, and an optional "-- from weixin <name>" sender marker.
  */
 export function buildPromptInput(msg: InboundMessage, senderLabel?: string): HostPromptInput {
-  const parts: string[] = [msg.text ?? ""];
+  const parts: string[] = [msg.promptText ?? msg.text ?? ""];
   for (const a of msg.attachments) {
     if (a.kind === "image") continue; // passed as images
     parts.push(contextNote(a));

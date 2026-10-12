@@ -165,7 +165,15 @@ export class ProjectController {
         return;
       }
 
-      if (routed.kind === "prompt") msg = { ...msg, text: routed.text };
+      if (routed.kind === "prompt") {
+        msg = {
+          ...msg,
+          text: routed.text,
+          // The raw-text classifier already recognized /p:; strip the same prefix
+          // from the Agent-only variant without parsing annotated control input.
+          promptText: msg.promptText?.trim().slice(3),
+        };
+      }
 
       // ③ Notify other project participants when a sender speaks (ordinary messages only).
       await this.notifyOthers(msg).catch((err: unknown) =>
