@@ -1,330 +1,124 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import type { Api, Model } from "@earendil-works/pi-ai";
-import type {
-  AgentSession,
-  AgentSessionEvent,
-  ExtensionContext,
-  SessionManager,
-} from "@earendil-works/pi-coding-agent";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { OpenedChild } from "../../src/child-session.js";
-import { initializeProjectSubagents } from "../../src/project-storage.js";
-import { RootRuntime } from "../../src/runtime.js";
-import type {
-  AgentDefinitionSnapshot,
-  CallerBinding,
-  DelegationStatusSnapshot,
-  StoredSubagent,
-  SubagentReport,
-  SubagentsConfig,
-} from "../../src/types.js";
-
-const temporaryDirectories: string[] = [];
-const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
-
-afterEach(async () => {
-  if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
-  else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
-  await Promise.all(
-    temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true })),
-  );
-});
-
-interface FakeChild {
-  session: AgentSession;
-  sessionManager: SessionManager;
-  listener?: (event: AgentSessionEvent) => void;
-  streaming: boolean;
-  branch: unknown[];
-  customMessages: Array<{
-    customType: string;
-    content: string;
-    details?: unknown;
-  }>;
-}
-
-function agentDefinition(): AgentDefinitionSnapshot {
-  return {
-    id: "general",
-    description: "General",
-    prompt: "Do the task.",
-    source: "/agents/general.md",
-    contentHash: "hash",
-  };
-}
-
-function complete(child: FakeChild, text: string): void {
-  child.branch.push({
-    id: `entry-${text}`,
-    type: "message",
-    message: {
-      role: "assistant",
-      content: [{ type: "text", text }],
-      stopReason: "stop",
-      timestamp: Date.now(),
-    },
-  });
-  child.streaming = false;
-  child.listener?.({ type: "agent_settled" });
-}
+import { describe, expect, it } from "vitest";
+import { createHarness } from "../helpers/runtime-harness.js";
 
 describe("runtime progress widget", () => {
-  it("tracks active widgets and routes filtered nested report snapshots", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "pi-subagents-progress-"));
-    temporaryDirectories.push(root);
-    const cwd = path.join(root, "project");
-    const rootSessionFile = path.join(root, "root.jsonl");
-    const agentDir = path.join(root, "agent");
-    await mkdir(cwd);
-    await writeFile(rootSessionFile, "");
-    process.env.PI_CODING_AGENT_DIR = agentDir;
-
-    const widgetCalls: Array<string[] | undefined> = [];
-    const reports: SubagentReport[] = [];
-    const reportStatuses: DelegationStatusSnapshot[] = [];
-    const runtime = new RootRuntime(path.join(root, "extension.js"));
-    const storage = await initializeProjectSubagents(cwd);
-    const config: SubagentsConfig = {
-      externalDirectories: [],
-      maxDepth: 4,
-      maxLiveAgents: 8,
-      uiTimeoutMs: 100,
-      projectRoot: cwd,
-      storageDirectory: storage.directory,
-    };
-    await runtime.initialize(
-      {
-        rootSessionId: "root-session",
-        rootSessionFile,
-        ctx: {
-          cwd,
-          hasUI: true,
-          ui: {
-            setWidget: (_key: string, lines: string[] | undefined) => widgetCalls.push(lines),
-          },
-          isProjectTrusted: () => true,
-        } as unknown as ExtensionContext,
-        sendReport: (report, status) => {
-          reports.push(report);
-          reportStatuses.push(status);
-        },
-      },
-      config,
+  it("tracks independent active progress and saved-role report snapshots then clears the widget", async () => {
+    const h = await createHarness({ hasUI: true });
+    await h.runtime.createSubagent(h.caller, { name: "worker", prompt: "work" }, h.ctx);
+    await h.runtime.createSubagent(
+      h.caller,
+      { name: "reviewer", prompt: "review", agent_type: "explore" },
+      h.ctx,
     );
-
-    const children: FakeChild[] = [];
-    let failNextOpen = false;
-    const fakeFactory = {
-      createSessionManager: async (
-        _cwd: string,
-        sessionsDirectory: string,
-      ): Promise<SessionManager> => {
-        const index = children.length + 1;
-        const sessionFile = path.join(sessionsDirectory, `child-${index}.jsonl`);
-        await writeFile(sessionFile, "{}\n");
-        const child = {
-          streaming: true,
-          branch: [],
-          customMessages: [],
-        } as unknown as FakeChild;
-        const sessionManager = {
-          getSessionFile: () => sessionFile,
-          getSessionId: () => `child-session-${index}`,
-          getLeafId: () => null,
-          getBranch: () => child.branch,
-        } as unknown as SessionManager;
-        const session = {
-          get isStreaming() {
-            return child.streaming;
-          },
-          sessionManager,
-          prompt: async (
-            _prompt: string,
-            options: { preflightResult?: (success: boolean) => void },
-          ) => {
-            options.preflightResult?.(true);
-          },
-          subscribe: (listener: (event: AgentSessionEvent) => void) => {
-            child.listener = listener;
-            return () => {
-              child.listener = undefined;
-            };
-          },
-          sendCustomMessage: async (message: FakeChild["customMessages"][number]) => {
-            child.customMessages.push(message);
-          },
-          abort: async () => undefined,
-          dispose: () => undefined,
-        } as unknown as AgentSession;
-        child.session = session;
-        child.sessionManager = sessionManager;
-        children.push(child);
-        return sessionManager;
-      },
-      open: async (options: { stored: StoredSubagent }): Promise<OpenedChild> => {
-        if (failNextOpen) {
-          failNextOpen = false;
-          throw new Error("open failed");
-        }
-        const child = children.find(
-          ({ sessionManager }) => sessionManager.getSessionId() === options.stored.sessionId,
-        );
-        if (!child) throw new Error("Missing fake child");
-        return {
-          session: child.session,
-          actualThinking: options.stored.thinking,
-          ui: {} as OpenedChild["ui"],
-          dispose: async () => undefined,
-        };
-      },
-    };
-    Reflect.set(runtime, "childFactory", fakeFactory);
-    Reflect.set(runtime, "resolveTrust", async () => true);
-
-    const definition = agentDefinition();
-    const caller: CallerBinding = {
-      agentId: null,
-      depth: 0,
-      ancestorCwds: [cwd],
-      delegation: {
-        cwd,
-        projectRoot: cwd,
-        externalDirectories: [],
-        agentTypes: new Map([[definition.id, definition]]),
-      },
-    };
-    const model = { provider: "test", id: "model", name: "Test Model" } as Model<Api>;
-    const context = { model, thinkingLevel: "off" } as ExtensionContext;
-
-    await runtime.createSubagent(caller, { name: "worker", prompt: "work" }, context, undefined);
-    await runtime.createSubagent(
-      caller,
-      { name: "reviewer", prompt: "review" },
-      context,
-      undefined,
-    );
-    expect(widgetCalls.at(-1)).toEqual(["worker[0]：starting", "reviewer[0]：starting"]);
-
-    children[0]?.listener?.({ type: "turn_start" });
-    children[0]?.listener?.({
+    expect(h.widgets.at(-1)).toEqual(["worker[0]：starting", "reviewer[0]：starting"]);
+    const worker = h.child("worker");
+    const reviewer = h.child("reviewer");
+    worker.emit({ type: "turn_start" });
+    worker.emit({
       type: "tool_execution_start",
       toolCallId: "tool-worker",
       toolName: "bash",
       args: { command: "pnpm test" },
     });
-    children[1]?.listener?.({ type: "turn_start" });
-    expect(widgetCalls.at(-1)).toEqual(["worker[1]：bash pnpm test", "reviewer[1]：thinking"]);
-
-    complete(children[0]!, "worker done");
-    await vi.waitFor(() => {
-      expect(widgetCalls.at(-1)).toEqual(["reviewer[1]：thinking"]);
-      expect(reportStatuses[0]).toEqual({
-        activeDirectSubagents: [{ id: expect.any(String), name: "reviewer" }],
-        activeDirectSubagentCount: 1,
-        directSubagents: [
-          { id: expect.any(String), name: "reviewer", state: "running" },
-          { id: expect.any(String), name: "worker", state: "done" },
-        ],
-        directSubagentCount: 2,
-        interruptedDirectSubagentCount: 0,
-        liveAgents: 1,
-        maxLiveAgents: 8,
-      });
+    reviewer.emit({ type: "turn_start" });
+    expect(h.widgets.at(-1)).toEqual(["worker[1]：bash pnpm test", "reviewer[1]：thinking"]);
+    worker.complete("worker done");
+    await h.flush();
+    expect(h.widgets.at(-1)).toEqual(["reviewer[1]：thinking"]);
+    expect(h.reports[0]!.status).toMatchObject({
+      activeDirectSubagents: [{ name: "reviewer", agentType: "explore" }],
+      activeDirectSubagentCount: 1,
+      liveAgents: 1,
+      directSubagentCount: 2,
     });
-    const staleListener = children[1]!.listener;
-    complete(children[1]!, "reviewer done");
-    await vi.waitFor(() => {
-      expect(widgetCalls.at(-1)).toBeUndefined();
-      expect(reports).toHaveLength(2);
-      expect(reportStatuses[1]).toEqual({
-        activeDirectSubagents: [],
-        activeDirectSubagentCount: 0,
-        directSubagents: [
-          { id: expect.any(String), name: "worker", state: "done" },
-          { id: expect.any(String), name: "reviewer", state: "done" },
-        ],
-        directSubagentCount: 2,
-        interruptedDirectSubagentCount: 0,
-        liveAgents: 0,
-        maxLiveAgents: 8,
-      });
+    expect(h.reports[0]!.status.directSubagents).toEqual([
+      { name: "reviewer", agentType: "explore", state: "running" },
+      { name: "worker", agentType: "general", state: "done" },
+    ]);
+    expect(h.reports[0]!.report.sessionFile).toBe(worker.manager.getSessionFile());
+    h.caller.delegation.agentTypes.set("explore", {
+      ...h.caller.delegation.agentTypes.get("general")!,
+      id: "replacement",
     });
-
-    staleListener?.({ type: "turn_start" });
-    expect(widgetCalls.at(-1)).toBeUndefined();
-
-    const parent = await runtime.createSubagent(
-      caller,
-      { name: "parent", prompt: "coordinate" },
-      context,
-      undefined,
-    );
-    const sibling = await runtime.createSubagent(
-      caller,
-      { name: "root-sibling", prompt: "independent" },
-      context,
-      undefined,
-    );
-    const childCaller: CallerBinding = { ...caller, agentId: parent.id, depth: 1 };
-    const nestedWorker = await runtime.createSubagent(
-      childCaller,
-      { name: "nested-worker", prompt: "work" },
-      context,
-      undefined,
-    );
-    const nestedReviewer = await runtime.createSubagent(
-      childCaller,
-      { name: "nested-reviewer", prompt: "review" },
-      context,
-      undefined,
-    );
-
-    complete(children[4]!, "nested worker done");
-    await vi.waitFor(() => {
-      expect(children[2]!.customMessages).toHaveLength(1);
+    reviewer.complete("reviewer done");
+    await h.flush();
+    expect(h.widgets.at(-1)).toBeUndefined();
+    expect(h.reports).toHaveLength(2);
+    expect(h.reports[1]!.status).toMatchObject({
+      activeDirectSubagents: [],
+      directSubagentCount: 2,
+      liveAgents: 0,
     });
-    const nestedMessage = children[2]!.customMessages[0]!;
-    expect(nestedMessage.customType).toBe("subagent-report");
-    expect(nestedMessage.content).toContain("**1 running, 1 done; shared usage: 3/8.**");
-    expect(nestedMessage.content).toContain(
-      `- nested-reviewer (\`${nestedReviewer.id}\`): running`,
-    );
-    expect(nestedMessage.content).toContain(`- nested-worker (\`${nestedWorker.id}\`): done`);
-    expect(nestedMessage.content).toContain(
-      "use `ask_subagent` to give a new task to any idle subagent listed above",
-    );
-    expect(nestedMessage.content.split("**Follow-up:**")[1]).not.toContain(nestedWorker.id);
-    expect(nestedMessage.content).not.toContain(sibling.id);
-    expect(nestedMessage.content).not.toContain(nestedWorker.run_id);
-    expect(nestedMessage.details).toMatchObject({
-      runId: nestedWorker.run_id,
-      delegation_status: {
-        activeDirectSubagents: [{ id: nestedReviewer.id, name: "nested-reviewer" }],
-        activeDirectSubagentCount: 1,
-        directSubagents: [
-          { id: nestedReviewer.id, name: "nested-reviewer", state: "running" },
-          { id: nestedWorker.id, name: "nested-worker", state: "done" },
-        ],
-        directSubagentCount: 2,
-        liveAgents: 3,
-        maxLiveAgents: 8,
-      },
+    expect(h.reports[1]!.status.directSubagents).toContainEqual({
+      name: "reviewer",
+      agentType: "explore",
+      state: "done",
     });
+    reviewer.capturedListener?.({ type: "turn_start" });
+    expect(h.widgets.at(-1)).toBeUndefined();
+  });
 
-    const widgetBeforeFailedOpen = widgetCalls.at(-1);
-    failNextOpen = true;
+  it("rejects E1's stale callbacks without changing E2's progress or releasing its reservation", async () => {
+    const h = await createHarness({ hasUI: true });
+    await h.runtime.createSubagent(h.caller, { name: "worker", prompt: "first" }, h.ctx);
+    const first = h.child("worker");
+    first.emit({ type: "turn_start" });
+    first.complete("first done");
+    await h.flush();
+    await h.runtime.askSubagent(h.caller, { name: "worker", prompt: "second" }, h.ctx);
+    const second = h.child("worker");
+    const execution = h.agent("worker").currentExecution;
+    expect(h.widgets.at(-1)).toEqual(["worker[0]：starting"]);
+    second.emit({ type: "turn_start" });
+    const count = h.widgets.length;
+    first.capturedListener?.({ type: "turn_start" });
+    first.capturedListener?.({
+      type: "tool_execution_start",
+      toolCallId: "stale",
+      toolName: "bash",
+      args: { command: "stale output" },
+    });
+    first.capturedListener?.({ type: "agent_settled" });
+    await h.flush();
+    expect(h.widgets).toHaveLength(count);
+    expect(h.widgets.at(-1)).toEqual(["worker[1]：thinking"]);
+    expect(h.agent("worker").currentExecution).toBe(execution);
+    expect(h.scope.executions.size).toBe(1);
+    expect(second.disposals).toBe(0);
+    expect(h.reports).toHaveLength(1);
+    second.complete("second done");
+    await h.flush();
+    expect(h.widgets.at(-1)).toBeUndefined();
+  });
+
+  it("rolls back failed opening progress and shuts down all descendants idempotently", async () => {
+    const h = await createHarness({ hasUI: true });
+    await h.runtime.createSubagent(
+      h.caller,
+      { name: "parent", prompt: "coordinate", cwd: h.external },
+      h.ctx,
+    );
+    await h.runtime.createSubagent(
+      h.nestedCaller("parent"),
+      { name: "nested", prompt: "work" },
+      h.ctx,
+    );
+    const before = h.widgets.at(-1);
+    h.failNextOpen();
     await expect(
-      runtime.createSubagent(
-        caller,
-        { name: "failed", prompt: "fail while opening" },
-        context,
-        undefined,
-      ),
+      h.runtime.createSubagent(h.caller, { name: "failed", prompt: "fail" }, h.ctx),
     ).rejects.toThrow("open failed");
-    expect(widgetCalls.at(-1)).toEqual(widgetBeforeFailedOpen);
-
-    await runtime.shutdown();
+    expect(h.widgets.at(-1)).toEqual(before);
+    const callbacks = h.children.map((child) => child.capturedListener);
+    const shutdown = h.runtime.shutdown();
+    expect(h.runtime.shutdown()).toBe(shutdown);
+    await shutdown;
+    expect(h.widgets.at(-1)).toBeUndefined();
+    expect(h.scope.executions.size).toBe(0);
+    expect(h.scope.deliveries.size).toBe(0);
+    expect(h.children.every((child) => child.disposals === 1 && child.aborts === 1)).toBe(true);
+    for (const callback of callbacks) callback?.({ type: "turn_start" });
+    expect(h.widgets.at(-1)).toBeUndefined();
+    expect(h.reports).toHaveLength(0);
   });
 });

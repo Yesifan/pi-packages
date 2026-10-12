@@ -1,11 +1,12 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { ModelRuntime, type SessionManager } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadAgentTypeRegistry, resolveAgentDefinition } from "../../src/agents.js";
 import { ChildSessionFactory, type OpenedChild } from "../../src/child-session.js";
 import type { DelegationRuntimeApi } from "../../src/tools.js";
-import type { AgentDefinitionSnapshot, StoredSubagent } from "../../src/types.js";
+import type { Agent, AgentDefinitionSnapshot } from "../../src/types.js";
 import { RootUiBroker } from "../../src/ui.js";
 
 const directories: string[] = [];
@@ -25,17 +26,36 @@ async function harness() {
   const cwd = path.join(root, "project");
   const agentDir = path.join(root, "agent");
   const extensions = path.join(cwd, ".pi", "extensions");
-  const sessions = path.join(root, "sessions");
-  await Promise.all([mkdir(extensions, { recursive: true }), mkdir(agentDir), mkdir(sessions)]);
+  await Promise.all([mkdir(extensions, { recursive: true }), mkdir(agentDir)]);
   process.env.PI_CODING_AGENT_DIR = agentDir;
   await writeFile(
-    path.join(agentDir, "auth.json"),
-    JSON.stringify({ anthropic: { type: "api_key", key: "test-only" } }),
+    path.join(agentDir, "models.json"),
+    JSON.stringify({
+      providers: {
+        "policy-test": {
+          api: "openai-completions",
+          apiKey: "local-test-only",
+          baseUrl: "https://unused.invalid",
+          models: [
+            {
+              id: "policy-model",
+              name: "Policy fixture",
+              reasoning: true,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 100000,
+              maxTokens: 1000,
+            },
+          ],
+        },
+      },
+    }),
   );
   await writeFile(
     path.join(cwd, ".pi", "settings.json"),
     JSON.stringify({
       defaultTools: ["read", "bash", "edit", "write", "grep", "find", "ls", "powershell"],
+      cacheWarming: "off",
     }),
   );
   await writeFile(
@@ -68,35 +88,38 @@ export default function(pi) {
     broker,
     async () => true,
   );
-  const manager = await factory.createSessionManager(cwd, sessions);
+  const manager = await factory.createSessionManager(cwd);
   const registry = await loadAgentTypeRegistry(agentDir, cwd);
+  const modelRuntime = await ModelRuntime.create({
+    authPath: path.join(agentDir, "auth.json"),
+    modelsPath: path.join(agentDir, "models.json"),
+  });
+  const model = modelRuntime.getModel("policy-test", "policy-model")!;
   const open = async (
     snapshot: AgentDefinitionSnapshot,
     sessionManager = manager,
     canDelegate = false,
+    restoring = false,
   ) => {
-    const timestamp = new Date().toISOString();
-    const stored: StoredSubagent = {
-      schemaVersion: 2,
-      id: "sa_policy",
-      rootSessionId: "root",
-      parentAgentId: null,
+    const callerAgent: Agent = {
       name: "policy",
+      identity: {
+        sessionId: sessionManager.getSessionId(),
+        sessionFile: sessionManager.getSessionFile()!,
+      },
+      roleSnapshot: snapshot,
+      parent: null,
+      children: new Map(),
+      state: "opening",
       cwd,
-      ancestorCwds: [cwd],
-      agentType: snapshot.id,
-      agentDefinitionSnapshot: snapshot,
-      depth: 1,
-      model: { provider: "anthropic", id: "claude-sonnet-4-5" },
-      thinking: "off",
-      sessionId: manager.getSessionId(),
-      sessionPath: path.basename(manager.getSessionFile()!),
-      createdAt: timestamp,
-      updatedAt: timestamp,
     };
     const child = await factory.open({
-      stored,
-      runId: "run_policy",
+      name: "policy",
+      roleSnapshot: snapshot,
+      cwd,
+      depth: 1,
+      ancestorCwds: [cwd],
+      callerAgent,
       runtime: { getMaxLiveAgents: () => 8 } as DelegationRuntimeApi,
       canDelegate,
       ...(canDelegate
@@ -110,12 +133,35 @@ export default function(pi) {
           }
         : {}),
       sessionManager,
-      thinking: "off",
+      ...(restoring ? { restoring: true } : { model, thinking: "off" }),
     });
     children.push(child);
-    return { child, stored };
+    return { child };
   };
   return { cwd, agentDir, extensions, factory, manager, registry, open };
+}
+
+function seedHistory(manager: SessionManager) {
+  manager.appendModelChange("policy-test", "policy-model");
+  manager.appendThinkingLevelChange("off");
+  manager.appendMessage({ role: "user", content: "original task", timestamp: Date.now() });
+  manager.appendMessage({
+    role: "assistant",
+    content: [{ type: "text", text: "original reply" }],
+    api: "openai-completions",
+    provider: "policy-test",
+    model: "policy-model",
+    stopReason: "stop",
+    timestamp: Date.now(),
+    usage: {
+      input: 1,
+      output: 1,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 2,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+  });
 }
 
 function expectExcluded(child: OpenedChild, names: string[]) {
@@ -183,7 +229,10 @@ describe("child role tool policy with the real SDK", () => {
       source: "/old/agents/explore.md",
       contentHash: "saved-hash",
     };
-    const { child } = await h.open(saved);
+    seedHistory(h.manager);
+    const before = h.manager.getBranch();
+    const { child } = await h.open(saved, h.manager, false, true);
+    expect(h.manager.getBranch()).toEqual(before);
     expect(
       child.session
         .getAllTools()
@@ -193,6 +242,20 @@ describe("child role tool policy with the real SDK", () => {
     expectExcluded(child, ["bash", "edit", "write", "search_web"]);
     expect(child.session.systemPrompt).toContain(saved.prompt);
     expect(saved).not.toHaveProperty("disallowedTools");
+  });
+
+  it("rejects header-only restoration rather than silently choosing a default model", async () => {
+    const h = await harness();
+    const restored = await h.factory.openSessionManager({
+      sessionId: h.manager.getSessionId(),
+      sessionFile: h.manager.getSessionFile()!,
+    });
+    await expect(
+      h.open(resolveAgentDefinition(h.registry), restored, false, true),
+    ).rejects.toMatchObject({
+      code: "SESSION_HISTORY_UNAVAILABLE",
+      message: "Child history has no restorable conversation context",
+    });
   });
 
   it("independently excludes ask_subagent on a delegation-capable child", async () => {
@@ -239,8 +302,8 @@ describe("child role tool policy with the real SDK", () => {
       ...resolveAgentDefinition(h.registry),
       disallowedTools: ["blocked_extension", "late_blocked"],
     };
-    const { child, stored } = await h.open(snapshot);
-    h.manager.appendMessage({ role: "user", content: "original task", timestamp: Date.now() });
+    const { child } = await h.open(snapshot);
+    seedHistory(h.manager);
     await child.dispose();
     children.splice(children.indexOf(child), 1);
     await mkdir(path.join(h.cwd, ".pi", "agents"), { recursive: true });
@@ -252,7 +315,10 @@ describe("child role tool policy with the real SDK", () => {
       path.join(h.extensions, "current.js"),
       `export default function(pi) { pi.registerTool({ name: "current_tool", label: "current", description: "current", parameters: { type: "object", properties: {} }, execute: async () => ({ content: [], details: {} }) }); }`,
     );
-    const restored = h.factory.openSessionManager(stored, h.manager.getSessionFile()!);
+    const restored = await h.factory.openSessionManager({
+      sessionId: h.manager.getSessionId(),
+      sessionFile: h.manager.getSessionFile()!,
+    });
     const before = restored.getBranch();
     expect(before).toEqual(
       expect.arrayContaining([
@@ -262,7 +328,11 @@ describe("child role tool policy with the real SDK", () => {
         }),
       ]),
     );
-    const { child: remounted } = await h.open(snapshot, restored);
+    const { child: remounted } = await h.open(snapshot, restored, false, true);
+    expect(remounted.session.sessionManager.getSessionId()).toBe(h.manager.getSessionId());
+    expect(remounted.session.model?.provider).toBe("policy-test");
+    expect(remounted.session.model?.id).toBe("policy-model");
+    expect(remounted.actualThinking).toBe("off");
     expectExcluded(remounted, snapshot.disallowedTools);
     expect(remounted.session.getAllTools().map((tool) => tool.name)).toContain("current_tool");
     expect(remounted.session.systemPrompt).toContain(snapshot.prompt);

@@ -1,21 +1,11 @@
 import type { AgentSession, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { OpenedChild } from "./child-session.js";
 import type { SubagentProgressState } from "./progress.js";
 
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
-
 export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
-
-/**
- * Thinking levels accepted from users: the `subagent` tool parameter and
- * `agents/*.md` frontmatter.
- *
- * Stored role snapshots and inherited parent thinking may still carry any
- * `ThinkingLevel`, so restoring existing subagents needs no migration.
- */
 export const SUBAGENT_THINKING_LEVELS = ["off", "low", "medium", "high", "max"] as const;
-
 export type SubagentThinkingLevel = (typeof SUBAGENT_THINKING_LEVELS)[number];
-
 export interface AgentDefinitionSnapshot {
   id: string;
   description?: string;
@@ -26,91 +16,51 @@ export interface AgentDefinitionSnapshot {
   source: string;
   contentHash: string;
 }
-
 export type AgentTypeRegistry = Map<string, AgentDefinitionSnapshot>;
-
 export interface SubagentsConfig {
   externalDirectories: string[];
   maxDepth: number;
   maxLiveAgents: number;
   uiTimeoutMs: number;
   projectRoot: string;
-  storageDirectory: string;
 }
-
 export interface DelegationContext {
   cwd: string;
   agentTypes: AgentTypeRegistry;
   externalDirectories: string[];
   projectRoot: string;
 }
-
-export interface ModelIdentity {
-  provider: string;
-  id: string;
-}
-
-export type RunOutcome = "completed" | "failed" | "aborted" | "interrupted" | "incomplete";
-export type DeliveryState = "pending" | "submitted" | "recorded";
-
-export interface StoredRun {
-  id: string;
-  agentId: string;
-  parentRunId: string | null;
-  state: "opening" | "accepted" | "completed";
-  acceptedAt?: string;
-  completedAt?: string;
-  outcome?: RunOutcome;
-  result?: string;
-  error?: { code: string; message: string };
-  reportId?: string;
-  delivery?: DeliveryState;
-}
-
-export interface StoredSubagent {
-  schemaVersion: 2;
-  id: string;
-  rootSessionId: string;
-  parentAgentId: string | null;
-  name: string;
-  cwd: string;
-  ancestorCwds: string[];
-  agentType: string;
-  agentDefinitionSnapshot: AgentDefinitionSnapshot;
-  depth: number;
-  model: ModelIdentity;
-  thinking: ThinkingLevel;
+export interface SessionIdentity {
   sessionId: string;
-  sessionPath: string;
-  lastRunId?: string;
-  activeRunId?: string;
-  interrupted?: boolean;
-  createdAt: string;
-  updatedAt: string;
+  sessionFile: string;
 }
-
-export interface SubagentReport {
+export type ChildState = "opening" | "running" | "idle" | "interrupted";
+export interface ChildRecord extends SessionIdentity {
+  roleSnapshot: AgentDefinitionSnapshot;
+  state: ChildState;
+  hasChildren?: true;
+}
+export interface ParentSessionRecord {
   schemaVersion: 1;
-  reportId: string;
-  rootSessionId: string;
-  agentId: string;
-  runId: string;
-  parentAgentId: string | null;
-  parentRunId: string | null;
+  root: SessionIdentity;
+  owner: SessionIdentity;
+  parent: SessionIdentity | null;
+  children: Record<string, ChildRecord>;
+}
+export type RunOutcome = "completed" | "failed" | "aborted" | "interrupted" | "incomplete";
+export interface SubagentReport {
   name: string;
   agentType: string;
   cwd: string;
   outcome: RunOutcome;
   result: string;
   error?: { code: string; message: string };
-  completedAt: string;
+  sessionFile?: string;
 }
-
 export interface ActiveSubagentSummary {
-  id: string;
   name: string;
+  agentType: string;
 }
-
 export interface DelegationStatusSnapshot {
   activeDirectSubagents: ActiveSubagentSummary[];
   activeDirectSubagentCount: number;
@@ -120,11 +70,8 @@ export interface DelegationStatusSnapshot {
   liveAgents: number;
   maxLiveAgents: number;
 }
-
 export interface AcceptedResult {
   ok: true;
-  id: string;
-  run_id: string;
   name: string;
   agent_type: string;
   cwd: string;
@@ -132,50 +79,76 @@ export interface AcceptedResult {
   thinking: ThinkingLevel;
   delegation_status: DelegationStatusSnapshot;
 }
-
 export interface ErrorResult {
   ok: false;
-  error: {
-    code: string;
-    message: string;
-    id?: string;
-  };
+  error: { code: string; message: string };
   delegation_status?: DelegationStatusSnapshot;
 }
-
 export interface CallerBinding {
-  agentId: string | null;
+  agent: Agent | null;
+  execution?: Execution;
   depth: number;
   ancestorCwds: string[];
   delegation: DelegationContext;
 }
-
 export interface DeliveredSubagentReport extends SubagentReport {
   delegation_status: DelegationStatusSnapshot;
 }
-
 export interface RootHostBinding {
   rootSessionId: string;
   rootSessionFile: string;
   ctx: ExtensionContext;
   sendReport(report: SubagentReport, status: DelegationStatusSnapshot): void;
 }
-
-export interface LiveAgent {
-  id: string;
+export interface RootScope {
+  identity: SessionIdentity;
+  closing: boolean;
+  children: Map<string, Agent>;
+  agents: Set<Agent>;
+  executions: Set<Execution>;
+  openingTasks?: Set<Promise<unknown>>;
+  deliveries: Set<ReportDelivery>;
+}
+export interface Agent {
   name: string;
-  parentAgentId: string | null;
-  runId: string;
-  mountId: string;
-  phase: "opening" | "executing" | "idle" | "closing";
+  identity?: SessionIdentity;
+  roleSnapshot: AgentDefinitionSnapshot;
+  parent: Agent | null;
+  children: Map<string, Agent>;
+  state: ChildState;
+  hasChildren?: true;
+  cwd?: string;
+  currentExecution?: Execution;
+}
+export interface Execution {
+  scope: RootScope;
+  agent: Agent;
+  parent: Execution | RootScope;
+  phase: "opening" | "executing" | "waiting" | "closing" | "closed";
   session?: AgentSession;
-  delegationContext?: DelegationContext;
-  pendingChildRuns: Set<string>;
-  pendingReportIds: Set<string>;
-  runStartLeafId: string | null;
-  sdkSettled: boolean;
-  accepted: boolean;
-  finalizing: boolean;
-  progress: SubagentProgressState;
+  opened?: OpenedChild;
   unsubscribe?: () => void;
+  release?: Promise<void>;
+  pendingChildren: Set<Execution>;
+  pendingReports: Set<ReportDelivery>;
+  reportReceipts?: Set<string>;
+  finalizing: boolean;
+  reportSubmitted: boolean;
+  accepted: boolean;
+  sdkSettled: boolean;
+  startLeafId: string | null;
+  sourceEntryId?: string;
+  failure?: { code: string; message: string };
+  progress: SubagentProgressState;
+}
+export interface ReportDelivery {
+  source: Execution;
+  target: Execution | RootScope;
+  report: SubagentReport;
+  sourceEntryId?: string;
+  submitted: boolean;
+  observed: boolean;
+  processed: boolean;
+  recordedEntryId?: string;
+  receiptBoundary?: string | null;
 }

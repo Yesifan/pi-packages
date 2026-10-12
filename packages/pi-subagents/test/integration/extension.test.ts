@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import {
+  type AgentSession,
   createAgentSession,
   DefaultResourceLoader,
   ProjectTrustStore,
@@ -25,6 +26,21 @@ afterEach(async () => {
     temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true })),
   );
 });
+
+async function expectTrustFailure(session: AgentSession, message: RegExp) {
+  for (const name of ["subagent", "ask_subagent"]) {
+    const tool = session.agent.state.tools.find((candidate) => candidate.name === name);
+    expect(tool).toBeDefined();
+    const result = await tool!.execute("trust-check", {
+      name: "blocked",
+      prompt: "Must not load any child resources",
+    });
+    expect(result.details).toMatchObject({
+      ok: false,
+      error: { code: "PROJECT_NOT_TRUSTED", message: expect.stringMatching(message) },
+    });
+  }
+}
 
 describe("Pi extension integration", () => {
   it("retains child UI methods through the real SDK context wrapper", async () => {
@@ -129,6 +145,14 @@ describe("Pi extension integration", () => {
       expect(subagent?.description).toContain("configured shared limit is 8 live subagents");
       expect(subagent?.description).toContain("same assistant turn");
       expect(ask?.description).toContain("not a status or result-polling tool");
+      expect(ask?.parameters).toHaveProperty("required", expect.arrayContaining(["name"]));
+      expect(ask?.parameters).not.toHaveProperty("properties.id");
+      expect((await stat(path.join(agentDir, "subagents", "sessions"))).isDirectory()).toBe(true);
+      expect((await stat(path.join(agentDir, "subagents", "locks"))).isDirectory()).toBe(true);
+      // Configuration reads no longer initialize project-local sessions or .gitignore.
+      await expect(stat(path.join(cwd, ".pi", "subagents"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
     } finally {
       await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
       session.dispose();
@@ -168,7 +192,11 @@ describe("Pi extension integration", () => {
     });
     try {
       await session.bindExtensions({ mode: "print" });
+      await expectTrustFailure(session, /Git project root must be trusted/);
       await expect(stat(path.join(root, ".pi", "subagents"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      await expect(stat(path.join(agentDir, "subagents"))).rejects.toMatchObject({
         code: "ENOENT",
       });
     } finally {
@@ -216,7 +244,10 @@ describe("Pi extension integration", () => {
       await expect(stat(path.join(cwd, ".pi", "subagents"))).rejects.toMatchObject({
         code: "ENOENT",
       });
-      expect(session.getAllTools().some((tool) => tool.name === "subagent")).toBe(true);
+      await expectTrustFailure(session, /Project must be trusted/);
+      await expect(stat(path.join(agentDir, "subagents"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
     } finally {
       await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
       session.dispose();

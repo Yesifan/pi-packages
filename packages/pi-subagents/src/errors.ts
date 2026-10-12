@@ -12,7 +12,7 @@ export class SubagentError extends Error {
   constructor(
     readonly code: string,
     message: string,
-    readonly agentId?: string,
+    _name?: string,
     options?: SubagentErrorOptions,
   ) {
     super(message, options);
@@ -38,7 +38,6 @@ export function errorToolResult(error: unknown): AgentToolResult<ErrorResult> {
     error: {
       code: normalized.code,
       message: normalized.message,
-      ...(normalized.agentId ? { id: normalized.agentId } : {}),
     },
     ...(normalized.delegationStatus ? { delegation_status: normalized.delegationStatus } : {}),
   };
