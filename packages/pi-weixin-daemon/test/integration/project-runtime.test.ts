@@ -54,8 +54,7 @@ describe("ProjectRuntime: sender marker + project-wide notify/broadcast + idle c
     const p = h.pm.dispatch("A", textMsg("A", "u-a", "m1", "hello"));
     await tick();
     const text = h.fakes.get("foo")!.prompts[0]!.text;
-    expect(text).toContain("hello");
-    expect(text).toContain("-- from weixin name-A");
+    expect(text).toBe("hello\n\n-- from weixin name-A");
 
     h.fakes.get("foo")!.complete("ok");
     await p;

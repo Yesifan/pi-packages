@@ -22,8 +22,9 @@
     "dev": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:ci": "vitest run --exclude 'test/integration/bridge-real.test.ts' --exclude 'test/integration/ui-real.test.ts' --exclude 'test/integration/pi-runtime.test.ts' --exclude 'test/integration/runtime-extension.test.ts'",
-    "test:watch": "vitest"
+    "test:ci": "vitest run",
+    "test:watch": "vitest",
+    "test:model": "vitest run --config vitest.model.config.ts"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "catalog:",

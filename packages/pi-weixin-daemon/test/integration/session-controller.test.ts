@@ -19,7 +19,6 @@ function setup(
     broadcastText?: (t: string) => Promise<void>;
     broadcastTyping?: (typing: boolean) => Promise<void>;
     typingKeepaliveMs?: number;
-    senderLabel?: (m: { accountId: string }) => string;
     runtime?: FakeAgentRuntime;
     turnTimeoutMs?: number;
     abortGraceMs?: number;
@@ -44,7 +43,6 @@ function setup(
     broadcastText: opts.broadcastText,
     broadcastTyping: opts.broadcastTyping,
     typingKeepaliveMs: opts.typingKeepaliveMs,
-    resolveSenderLabel: opts.senderLabel as never,
     turnTimeoutMs: opts.turnTimeoutMs,
     abortGraceMs: opts.abortGraceMs,
     slashInteractionTimeoutMs: opts.slashInteractionTimeoutMs,
@@ -667,19 +665,7 @@ describe("M8 media routing through the session controller", () => {
   });
 });
 
-describe("M9 sender marker + broadcast hook", () => {
-  it("appends -- from weixin <name> to the prompt", async () => {
-    const { runtime, session } = setup({ senderLabel: (m) => `bot-${m.accountId}` });
-    const turnPromise = session.handleUserMessage(
-      makeInboundMessage({ accountId: "acct-a", senderId: "user-a", text: "hi" }),
-    );
-    await vi.waitFor(() => expect(runtime.prompts.length).toBe(1));
-    expect(runtime.prompts[0]!.text).toBe("hi\n\n-- from weixin bot-acct-a");
-
-    runtime.complete("ok");
-    await turnPromise;
-  });
-
+describe("M9 broadcast hook", () => {
   it("broadcast hook gets the reply and skips the origin-only send", async () => {
     let broadcasted = "";
     const { runtime, transport, session } = setup({

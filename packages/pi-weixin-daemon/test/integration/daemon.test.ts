@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Daemon } from "../../src/daemon.js";
 import { ProjectStore } from "../../src/projects/project-store.js";
 import { createLogger } from "../../src/util/logger.js";
@@ -101,13 +101,17 @@ describe("Daemon composition (fake transports + fake runtimes)", () => {
   it("project enabled=false is not started and its account is dropped", async () => {
     const stores = new ProjectStore(path.join(dataDir, "config.json"));
     stores.upsert("foo", { cwd: fooDir, accounts: ["A"], enabled: false });
+    const transport = new FakeWeixinTransport();
+    const projectPiFactory = vi.fn(async () => new FakeAgentRuntime());
     const daemon = new Daemon({
       logger,
       store: stores,
-      getAccountTransport: async () => new FakeWeixinTransport(),
-      projectPiFactory: async () => new FakeAgentRuntime(),
+      getAccountTransport: async (id) => (id === "A" ? transport : new FakeWeixinTransport()),
+      projectPiFactory,
     });
     await daemon.start();
+    await transport.emit(msg("A", "u-a", "m1", "disabled"));
+    expect(projectPiFactory).not.toHaveBeenCalled();
     expect(daemon.getProjectStatuses()).toHaveLength(1);
     expect(daemon.getProjectStatuses()[0]!.state).toBe("off");
     await daemon.stop();

@@ -233,17 +233,30 @@ Tencent/openclaw-weixin          # 微信协议参考（MIT，见 LICENSE.attrib
 
 ## 测试
 
+在 monorepo 根目录运行：
+
 ```bash
-corepack pnpm test          # 全量：包含需要实际模型 API 的集成测试
-corepack pnpm test:ci       # 离线：单元、fake 集成和 UDS RPC；GitHub CI 使用此命令
+pnpm --filter @yesifan/pi-weixin-daemon test        # 默认离线
+pnpm --filter @yesifan/pi-weixin-daemon test:ci     # 同一套离线测试；GitHub CI 使用此命令
+pnpm --filter @yesifan/pi-weixin-daemon test:watch  # 离线 watch
+pnpm --filter @yesifan/pi-weixin-daemon test:model  # 可选：真实模型发送文件冒烟，会消耗额度
 ```
 
-`test:ci` 明确排除 `bridge-real.test.ts`、`pi-runtime.test.ts`、
-`runtime-extension.test.ts` 和 `ui-real.test.ts`，避免 CI 访问实际 AI API 或消耗额度。
+默认配置只收集 `test/unit/` 和 `test/integration/`，模型冒烟单独收集 `test/model/`，不依赖固定文件名排除。离线测试验证 pi-wx 的消息、媒体、路由、busy/abort、广播、命令、UI、自有 trust 策略及 SDK 适配接线；不重复测试 Pi 自身的磁盘扩展发现、trust 继承或资源隔离机制。
 
-层：单元（busy 状态、命令路由、路径校验、账号存储、媒体解密）、fake 集成（A 忙不影响 B、回复广播/互通、空闲关闭、UI 路由、多 project 隔离）、真 Pi SDK 集成（项目 extension、`weixin_send_file`）、Daemon/UDS RPC 集成（project create / `<name> add` / list / enable、account.logout、DaemonNotRunningError）。
+离线测试包括 fake transport/runtime 业务链路、真实本地 UDS RPC，以及不调用模型的 SDK UI 包装回归。SDK 测试使用独立临时 agent 目录，不修改用户的 trust 或会话记录。
 
-真实微信 E2E（扫码、多账号、媒体收发、重启等）需要真实账号，见 `test/integration/`。
+模型冒烟只验证真实模型调用 `weixin_send_file`，检查路径、caption、当前发送对象及实际会话更换后的工具可用性。微信出口仍是 fake transport，不会实际发送微信；单次模型回合限时 60 秒，错误或超时明确失败，不静默跳过。
+
+冒烟仅使用环境变量中的 provider 凭据，不读取用户的 `auth.json`。默认选择第一个可用模型；建议同时指定 `PI_WEIXIN_TEST_PROVIDER` 和 `PI_WEIXIN_TEST_MODEL`，例如：
+
+```bash
+# 先通过环境变量提供 ANTHROPIC_API_KEY
+PI_WEIXIN_TEST_PROVIDER=anthropic PI_WEIXIN_TEST_MODEL=claude-sonnet-4-5 \
+  pnpm --filter @yesifan/pi-weixin-daemon test:model
+```
+
+缺少可用凭据或指定模型不可用时明确失败。真实微信扫码、媒体送达等仍需使用真实账号手动验证。
 
 ## License
 

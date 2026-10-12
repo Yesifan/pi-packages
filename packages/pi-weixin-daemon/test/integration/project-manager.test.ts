@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ProjectManager } from "../../src/projects/project-manager.js";
 import type { ProjectConfig } from "../../src/projects/types.js";
 import { BUSY_REPLY } from "../../src/sessions/session-state.js";
@@ -106,22 +106,27 @@ describe("ProjectManager: account routing + project isolation (fake)", () => {
     const h = setup(twoProjects as never);
     await start(h);
 
-    // foo busy
+    const fooAbort = vi.spyOn(h.fakes.get("foo")!, "abort");
+    const barAbort = vi.spyOn(h.fakes.get("bar")!, "abort");
     const pA = h.pm.dispatch("A", textMsg("A", "u-a", "m1", "task"));
-    await tick();
-    expect(h.pm.getRuntime("foo")!.getStatus().state).toBe("busy");
-
-    // /abort to foo (A) aborts foo only
-    await h.pm.dispatch("A", textMsg("A", "u-a", "m2", "/abort"));
-    await pA;
-    expect(h.pm.getRuntime("foo")!.getStatus().state).toBe("idle");
-
-    // bar still works
     const pC = h.pm.dispatch("C", textMsg("C", "u-c", "m3", "still here"));
     await tick();
+    expect(h.pm.getRuntime("foo")!.getStatus().state).toBe("busy");
+    expect(h.pm.getRuntime("bar")!.getStatus().state).toBe("busy");
+
+    // /abort to foo (A) aborts foo only, while bar's existing turn keeps running.
+    await h.pm.dispatch("A", textMsg("A", "u-a", "m2", "/abort"));
+    await pA;
+    expect(fooAbort).toHaveBeenCalledTimes(1);
+    expect(h.pm.getRuntime("foo")!.getStatus().state).toBe("idle");
+    expect(barAbort).not.toHaveBeenCalled();
+    expect(h.pm.getRuntime("bar")!.getStatus().state).toBe("busy");
     expect(h.fakes.get("bar")!.prompts).toHaveLength(1);
+
     h.fakes.get("bar")!.complete("ok");
     await pC;
+    expect(h.pm.getRuntime("bar")!.getStatus().state).toBe("idle");
+    expect(h.transports.get("C")!.textsTo("C")).toContain("ok");
   });
 
   it("foo start-failure (error) leaves bar unaffected", async () => {
