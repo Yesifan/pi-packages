@@ -168,7 +168,7 @@ export class FakeChild {
     this.manager.appendMessage(assistant(text, stopReason));
     this.streaming = false;
     this.idle = true;
-    this.emit({ type: "agent_settled" });
+    this.emit({ type: "agent_settled", aborted: stopReason === "aborted" });
     this.completion.resolve();
   }
   fail(error: Error) {
@@ -203,7 +203,7 @@ export class FakeChild {
   settle() {
     this.streaming = false;
     this.idle = true;
-    this.emit({ type: "agent_settled" });
+    this.emit({ type: "agent_settled", aborted: false });
     // Like SDK _runAgentPrompt's finally, the public event precedes prompt completion.
     this.completion.resolve();
   }

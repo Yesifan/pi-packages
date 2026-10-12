@@ -91,7 +91,7 @@ describe("runtime steering and acceptance", () => {
       true,
     );
     child.complete("steered final");
-    child.capturedListener?.({ type: "agent_settled" });
+    child.capturedListener?.({ type: "agent_settled", aborted: false });
     await h.flush();
     expect(h.reports).toHaveLength(1);
     expect(h.reports[0]!.report).toMatchObject({

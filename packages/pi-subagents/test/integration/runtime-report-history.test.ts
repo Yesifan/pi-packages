@@ -239,7 +239,7 @@ describe("nested report processing barriers", () => {
     expect(execution.pendingReports.size).toBe(1);
     parent.manager.appendMessage(assistant("parent final after both reports"));
     parent.settle();
-    parent.capturedListener?.({ type: "agent_settled" });
+    parent.capturedListener?.({ type: "agent_settled", aborted: false });
     await h.flush();
     expect(h.reports).toHaveLength(1);
     expect(h.reports[0]!.report).toMatchObject({
@@ -286,7 +286,7 @@ describe("nested report processing barriers", () => {
     expect(second.disposals).toBe(0);
     expect(h.agent("parent").currentExecution!.pendingChildren.has(secondExecution)).toBe(true);
     expect(parent.disposals).toBe(0);
-    first.capturedListener?.({ type: "agent_settled" });
+    first.capturedListener?.({ type: "agent_settled", aborted: false });
     expect(parent.customMessages).toHaveLength(1);
     second.complete("E2 result");
     await parent.waitCustom(1);

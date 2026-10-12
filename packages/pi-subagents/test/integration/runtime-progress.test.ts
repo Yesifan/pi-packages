@@ -78,7 +78,7 @@ describe("runtime progress widget", () => {
       toolName: "bash",
       args: { command: "stale output" },
     });
-    first.capturedListener?.({ type: "agent_settled" });
+    first.capturedListener?.({ type: "agent_settled", aborted: false });
     await h.flush();
     expect(h.widgets).toHaveLength(count);
     expect(h.widgets.at(-1)).toEqual(["worker[1]：thinking"]);

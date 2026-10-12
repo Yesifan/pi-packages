@@ -5,7 +5,7 @@
   "description": "Monorepo for @yesifan Pi packages",
   "packageManager": "pnpm@11.25.0",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.19.0"
   },
   "scripts": {
     "build": "pnpm -r run build",
