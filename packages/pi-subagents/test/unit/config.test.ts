@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -30,7 +30,7 @@ describe("external_directory config", () => {
     expect(expandConfiguredHome("$OTHER/code", "/home/test")).toBe("$OTHER/code");
   });
 
-  it("initializes project-local storage and uses defaults without setting.json", async () => {
+  it("uses defaults without initializing project storage when setting.json is absent", async () => {
     const cwd = await temporaryDirectory();
     const config = await loadSubagentsConfig(cwd);
     expect(config).toMatchObject({
@@ -39,11 +39,8 @@ describe("external_directory config", () => {
       maxLiveAgents: 8,
       uiTimeoutMs: 120_000,
       projectRoot: cwd,
-      storageDirectory: path.join(cwd, ".pi", "subagents"),
     });
-    await expect(readFile(path.join(config.storageDirectory, ".gitignore"), "utf8")).resolves.toBe(
-      "/sessions/\n",
-    );
+    await expect(stat(path.join(cwd, ".pi"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("reads only project-local setting.json and rejects relative configured directories", async () => {

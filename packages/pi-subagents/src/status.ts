@@ -1,13 +1,9 @@
 import type { ActiveSubagentSummary, DelegationStatusSnapshot, SubagentReport } from "./types.js";
 
-const MAX_VISIBLE_NAME_LENGTH = 80;
-
-function compactName(name: string): string {
-  const singleLine = name.replace(/\s+/g, " ").trim();
-  if (singleLine.length <= MAX_VISIBLE_NAME_LENGTH) return singleLine;
-  return `${singleLine.slice(0, MAX_VISIBLE_NAME_LENGTH - 1)}…`;
+function label(name: string): string {
+  const text = name.replace(/\s+/g, " ").trim();
+  return text.length <= 80 ? text : `${text.slice(0, 79)}…`;
 }
-
 export function createDelegationStatusSnapshot(
   activeDirectSubagents: ActiveSubagentSummary[],
   liveAgents: number,
@@ -16,40 +12,44 @@ export function createDelegationStatusSnapshot(
     (agent) => ({ ...agent, state: "running" }),
   ),
 ): DelegationStatusSnapshot {
-  const ordered = [...directSubagents].sort(
-    (a, b) => Number(b.state === "running") - Number(a.state === "running"),
-  );
   return {
-    activeDirectSubagents: activeDirectSubagents.map(({ id, name }) => ({
-      id,
-      name: compactName(name),
-    })),
+    activeDirectSubagents: activeDirectSubagents.map((agent) => ({ ...agent })),
     activeDirectSubagentCount: activeDirectSubagents.length,
-    directSubagents: ordered.map(({ id, name, state }) => ({
-      id,
-      name: compactName(name),
-      state,
-    })),
+    directSubagents: [...directSubagents]
+      .sort((a, b) => Number(b.state === "running") - Number(a.state === "running"))
+      .map((agent) => ({ ...agent })),
     directSubagentCount: directSubagents.length,
-    interruptedDirectSubagentCount: directSubagents.filter(({ state }) => state === "interrupted")
+    interruptedDirectSubagentCount: directSubagents.filter((agent) => agent.state === "interrupted")
       .length,
     liveAgents,
     maxLiveAgents,
   };
 }
-
+export function formatDelegationStatus(status: DelegationStatusSnapshot): string {
+  const running = status.activeDirectSubagentCount;
+  const interrupted = status.interruptedDirectSubagentCount;
+  const counts = [
+    `${running} running`,
+    `${status.directSubagentCount - running - interrupted} done`,
+  ];
+  if (interrupted) counts.push(`${interrupted} interrupted`);
+  const summary = `**${counts.join(", ")}; shared usage: ${status.liveAgents}/${status.maxLiveAgents} (includes initialization).**`;
+  const lines = status.directSubagents.map(
+    ({ name, agentType, state }) => `- ${label(name)} (role: ${agentType}): ${state}`,
+  );
+  return `${summary}\n${lines.length ? lines.join("\n") : "- None"}`;
+}
 export function formatSubagentReport(
   report: SubagentReport,
   status: DelegationStatusSnapshot,
 ): string {
-  const error = report.error ? `## Error\n${report.error.code}: ${report.error.message}` : "";
-  return `# ${compactName(report.name)} Subagent Report
+  return `# ${label(report.name)} Subagent Report
 
-> agentId: ${report.agentId} outcome: ${report.outcome} cwd: ${report.cwd}
+> role: ${report.agentType} outcome: ${report.outcome} cwd: ${report.cwd}
 
-${error}
+${report.sessionFile ? `Complete conversation: \`${report.sessionFile}\`. Read it if more context is needed.` : "Complete conversation unavailable: persisted session history could not be validated."}
 
-## Result
+${report.error ? `## Error\n${report.error.code}: ${report.error.message}\n\n` : ""}## Result
 
 ${report.result}
 
@@ -57,18 +57,5 @@ ${report.result}
 
 ${formatDelegationStatus(status)}
 
-**Follow-up:** For related work, you can use \`ask_subagent\` to give a new task to any idle subagent listed above.`;
-}
-
-export function formatDelegationStatus(status: DelegationStatusSnapshot): string {
-  const running = status.activeDirectSubagentCount;
-  const interrupted = status.interruptedDirectSubagentCount;
-  const done = status.directSubagentCount - running - interrupted;
-  const counts = [`${running} running`, `${done} done`];
-  if (interrupted) counts.push(`${interrupted} interrupted`);
-  const summary = `**${counts.join(", ")}; shared usage: ${status.liveAgents}/${status.maxLiveAgents}.**`;
-  const visible = status.directSubagents.map(
-    ({ id, name, state }) => `- ${name} (\`${id}\`): ${state}`,
-  );
-  return `${summary}\n${visible.length ? visible.join("\n") : "- None"}`;
+**Follow-up:** For related work, you can use \`ask_subagent\` with the full name of any idle subagent listed above.`;
 }

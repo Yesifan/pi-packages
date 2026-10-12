@@ -46,7 +46,7 @@ async function assertRootProjectTrusted(
   }
   const trusted = await ctx.ui.confirm(
     "Trust Git project root?",
-    `Allow pi-subagents to read configuration and store session history in ${projectRoot}?`,
+    `Allow pi-subagents to read project configuration from ${projectRoot}?`,
   );
   if (!trusted) {
     throw new SubagentError(
@@ -80,7 +80,7 @@ export default function piSubagents(pi: ExtensionAPI): void {
     started = true;
     const fallbackCwd = ctx.cwd;
     let caller: CallerBinding = {
-      agentId: null,
+      agent: null,
       depth: 0,
       ancestorCwds: [fallbackCwd],
       delegation: {
@@ -110,7 +110,7 @@ export default function piSubagents(pi: ExtensionAPI): void {
       await assertRootProjectTrusted(ctx, projectRoot, agentDir);
       const { context, config } = await buildDelegationContext(ctx.cwd, agentDir);
       caller = {
-        agentId: null,
+        agent: null,
         depth: 0,
         ancestorCwds: [context.cwd],
         delegation: context,

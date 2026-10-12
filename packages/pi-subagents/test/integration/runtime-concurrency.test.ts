@@ -1,392 +1,444 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { Api, Model } from "@earendil-works/pi-ai";
-import type {
-  AgentSession,
-  AgentSessionEvent,
-  ExtensionContext,
-  SessionManager,
-} from "@earendil-works/pi-coding-agent";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { OpenChildOptions, OpenedChild } from "../../src/child-session.js";
-import { initializeProjectSubagents } from "../../src/project-storage.js";
-import { RootRuntime } from "../../src/runtime.js";
-import type {
-  AgentDefinitionSnapshot,
-  CallerBinding,
-  LiveAgent,
-  StoredSubagent,
-  SubagentsConfig,
-} from "../../src/types.js";
+import { ProjectTrustStore } from "@earendil-works/pi-coding-agent";
+import { describe, expect, it, vi } from "vitest";
+import { ChildSessionFactory } from "../../src/child-session.js";
+import type { RootScope } from "../../src/types.js";
+import { createHarness, role } from "../helpers/runtime-harness.js";
 
-const temporaryDirectories: string[] = [];
-const runtimes: RootRuntime[] = [];
-const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+async function idle(h: Awaited<ReturnType<typeof createHarness>>, name: string, cwd?: string) {
+  await h.runtime.createSubagent(h.caller, { name, prompt: "initial", cwd }, h.ctx);
+  h.child(name).complete(`${name} done`);
+  await h.flush();
+  return h.agent(name);
+}
 
-afterEach(async () => {
-  await Promise.allSettled(runtimes.splice(0).map((runtime) => runtime.shutdown()));
-  if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
-  else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
-  await Promise.all(
-    temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true })),
-  );
+describe("name reservation and direct ownership", () => {
+  it("trims names, matches exact case and reserves duplicates before the first await", async () => {
+    const h = await createHarness();
+    const first = h.runtime.createSubagent(h.caller, { name: " Worker ", prompt: "work" }, h.ctx);
+    expect(h.agent("Worker").currentExecution).toMatchObject({ phase: "opening", accepted: false });
+    const duplicate = h.runtime.createSubagent(
+      h.caller,
+      { name: "Worker", prompt: "duplicate" },
+      h.ctx,
+    );
+    await expect(duplicate).rejects.toMatchObject({
+      code: "SUBAGENT_NAME_EXISTS",
+      message: expect.stringContaining("ask_subagent"),
+    });
+    const result = await first;
+    expect(result).toMatchObject({ name: "Worker", status: "started", agent_type: "general" });
+    expect(result).not.toHaveProperty("id");
+    expect(result).not.toHaveProperty("run_id");
+    await expect(
+      h.runtime.askSubagent(h.caller, { name: "worker", prompt: "wrong case" }, h.ctx),
+    ).rejects.toMatchObject({ code: "SUBAGENT_NOT_FOUND" });
+    await h.runtime.createSubagent(h.caller, { name: "worker", prompt: "case distinct" }, h.ctx);
+    h.child("Worker").complete();
+    await h.flush();
+    await expect(
+      h.runtime.createSubagent(h.caller, { name: "Worker", prompt: "completed duplicate" }, h.ctx),
+    ).rejects.toMatchObject({ code: "SUBAGENT_NAME_EXISTS" });
+    await expect(
+      h.runtime.askSubagent(h.caller, { name: " Worker ", prompt: "follow-up" }, h.ctx),
+    ).resolves.toMatchObject({ name: "Worker", status: "started" });
+  });
+
+  it.each(["", "  \n\t"])("rejects empty trimmed name %j", async (name) => {
+    const h = await createHarness();
+    await expect(
+      h.runtime.createSubagent(h.caller, { name, prompt: "work" }, h.ctx),
+    ).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+    expect(h.scope.executions.size).toBe(0);
+  });
+
+  it("keeps __proto__ and long full names safe and directly askable", async () => {
+    const h = await createHarness();
+    const long = `../${"long-name".repeat(40)}\nfull-name`;
+    for (const name of ["__proto__", long]) await idle(h, name);
+    const record = await h.store.readOwner(h.scope.identity, null);
+    expect(Object.keys(record!.children)).toEqual(["__proto__", long]);
+    expect(Object.hasOwn(record!.children, "__proto__")).toBe(true);
+    expect(({} as Record<string, unknown>).state).toBeUndefined();
+    for (const name of ["__proto__", long]) {
+      const result = await h.runtime.askSubagent(h.caller, { name, prompt: "again" }, h.ctx);
+      expect(result.name).toBe(name);
+      expect(result.delegation_status.directSubagents.map((child) => child.name)).toContain(long);
+      expect(h.agent(name).identity!.sessionFile).not.toContain(name);
+    }
+    await expect(
+      h.runtime.askSubagent(h.caller, { name: long.slice(0, 40), prompt: "prefix" }, h.ctx),
+    ).rejects.toMatchObject({ code: "SUBAGENT_NOT_FOUND" });
+  });
+
+  it("allows equal names under distinct parents, never searches across owners", async () => {
+    const h = await createHarness();
+    for (const name of ["parent", "other"])
+      await h.runtime.createSubagent(
+        h.caller,
+        { name, prompt: "coordinate", cwd: h.external },
+        h.ctx,
+      );
+    for (const name of ["parent", "other"])
+      await h.runtime.createSubagent(
+        h.nestedCaller(name),
+        { name: "worker", prompt: "nested" },
+        h.ctx,
+      );
+    expect(h.agent("parent").children.get("worker")).not.toBe(
+      h.agent("other").children.get("worker"),
+    );
+    await expect(
+      h.runtime.askSubagent(h.caller, { name: "worker", prompt: "guess" }, h.ctx),
+    ).rejects.toMatchObject({ code: "SUBAGENT_NOT_FOUND" });
+    const rootRecord = await h.store.readOwner(h.scope.identity, null);
+    expect(Object.keys(rootRecord!.children)).toEqual(["parent", "other"]);
+    const nestedRecord = await h.store.readOwner(
+      h.agent("parent").identity!,
+      h.scope.identity,
+      true,
+    );
+    expect(Object.keys(nestedRecord!.children)).toEqual(["worker"]);
+    expect(nestedRecord!.children.worker).not.toHaveProperty("cwd");
+  });
+
+  it("enforces depth and canonical cycles using the caller's own cwd authorization", async () => {
+    const h = await createHarness({ maxDepth: 2 });
+    await h.runtime.createSubagent(
+      h.caller,
+      { name: "parent", prompt: "work", cwd: h.external },
+      h.ctx,
+    );
+    const caller = h.nestedCaller("parent");
+    await expect(
+      h.runtime.createSubagent(caller, { name: "cycle", prompt: "work", cwd: h.cwd }, h.ctx),
+    ).rejects.toMatchObject({ code: "DELEGATION_CYCLE" });
+    expect(h.agent("parent").children.has("cycle")).toBe(false);
+    await expect(
+      h.runtime.createSubagent({ ...caller, depth: 2 }, { name: "deep", prompt: "work" }, h.ctx),
+    ).rejects.toMatchObject({ code: "DEPTH_LIMIT" });
+    const subdirectory = path.join(h.external, "subdir");
+    await mkdir(subdirectory);
+    await expect(
+      h.runtime.createSubagent(
+        h.caller,
+        { name: "prefix", prompt: "work", cwd: subdirectory },
+        h.ctx,
+      ),
+    ).rejects.toMatchObject({ code: "CWD_NOT_ALLOWED" });
+    expect(h.scope.executions.size).toBe(1);
+  });
 });
 
-interface FakeChild {
-  branch: Array<{ id: string; type: "message"; message: unknown }>;
-  listener?: (event: AgentSessionEvent) => void;
-  session: AgentSession;
-  sessionManager: SessionManager;
-  streaming: boolean;
-}
-
-interface Harness {
-  caller: CallerBinding;
-  children: Map<string, FakeChild>;
-  context: ExtensionContext;
-  failNextOpen(): void;
-  runtime: RootRuntime;
-  mounts: OpenChildOptions[];
-}
-
-function generalAgent(): AgentDefinitionSnapshot {
-  return {
-    id: "general",
-    description: "General",
-    prompt: "Do the task.",
-    source: "/agents/general.md",
-    contentHash: "hash",
-  };
-}
-
-async function createHarness(maxLiveAgents: number): Promise<Harness> {
-  const root = await mkdtemp(path.join(os.tmpdir(), "pi-subagents-concurrency-"));
-  temporaryDirectories.push(root);
-  const cwd = path.join(root, "project");
-  const rootSessionFile = path.join(root, "root.jsonl");
-  const agentDir = path.join(root, "agent");
-  await mkdir(cwd);
-  await writeFile(rootSessionFile, "");
-  process.env.PI_CODING_AGENT_DIR = agentDir;
-
-  const runtime = new RootRuntime(path.join(root, "extension.js"));
-  runtimes.push(runtime);
-  const storage = await initializeProjectSubagents(cwd);
-  const config: SubagentsConfig = {
-    externalDirectories: [],
-    maxDepth: 4,
-    maxLiveAgents,
-    uiTimeoutMs: 100,
-    projectRoot: cwd,
-    storageDirectory: storage.directory,
-  };
-  await runtime.initialize(
-    {
-      rootSessionId: "root-session",
-      rootSessionFile,
-      ctx: {
-        cwd,
-        hasUI: false,
-        ui: {},
-        isProjectTrusted: () => true,
-      } as unknown as ExtensionContext,
-      sendReport: () => undefined,
-    },
-    config,
-  );
-
-  const children = new Map<string, FakeChild>();
-  const mounts: OpenChildOptions[] = [];
-  let childIndex = 0;
-  let shouldFailNextOpen = false;
-  const fakeFactory = {
-    createSessionManager: async (
-      _cwd: string,
-      sessionsDirectory: string,
-    ): Promise<SessionManager> => {
-      childIndex += 1;
-      const sessionId = `child-session-${childIndex}`;
-      const sessionFile = path.join(sessionsDirectory, `${sessionId}.jsonl`);
-      await writeFile(sessionFile, "{}\n");
-      const child = {
-        branch: [],
-        streaming: false,
-      } as unknown as FakeChild;
-      const sessionManager = {
-        getSessionFile: () => sessionFile,
-        getSessionId: () => sessionId,
-        getLeafId: () => child.branch.at(-1)?.id ?? null,
-        getBranch: () => child.branch,
-      } as unknown as SessionManager;
-      const session = {
-        get isStreaming() {
-          return child.streaming;
-        },
-        sessionManager,
-        prompt: async (
-          _prompt: string,
-          options: { preflightResult?: (success: boolean) => void },
-        ) => {
-          child.streaming = true;
-          options.preflightResult?.(true);
-        },
-        subscribe: (listener: (event: AgentSessionEvent) => void) => {
-          child.listener = listener;
-          return () => {
-            child.listener = undefined;
-          };
-        },
-        abort: async () => {
-          child.streaming = false;
-        },
-        dispose: () => undefined,
-      } as unknown as AgentSession;
-      child.session = session;
-      child.sessionManager = sessionManager;
-      children.set(sessionId, child);
-      return sessionManager;
-    },
-    openSessionManager: (stored: StoredSubagent): SessionManager => {
-      const child = children.get(stored.sessionId);
-      if (!child) throw new Error(`Missing fake child ${stored.sessionId}`);
-      return child.sessionManager;
-    },
-    open: async (options: OpenChildOptions): Promise<OpenedChild> => {
-      mounts.push(options);
-      if (shouldFailNextOpen) {
-        shouldFailNextOpen = false;
-        throw new Error("open failed");
-      }
-      const child = children.get(options.stored.sessionId);
-      if (!child) throw new Error(`Missing fake child ${options.stored.sessionId}`);
-      return {
-        session: child.session,
-        actualThinking: options.stored.thinking,
-        ui: {} as OpenedChild["ui"],
-        dispose: async () => {
-          child.streaming = false;
-        },
-      };
-    },
-  };
-  Reflect.set(runtime, "childFactory", fakeFactory);
-  Reflect.set(runtime, "resolveTrust", async () => true);
-
-  const definition = generalAgent();
-  const caller: CallerBinding = {
-    agentId: null,
-    depth: 0,
-    ancestorCwds: [cwd],
-    delegation: {
-      cwd,
-      projectRoot: cwd,
-      externalDirectories: [],
-      agentTypes: new Map([[definition.id, definition]]),
-    },
-  };
-  const model = { provider: "test", id: "model", name: "Test Model" } as Model<Api>;
-  const context = { model, thinkingLevel: "off" } as ExtensionContext;
-
-  return {
-    caller,
-    children,
-    context,
-    failNextOpen: () => {
-      shouldFailNextOpen = true;
-    },
-    runtime,
-    mounts,
-  };
-}
-
-async function createIdleSubagent(harness: Harness, name: string, cwd?: string): Promise<string> {
-  const started = await harness.runtime.createSubagent(
-    harness.caller,
-    { name, prompt: "initial task", ...(cwd ? { cwd } : {}) },
-    harness.context,
-    undefined,
-  );
-  const stored = (Reflect.get(harness.runtime, "agents") as Map<string, StoredSubagent>).get(
-    started.id,
-  );
-  const child = stored ? harness.children.get(stored.sessionId) : undefined;
-  if (!child) throw new Error(`Missing child for ${started.id}`);
-  child.branch.push({
-    id: `entry-${started.run_id}`,
-    type: "message",
-    message: {
-      role: "assistant",
-      content: [{ type: "text", text: `${name} completed` }],
-      stopReason: "stop",
-      timestamp: Date.now(),
-    },
-  });
-  child.streaming = false;
-  child.listener?.({ type: "agent_settled" });
-  await vi.waitFor(() => {
-    expect((Reflect.get(harness.runtime, "live") as Map<string, LiveAgent>).has(started.id)).toBe(
-      false,
-    );
-  });
-  return started.id;
-}
-
-describe("role delegation policy", () => {
+describe("role policy snapshots", () => {
   it.each([
     { disallowedTools: ["subagent"], expected: false },
     { disallowedTools: ["ask_subagent"], expected: true },
     { disallowedTools: [], expected: true },
     { tools: ["read"], expected: false },
-  ])("uses snapshotted policy on creation and ask: %j", async ({ expected, ...policy }) => {
-    const h = await createHarness(8);
-    const external = await mkdtemp(path.join(os.tmpdir(), "pi-subagents-external-policy-"));
-    temporaryDirectories.push(external);
-    h.caller.delegation.externalDirectories.push(external);
-    h.caller.delegation.agentTypes.set("general", { ...generalAgent(), ...policy });
-    const agentId = await createIdleSubagent(h, "worker", external);
-    expect(h.mounts.at(-1)?.canDelegate).toBe(expected);
-    expect(h.mounts.at(-1)?.stored.agentDefinitionSnapshot).toMatchObject(policy);
-    // A later same-name role must not alter the policy on this logical agent.
-    h.caller.delegation.agentTypes.set("general", generalAgent());
-    await h.runtime.askSubagent(
-      h.caller,
-      { id: agentId, prompt: "follow-up" },
-      h.context,
-      undefined,
+  ])("retains the saved policy across asks: %j", async ({ expected, ...policy }) => {
+    const h = await createHarness();
+    h.caller.delegation.agentTypes.set("general", role(policy));
+    await idle(h, "worker", h.external);
+    expect(h.mounts.at(-1)).toMatchObject({ canDelegate: expected, roleSnapshot: policy });
+    h.caller.delegation.agentTypes.set(
+      "general",
+      role({ prompt: "replacement", disallowedTools: ["subagent"] }),
     );
-    expect(h.mounts.at(-1)?.canDelegate).toBe(expected);
-    expect(h.mounts.at(-1)?.stored.agentDefinitionSnapshot).toMatchObject(policy);
+    await h.runtime.askSubagent(h.caller, { name: "worker", prompt: "follow-up" }, h.ctx);
+    expect(h.mounts.at(-1)).toMatchObject({
+      canDelegate: expected,
+      roleSnapshot: { ...policy, prompt: "Do the task." },
+    });
+    await idle(h, "same-cwd-leaf");
+    expect(h.mounts.at(-1)?.canDelegate).toBe(false);
   });
 });
 
-describe("normal ask concurrency", () => {
-  it("reserves an idle subagent before the first asynchronous wait", async () => {
-    const harness = await createHarness(8);
-    const agentId = await createIdleSubagent(harness, "worker");
-
-    const first = harness.runtime.askSubagent(
-      harness.caller,
-      { id: agentId, prompt: "first follow-up" },
-      harness.context,
-      undefined,
+describe("ordinary ask concurrency and history", () => {
+  it("atomically reserves the original agent with a new Execution/mount, retaining history selection", async () => {
+    const h = await createHarness();
+    const agent = await idle(h, "worker");
+    const identity = { ...agent.identity! };
+    const old = h.child("worker");
+    const before = old.manager.getBranch();
+    const changed = {
+      ...h.ctx,
+      model: { ...h.ctx.model!, id: "changed" },
+      thinkingLevel: "low" as const,
+    };
+    const first = h.runtime.askSubagent(h.caller, { name: "worker", prompt: "follow-up" }, changed);
+    const execution = agent.currentExecution!;
+    expect(execution).toMatchObject({ phase: "opening", accepted: false });
+    const second = h.runtime.askSubagent(
+      h.caller,
+      { name: "worker", prompt: "must not queue" },
+      changed,
     );
-    const live = Reflect.get(harness.runtime, "live") as Map<string, LiveAgent>;
-    const reserved = live.get(agentId);
-    const immediateReservation = reserved
-      ? { phase: reserved.phase, accepted: reserved.accepted }
-      : undefined;
-    const second = harness.runtime.askSubagent(
-      harness.caller,
-      { id: agentId, prompt: "second follow-up" },
-      harness.context,
-      undefined,
-    );
-    const [firstOutcome, secondOutcome] = await Promise.allSettled([first, second]);
-
-    expect(immediateReservation).toMatchObject({ phase: "opening", accepted: false });
-    expect(firstOutcome).toMatchObject({
-      status: "fulfilled",
-      value: {
-        id: agentId,
-        status: "started",
-        delegation_status: {
-          activeDirectSubagents: [{ id: agentId, name: "worker" }],
-          activeDirectSubagentCount: 1,
-          liveAgents: 1,
-          maxLiveAgents: 8,
-        },
+    await expect(second).rejects.toMatchObject({
+      code: "SUBAGENT_BUSY",
+      delegationStatus: {
+        activeDirectSubagents: [{ name: "worker", agentType: "general" }],
+        liveAgents: 1,
       },
     });
-    expect(secondOutcome).toMatchObject({
-      status: "rejected",
-      reason: {
-        code: "SUBAGENT_BUSY",
-        agentId,
-        delegationStatus: {
-          activeDirectSubagents: [{ id: agentId, name: "worker" }],
-          activeDirectSubagentCount: 1,
-          liveAgents: 1,
-          maxLiveAgents: 8,
-        },
-      },
+    await expect(first).resolves.toMatchObject({
+      name: "worker",
+      thinking: "high",
+      status: "started",
     });
+    expect(agent.currentExecution).toBe(execution);
+    expect(agent.identity).toEqual(identity);
+    const mounted = h.child("worker");
+    expect(mounted).not.toBe(old);
+    expect(mounted.session.model?.id).toBe("original");
+    expect(mounted.session.thinkingLevel).toBe("high");
+    expect(mounted.manager.getBranch().slice(0, before.length)).toEqual(before);
+    expect(h.mounts.at(-1)).toMatchObject({ restoring: true });
+    expect(h.mounts.at(-1)).not.toHaveProperty("model");
+    expect(h.mounts.at(-1)).not.toHaveProperty("thinking");
+    expect(mounted.promptCalls).toHaveLength(1);
+    const saved = (await h.store.readOwner(h.scope.identity, null))!.children.worker!;
+    expect(Object.keys(saved).sort()).toEqual([
+      "roleSnapshot",
+      "sessionFile",
+      "sessionId",
+      "state",
+    ]);
   });
 
-  it("atomically reserves the final shared live-agent slot", async () => {
-    const harness = await createHarness(1);
-    const firstAgentId = await createIdleSubagent(harness, "first");
-    const secondAgentId = await createIdleSubagent(harness, "second");
-
-    const first = harness.runtime.askSubagent(
-      harness.caller,
-      { id: firstAgentId, prompt: "first follow-up" },
-      harness.context,
-      undefined,
-    );
-    const live = Reflect.get(harness.runtime, "live") as Map<string, LiveAgent>;
-    const immediateLiveCount = live.size;
-    const second = harness.runtime.askSubagent(
-      harness.caller,
-      { id: secondAgentId, prompt: "second follow-up" },
-      harness.context,
-      undefined,
-    );
-    const [firstOutcome, secondOutcome] = await Promise.allSettled([first, second]);
-
-    expect(immediateLiveCount).toBe(1);
-    expect(firstOutcome).toMatchObject({
-      status: "fulfilled",
-      value: {
-        id: firstAgentId,
-        status: "started",
-        delegation_status: {
-          activeDirectSubagents: [{ id: firstAgentId, name: "first" }],
-          activeDirectSubagentCount: 1,
-          liveAgents: 1,
-          maxLiveAgents: 1,
-        },
-      },
-    });
-    expect(secondOutcome).toMatchObject({
-      status: "rejected",
-      reason: {
-        code: "LIVE_AGENT_LIMIT",
-        delegationStatus: {
-          activeDirectSubagents: [{ id: firstAgentId, name: "first" }],
-          activeDirectSubagentCount: 1,
-          liveAgents: 1,
-          maxLiveAgents: 1,
-        },
-      },
-    });
-    expect(live.size).toBe(1);
-  });
-
-  it("releases the reservation when asynchronous initialization fails", async () => {
-    const harness = await createHarness(1);
-    const agentId = await createIdleSubagent(harness, "worker");
-    harness.failNextOpen();
-
+  it("rechecks the saved header cwd against current caller authorization on every ask", async () => {
+    const h = await createHarness();
+    const agent = await idle(h, "external", h.external);
+    const before = await readFile(agent.identity!.sessionFile, "utf8");
+    h.caller.delegation.externalDirectories = [];
     await expect(
-      harness.runtime.askSubagent(
-        harness.caller,
-        { id: agentId, prompt: "failing follow-up" },
-        harness.context,
-        undefined,
-      ),
+      h.runtime.askSubagent(h.caller, { name: "external", prompt: "now unauthorized" }, h.ctx),
+    ).rejects.toMatchObject({ code: "CWD_NOT_ALLOWED" });
+    expect(agent.currentExecution).toBeUndefined();
+    expect(agent.state).toBe("idle");
+    expect(await readFile(agent.identity!.sessionFile, "utf8")).toBe(before);
+    expect(h.mounts).toHaveLength(1);
+  });
+
+  it("atomically reserves the final shared live slot across different agents", async () => {
+    const h = await createHarness({ maxLiveAgents: 1 });
+    await idle(h, "first");
+    await idle(h, "second");
+    const first = h.runtime.askSubagent(h.caller, { name: "first", prompt: "work" }, h.ctx);
+    expect(h.scope.executions.size).toBe(1);
+    await expect(
+      h.runtime.askSubagent(h.caller, { name: "second", prompt: "work" }, h.ctx),
+    ).rejects.toMatchObject({
+      code: "LIVE_AGENT_LIMIT",
+      delegationStatus: { liveAgents: 1, maxLiveAgents: 1 },
+    });
+    await first;
+    expect(h.scope.executions.size).toBe(1);
+  });
+
+  it("restores a failed ask's prior state and history without deleting siblings", async () => {
+    const h = await createHarness();
+    const agent = await idle(h, "worker");
+    await idle(h, "sibling");
+    const file = agent.identity!.sessionFile;
+    const before = await readFile(file, "utf8");
+    h.failNextOpen();
+    await expect(
+      h.runtime.askSubagent(h.caller, { name: "worker", prompt: "fail" }, h.ctx),
     ).rejects.toThrow("open failed");
-    const live = Reflect.get(harness.runtime, "live") as Map<string, LiveAgent>;
-    expect(live.has(agentId)).toBe(false);
-    expect(live.size).toBe(0);
-
+    expect(agent.currentExecution).toBeUndefined();
+    expect(agent.state).toBe("idle");
+    expect(await readFile(file, "utf8")).toBe(before);
+    expect(Object.keys((await h.store.readOwner(h.scope.identity, null))!.children)).toEqual([
+      "worker",
+      "sibling",
+    ]);
     await expect(
-      harness.runtime.askSubagent(
-        harness.caller,
-        { id: agentId, prompt: "retry" },
-        harness.context,
-        undefined,
+      h.runtime.askSubagent(h.caller, { name: "worker", prompt: "retry" }, h.ctx),
+    ).resolves.toMatchObject({ name: "worker", status: "started" });
+  });
+
+  it.each(["handled", "reject"] as const)(
+    "rolls back a new child on preaccept %s",
+    async (kind) => {
+      const h = await createHarness();
+      await idle(h, "sibling");
+      const count = h.reports.length;
+      h.configureNext((child) => {
+        if (kind === "handled") child.nextDisposition = "handled";
+        else child.promptError = new Error("preflight rejected");
+      });
+      const pending = h.runtime.createSubagent(
+        h.caller,
+        { name: "prepared", prompt: "work" },
+        h.ctx,
+      );
+      if (kind === "handled")
+        await expect(pending).rejects.toMatchObject({ code: "PROMPT_HANDLED" });
+      else await expect(pending).rejects.toThrow("preflight rejected");
+      expect(h.scope.children.has("prepared")).toBe(false);
+      expect(h.scope.executions.size).toBe(0);
+      expect(h.reports).toHaveLength(count);
+      expect(Object.keys((await h.store.readOwner(h.scope.identity, null))!.children)).toEqual([
+        "sibling",
+      ]);
+      await expect(readFile(h.children.at(-1)!.manager.getSessionFile()!)).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    },
+  );
+
+  it("handled ask preserves the old identity/history and does not abort extension processing", async () => {
+    const h = await createHarness();
+    const agent = await idle(h, "worker");
+    const before = await readFile(agent.identity!.sessionFile, "utf8");
+    h.configureNext((child) => {
+      child.nextDisposition = "handled";
+    });
+    await expect(
+      h.runtime.askSubagent(h.caller, { name: "worker", prompt: "consume" }, h.ctx),
+    ).rejects.toMatchObject({ code: "PROMPT_HANDLED" });
+    expect(await readFile(agent.identity!.sessionFile, "utf8")).toBe(before);
+    expect(agent.state).toBe("idle");
+    expect(h.child("worker").aborts).toBe(0);
+    expect(h.reports).toHaveLength(1);
+  });
+
+  it("unexpected queued ordinary input fails explicitly but retains accepted history and identity", async () => {
+    const h = await createHarness();
+    h.configureNext((child) => {
+      child.nextDisposition = "queued";
+    });
+    await expect(
+      h.runtime.createSubagent(h.caller, { name: "worker", prompt: "queued unexpectedly" }, h.ctx),
+    ).rejects.toMatchObject({ code: "UNEXPECTED_PREFLIGHT" });
+    await h.flush();
+    expect(h.agent("worker").identity).toBeDefined();
+    expect(await readFile(h.agent("worker").identity!.sessionFile, "utf8")).toContain(
+      "queued unexpectedly",
+    );
+    expect(h.reports).toHaveLength(1);
+    expect(h.reports[0]!.report).toMatchObject({
+      outcome: "failed",
+      error: { code: "UNEXPECTED_PREFLIGHT" },
+    });
+  });
+});
+
+describe("exact root restoration", () => {
+  it("restores running as interrupted and opening as idle without mounting, replaying or reporting", async () => {
+    const h = await createHarness();
+    await h.runtime.createSubagent(h.caller, { name: "running", prompt: "unfinished" }, h.ctx);
+    await idle(h, "prepared");
+    await h.store.setChild(h.scope.identity, null, "prepared", {
+      ...h.agent("prepared").identity!,
+      roleSnapshot: h.agent("prepared").roleSnapshot,
+      state: "opening",
+    });
+    // Simulate crash metadata, not graceful shutdown's terminal state updates.
+    const saved = (await h.store.readOwner(h.scope.identity, null))!;
+    await h.runtime.shutdown();
+    const { PersistentSubagentStore } = await import("../../src/store.js");
+    const seed = new PersistentSubagentStore(h.agentDir, h.scope.identity);
+    await seed.open();
+    for (const [name, record] of Object.entries(saved.children))
+      await seed.setChild(h.scope.identity, null, name, record);
+    await seed.close();
+    const open = vi.spyOn(ChildSessionFactory.prototype, "open");
+    try {
+      const count = h.reports.length;
+      const restored = await h.restart();
+      const scope = Reflect.get(restored, "scope") as RootScope;
+      expect(scope).not.toBe(h.scope);
+      expect(scope.children.get("running")?.state).toBe("interrupted");
+      expect(scope.children.get("prepared")?.state).toBe("idle");
+      expect(scope.executions.size).toBe(0);
+      expect(scope.deliveries.size).toBe(0);
+      expect(open).not.toHaveBeenCalled();
+      expect(h.reports).toHaveLength(count);
+      expect(scope.children.get("prepared")?.identity).toEqual(h.agent("prepared").identity);
+      expect(await readdir(path.join(h.agentDir, "subagents", "sessions"))).toHaveLength(1);
+    } finally {
+      open.mockRestore();
+    }
+  });
+
+  it("recursively restores only linked direct-owner metadata and the saved role without loading mounts", async () => {
+    const h = await createHarness();
+    await h.runtime.createSubagent(
+      h.caller,
+      { name: "parent", prompt: "coordinate", cwd: h.external },
+      h.ctx,
+    );
+    const caller = h.nestedCaller("parent");
+    caller.delegation.agentTypes.set(
+      "general",
+      role({ prompt: "saved nested role", disallowedTools: ["write"] }),
+    );
+    await h.runtime.createSubagent(caller, { name: "worker", prompt: "nested" }, h.ctx);
+    const identity = { ...h.agent("worker", h.agent("parent")).identity! };
+    new ProjectTrustStore(h.agentDir).set(h.external, true);
+    h.child("worker", h.agent("parent")).complete("nested result not replayed");
+    await h.child("parent").waitCustom();
+    await h.flush();
+    const open = vi.spyOn(ChildSessionFactory.prototype, "open");
+    try {
+      const restored = await h.restart();
+      const scope = Reflect.get(restored, "scope") as RootScope;
+      expect(scope.children.size).toBe(1);
+      const parent = scope.children.get("parent")!;
+      expect(parent.state).toBe("interrupted");
+      expect(parent.cwd).toBe(h.external);
+      const worker = parent.children.get("worker")!;
+      expect(worker.parent).toBe(parent);
+      expect(worker.identity).toEqual(identity);
+      expect(worker.state).toBe("idle");
+      expect(worker.roleSnapshot).toMatchObject({
+        prompt: "saved nested role",
+        disallowedTools: ["write"],
+      });
+      expect(scope.agents.size).toBe(2);
+      expect(scope.executions.size).toBe(0);
+      expect(open).not.toHaveBeenCalled();
+      expect(h.reports).toHaveLength(0);
+      expect(await readdir(path.join(h.agentDir, "subagents", "sessions"))).toHaveLength(2);
+    } finally {
+      open.mockRestore();
+    }
+  });
+
+  it("does not read, migrate or delete either legacy store", async () => {
+    const h = await createHarness();
+    const projectLegacy = path.join(h.cwd, ".pi", "subagents", "sessions", "old-root", "root.json");
+    const globalLegacy = path.join(h.agentDir, ".bykwp-pi-subagents", "old.json");
+    for (const file of [projectLegacy, globalLegacy]) {
+      await mkdir(path.dirname(file), { recursive: true });
+      await writeFile(file, "not valid JSON; must never be read");
+    }
+    const restored = await h.restart();
+    expect((Reflect.get(restored, "scope") as RootScope).children.size).toBe(0);
+    await expect(
+      restored.askSubagent(h.caller, { name: "sa_old", prompt: "legacy" }, h.ctx),
+    ).rejects.toMatchObject({ code: "SUBAGENT_NOT_FOUND" });
+    Reflect.set(restored, "childFactory", h.factory);
+    Reflect.set(restored, "resolveTrust", async () => true);
+    await expect(
+      restored.createSubagent(
+        h.caller,
+        { name: "old-worker", prompt: "new independent history" },
+        h.ctx,
       ),
-    ).resolves.toMatchObject({ id: agentId, status: "started" });
+    ).resolves.toMatchObject({ name: "old-worker", status: "started" });
+    const newAgent = (Reflect.get(restored, "scope") as RootScope).children.get("old-worker")!;
+    expect(newAgent.identity!.sessionFile).toContain(
+      path.join(h.agentDir, "subagents", "histories"),
+    );
+    expect(await readFile(newAgent.identity!.sessionFile, "utf8")).toContain(
+      "new independent history",
+    );
+    for (const file of [projectLegacy, globalLegacy])
+      expect(await readFile(file, "utf8")).toBe("not valid JSON; must never be read");
   });
 });
