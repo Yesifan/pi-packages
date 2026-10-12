@@ -4,7 +4,7 @@
 
 - [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) 在 PR、`main` push 和手动触发时运行类型检查、Biome、离线测试、构建与 tarball 检查，不发布。
 - [`.github/workflows/release.yml`](../.github/workflows/release.yml) 仅在 `main` push 或手动触发时运行；先执行同样的验证，**只有验证成功**才创建/更新版本 PR 或尝试发布。发布所需的写权限与 npm OIDC 权限只授予 release job。
-- 真实模型/API 集成测试不在 CI 运行；本地需要时运行 `pnpm test`。
+- 默认测试与 CI 均不访问真实模型/API；本地需要验证 pi-wx 模型工具调用时，显式运行 `pnpm --filter @yesifan/pi-weixin-daemon test:model`，详见该包 README 的测试说明。
 
 ## 日常发版流程
 

@@ -60,8 +60,9 @@
 | `senderId` | 入站报文中的实际发件人（owner-scoped 协议下通常为 owner） |
 | `messageId` | 消息 id（`message_id` 或 `client_id`） |
 | `contextToken` | 微信下发的会话上下文 token，回复必须回传 |
-| `text` | 文本内容（含语音转写 `voice_item.text`；语音转写后视为文本） |
-| `attachments` | 附件（image / file / video / voice）；image 走多模态，file/video/voice 以 context note 带入 |
+| `text` | 原始文本内容（含语音转写 `voice_item.text`，不含识别错误备注），用于命令和 UI 回复解析；空转写不生成文本 |
+| `promptText` | 可选的 Agent 输入文本；对应语音转写后追加识别错误备注，不用于控制解析；未提供时使用 `text` |
+| `attachments` | 附件（入站微信生成 image / file / video）；image 走多模态，file/video 以 context note 带入；语音不下载、不生成附件 |
 | `mediaFailures` | 下载/解密**失败**的媒体（不会阻塞，仅用于让 agent 告知用户） |
 | `createdAt` | `create_time_ms` |
 

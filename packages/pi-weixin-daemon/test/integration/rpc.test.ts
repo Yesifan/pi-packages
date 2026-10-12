@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { pino } from "pino";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -67,7 +68,7 @@ function configureProject(name: string, accounts: string[], enabled = true): voi
 
 beforeEach(() => {
   daemons = [];
-  dataDir = fs.mkdtempSync(path.join(process.cwd(), "test/.tmp", "rpc-data-"));
+  dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "wx-rpc-"));
   projectDir = fs.mkdtempSync(path.join(process.cwd(), "test/.tmp", "rpc-proj-"));
   socketPath = path.join(dataDir, "daemon.sock");
   process.env.PI_WEIXIN_DATA_DIR = dataDir;

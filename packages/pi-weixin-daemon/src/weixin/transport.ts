@@ -1,7 +1,7 @@
 import type { Logger } from "../util/logger.js";
 import { notifyStart, notifyStop, sendTyping as sendTypingApi } from "./api/api.js";
 import { WeixinConfigManager } from "./api/config-cache.js";
-import { MessageType, TypingStatus, type WeixinMessage } from "./api/types.js";
+import { MessageItemType, MessageType, TypingStatus, type WeixinMessage } from "./api/types.js";
 import { resolveWeixinBaseUrl } from "./auth/accounts.js";
 import { downloadAttachmentsFromMessage } from "./media/media-download.js";
 import { sendTextMessage } from "./messaging/send.js";
@@ -214,6 +214,24 @@ export class ILinkWeixinTransport implements WeixinTransport {
     const msg = normalizeInboundMessage(this.opts.accountId, raw, attachments, failures);
     if (msg.senderId && msg.contextToken) {
       setContextToken(this.opts.accountId, msg.senderId, msg.contextToken);
+    }
+    const hasEmptyVoiceTranscript = raw.item_list?.some(
+      (item) => item.type === MessageItemType.VOICE && !item.voice_item?.text?.trim(),
+    );
+    if (hasEmptyVoiceTranscript) {
+      if (msg.senderId) {
+        try {
+          await this.sendText(msg, "未获取到语音转录文本，请重新发送语音或改用文字。");
+        } catch (err) {
+          this.opts.logger.warn(
+            { err, accountId: this.opts.accountId, messageId: msg.messageId },
+            "empty voice transcript reply failed (ignored)",
+          );
+        }
+      }
+      // Do not create a Pi session for empty voice alone. Other inputs and media
+      // failures still follow the normal routing, busy and reply policies.
+      if (!msg.text?.trim() && msg.attachments.length === 0 && !msg.mediaFailures?.length) return;
     }
     for (const handler of [...this.handlers]) {
       await handler(msg);

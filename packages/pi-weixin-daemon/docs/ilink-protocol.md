@@ -216,9 +216,10 @@ if (!route.agentId) {
    （不丢 `get_updates_buf`）；当前由 daemon 注入 `resolveInboxDir` 实现。
 3. **busy / abort 是 Project 作用域**，不跨 Project 阻塞（见 [`routing.md`](routing.md)）。
 4. **媒体处理（参考 Hermes，不混合）**：每条 iLink 消息独立成回合；image → 多模态
-   （base64+mime）；file / video / voice → **context note**（类型+保存路径+“自己读/处理”）给 agent；
-   voice 优先用 `voice_item.text`（iLink 自带语音转写）当文本，无转写才作为语音附件；
-   下载/解密失败 → 记录为 `mediaFailures`，由 agent 告知用户，不阻塞消息。
+   （base64+mime）；file / video → **context note**（类型+保存路径+“自己读/处理”）给 agent；
+   voice 仅用 `voice_item.text`（iLink 自带语音转写）当文本，追加识别错误备注，不下载音频；
+   空转写直接提示发送者，没有其他有效输入时不调用 Pi，不等待或处理后续补发转写；
+   其他媒体下载/解密失败 → 记录为 `mediaFailures`，由 agent 告知用户，不阻塞消息。
 
 ---
 

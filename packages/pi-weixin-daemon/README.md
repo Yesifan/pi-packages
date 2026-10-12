@@ -39,7 +39,7 @@
 - **Busy / Refuse**：不建消息队列；Agent 忙时新普通消息立即拒绝。
 - **控制命令**：`/help` `/status` `/new` `/abort` `/compact`，其中 `/status` `/abort` 在 Agent 忙时仍可用。
 - **项目自管理**：项目自己的 `.pi/settings.json`、`.pi/extensions/`、`.pi/skills/`、`AGENTS.md` 完全生效；daemon 运行时能力（`weixin_send_file`、微信 UI 适配）在内存中注入，不写入项目。
-- **媒体**：微信图片进入 Pi 多模态输入；微信文件/视频/语音下载到 `<cwd>/.pi-weixin/inbox/`；Agent 可通过 `weixin_send_file` 发送原生微信附件。
+- **媒体**：微信图片进入 Pi 多模态输入；微信文件/视频下载到 `<cwd>/.pi-weixin/inbox/`；语音仅传递微信转录文本及识别错误备注，空转录提示发送者，不下载音频；Agent 可通过 `weixin_send_file` 发送原生微信附件。
 - **Extension UI 经微信闭环**：项目 extension 的 `ctx.ui.confirm/select/input/notify` 通过微信完成（WAITING_FOR_UI 状态）。
 - 无 HTTP server、无数据库、无消息队列、无 tmux、不经过 PI WEB。
 
@@ -203,7 +203,7 @@ daemon 通过 Pi SDK 运行模型，需要对应 provider 的凭据。若运行�
 ## Agent 能力
 
 - **`weixin_send_file(path, caption?)`**：daemon 内存注入的工具（不写入项目 `.pi/extensions`，普通 `pi`/PI WEB 会话不可见）。自动发送到当前 Turn 的微信用户；仅要求文件存在且为普通文件（文件名 sanitize），**不设路径边界**——权限模型 = agent 进程权限，与 bash/read/write 一致（可发 `cwd` 之外 agent 可读的文件）。
-- **入站媒体**：图片 → 多模态输入；文件/视频/语音 → 下载到 `<cwd>/.pi-weixin/inbox/<message-id>/` 并在 prompt 中说明路径。`.pi-weixin/` 会自动加入项目 `.gitignore`。
+- **入站媒体**：图片 → 多模态输入；文件/视频 → 下载到 `<cwd>/.pi-weixin/inbox/<message-id>/` 并在 prompt 中说明路径；语音 → 仅使用微信提供的转录文本，追加 `【以上为用户的语音转录的信息，可能有识别错误】`，不下载或携带音频。空转录回复发送者「未获取到语音转录文本，请重新发送语音或改用文字。」，没有其他有效输入时不调用 Pi。`.pi-weixin/` 会自动加入项目 `.gitignore`。
 - **Extension UI**：项目 extension 调用 `ctx.ui.confirm/select/input` 时，daemon 进入 `WAITING_FOR_UI`，通过微信与用户交互（其他账号仍 busy）；`ctx.ui.notify` 直接推送消息。`ctx.ui.custom()` resolve undefined、`ctx.ui.editor()` 降级为输入框、`ctx.ui.theme` 返回真实最小 Theme 对象；其余 TUI 专属原语 no-op 不 throw。全部公开 UI 方法在 Pi SDK 包装后的扩展上下文中仍可调用。
 - **runner-level settings 不支持（W8）**：`resourceLoader` 层的项目配置正常生效；runner 级 settings（如 `sessionDir`）在 daemon 内不支持。
 
@@ -233,17 +233,30 @@ Tencent/openclaw-weixin          # 微信协议参考（MIT，见 LICENSE.attrib
 
 ## 测试
 
+在 monorepo 根目录运行：
+
 ```bash
-corepack pnpm test          # 全量：包含需要实际模型 API 的集成测试
-corepack pnpm test:ci       # 离线：单元、fake 集成和 UDS RPC；GitHub CI 使用此命令
+pnpm --filter @yesifan/pi-weixin-daemon test        # 默认离线
+pnpm --filter @yesifan/pi-weixin-daemon test:ci     # 同一套离线测试；GitHub CI 使用此命令
+pnpm --filter @yesifan/pi-weixin-daemon test:watch  # 离线 watch
+pnpm --filter @yesifan/pi-weixin-daemon test:model  # 可选：真实模型发送文件冒烟，会消耗额度
 ```
 
-`test:ci` 明确排除 `bridge-real.test.ts`、`pi-runtime.test.ts`、
-`runtime-extension.test.ts` 和 `ui-real.test.ts`，避免 CI 访问实际 AI API 或消耗额度。
+默认配置只收集 `test/unit/` 和 `test/integration/`，模型冒烟单独收集 `test/model/`，不依赖固定文件名排除。离线测试验证 pi-wx 的消息、媒体、路由、busy/abort、广播、命令、UI、自有 trust 策略及 SDK 适配接线；不重复测试 Pi 自身的磁盘扩展发现、trust 继承或资源隔离机制。
 
-层：单元（busy 状态、命令路由、路径校验、账号存储、媒体解密）、fake 集成（A 忙不影响 B、回复广播/互通、空闲关闭、UI 路由、多 project 隔离）、真 Pi SDK 集成（项目 extension、`weixin_send_file`）、Daemon/UDS RPC 集成（project create / `<name> add` / list / enable、account.logout、DaemonNotRunningError）。
+离线测试包括 fake transport/runtime 业务链路、真实本地 UDS RPC，以及不调用模型的 SDK UI 包装回归。SDK 测试使用独立临时 agent 目录，不修改用户的 trust 或会话记录。
 
-真实微信 E2E（扫码、多账号、媒体收发、重启等）需要真实账号，见 `test/integration/`。
+模型冒烟只验证真实模型调用 `weixin_send_file`，检查路径、caption、当前发送对象及实际会话更换后的工具可用性。微信出口仍是 fake transport，不会实际发送微信；单次模型回合限时 60 秒，错误或超时明确失败，不静默跳过。
+
+冒烟仅使用环境变量中的 provider 凭据，不读取用户的 `auth.json`。默认选择第一个可用模型；建议同时指定 `PI_WEIXIN_TEST_PROVIDER` 和 `PI_WEIXIN_TEST_MODEL`，例如：
+
+```bash
+# 先通过环境变量提供 ANTHROPIC_API_KEY
+PI_WEIXIN_TEST_PROVIDER=anthropic PI_WEIXIN_TEST_MODEL=claude-sonnet-4-5 \
+  pnpm --filter @yesifan/pi-weixin-daemon test:model
+```
+
+缺少可用凭据或指定模型不可用时明确失败。真实微信扫码、媒体送达等仍需使用真实账号手动验证。
 
 ## License
 

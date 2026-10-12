@@ -179,34 +179,7 @@ export async function downloadMediaFromItem(
     }
   }
 
-  if (item.type === MessageItemType.VOICE) {
-    const voice = item.voice_item;
-    if ((!voice?.media?.encrypt_query_param && !voice?.media?.full_url) || !voice?.media?.aes_key) {
-      return {};
-    }
-    try {
-      const buf = await downloadAndDecryptBuffer(
-        voice.media.encrypt_query_param ?? "",
-        voice.media.aes_key,
-        cdnBaseUrl,
-        `${label} voice`,
-        voice.media.full_url,
-      );
-      // v0.1: voice is delivered as a downloadable file (no silk transcode).
-      const filePath = await saveInboundMedia({
-        inboxDir,
-        messageKey,
-        filename: "voice.silk",
-        buf,
-        logger,
-      });
-      return { attachment: attachment("voice", filePath, "voice.silk", "audio/silk") };
-    } catch (err) {
-      logger.error(`${label} voice download failed: ${String(err)}`);
-      return { failure: { kind: "voice", filename: "voice.silk" } };
-    }
-  }
-
+  // Voice audio is never downloaded; normalization uses only Weixin's transcript.
   return {};
 }
 

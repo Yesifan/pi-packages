@@ -56,7 +56,7 @@ pnpm --filter @yesifan/pi-weixin-daemon test
 pnpm --filter @yesifan/pi-system-prompt typecheck
 ```
 
-`pi-weixin-daemon` 的完整测试包含真实运行时集成测试，可能耗时较长。不要因为超时而直接认定测试通过；应记录失败或超时的具体测试，并在需要时运行最小相关测试文件定位问题。
+`pi-weixin-daemon` 的 `test`、`test:ci` 和 `test:watch` 默认只运行离线测试；真实模型发送文件冒烟使用 `pnpm --filter @yesifan/pi-weixin-daemon test:model` 显式运行，可能耗时较长并消耗模型额度。不要因为超时而直接认定测试通过；应记录失败或超时的具体测试，并在需要时运行最小相关测试文件定位问题。
 
 ## 工作原则
 

@@ -139,21 +139,24 @@ describe("downloadAttachmentsFromMessage", () => {
     expect(path.basename(file.localPath)).toBe("report.pdf");
   });
 
-  it("records failing items as failures but still completes (no exception)", async () => {
+  it("records HTTP failures but still completes (no exception)", async () => {
     const inboxDir = fs.mkdtempSync(path.join(process.cwd(), "test/.tmp", "inbox-skip-"));
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => {
-        return new Response("oops", { status: 500 });
-      }),
-    );
+    const url = "https://cdn.example.test/x.pdf";
+    const fetchMock = vi.fn(async () => new Response("oops", { status: 500 }));
+    vi.stubGlobal("fetch", fetchMock);
     const raw = {
       message_id: 789,
       from_user_id: "user-1",
       item_list: [
         {
           type: 4,
-          file_item: { file_name: "x.pdf", media: { encrypt_query_param: "q", aes_key: "a2V5" } },
+          file_item: {
+            file_name: "x.pdf",
+            media: {
+              full_url: url,
+              aes_key: Buffer.from("0123456789abcdef").toString("base64"),
+            },
+          },
         },
         { type: 1, text_item: { text: "hi" } },
       ],
@@ -162,9 +165,9 @@ describe("downloadAttachmentsFromMessage", () => {
       inboxDir,
       logger,
     });
-    expect(attachments).toHaveLength(0);
-    expect(failures).toHaveLength(1);
-    expect(failures[0]?.kind).toBe("file");
-    expect(failures[0]?.filename).toBe("x.pdf");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith(url);
+    expect(attachments).toEqual([]);
+    expect(failures).toEqual([{ kind: "file", filename: "x.pdf" }]);
   });
 });

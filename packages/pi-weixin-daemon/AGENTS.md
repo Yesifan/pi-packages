@@ -26,7 +26,8 @@ Weixin iLink → account monitor → AccountManager → ProjectManager
 - `src/sessions/`：共享 Pi 会话状态机、prompt 构造和回复结果处理。
 - `src/pi/`：Pi SDK host、事件转换、Extension/UI 适配。
 - `src/daemon.ts`：运行时组合根；`src/cli/`：`pi-wx` CLI 和 RPC 客户端。
-- `test/unit/`、`test/integration/`：Vitest 单元及集成测试。
+- `test/unit/`、`test/integration/`：默认运行的离线单元及集成测试。
+- `test/model/`：仅通过 `test:model` 显式运行的真实模型发送文件冒烟；微信出口仍使用 fake transport。
 
 ## 开发命令
 
@@ -36,6 +37,7 @@ Weixin iLink → account monitor → AccountManager → ProjectManager
 pnpm --filter @yesifan/pi-weixin-daemon typecheck
 pnpm exec biome lint packages/pi-weixin-daemon
 pnpm --filter @yesifan/pi-weixin-daemon test
+pnpm --filter @yesifan/pi-weixin-daemon test:model # 可选，会访问真实模型
 pnpm --filter @yesifan/pi-weixin-daemon build
 ```
 
