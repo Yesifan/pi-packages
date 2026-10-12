@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.0
+
+### Minor Changes
+
+- c643500: **BREAKING:** Address subagents by their exact parent-local names instead of generated agent/run IDs. Store minimal direct-child metadata per parent session in the global agent directory, with new native Pi child conversation histories in the private `<getAgentDir()>/subagents/histories` directory, outside default discovery/picker/continue. Explicit file opening and custom-directory discovery remain allowed; existing Spec 0002 histories are left at their saved paths and remain recoverable without relocation or migration. Replace business run/mount/report identities and root epochs with in-memory execution/scope ownership and online report-processing barriers. Restore saved roles and historical model/thinking without parent overrides; unfinished tasks become interrupted and old reports are not replayed. Old project-local and legacy subagent stores are not migrated or loaded, and their agents cannot be asked after upgrading; old files are left untouched. Reports include saved roles and validated complete-conversation paths.
+
 ## 0.3.1
 
 ### Patch Changes

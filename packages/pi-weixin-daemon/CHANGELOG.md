@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.14
+
+### Patch Changes
+
+- 5dc880b: Run offline tests by default and provide an explicit `test:model` command for the optional send-file model smoke test.
+- a19dae6: Upgrade the Pi SDK runtime dependencies to 1.0.0.
+- fc35450: Use Weixin voice transcripts with a recognition-error note instead of downloading audio attachments, and notify the sender when the transcript is empty.
+
 ## 0.6.13
 
 ### Patch Changes
