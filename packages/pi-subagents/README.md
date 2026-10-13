@@ -75,7 +75,14 @@ thinking: high
 Report concrete evidence and file locations. Do not modify files.
 ```
 
-Roles accept either `tools` (an allowlist) or `disallowedTools` (a denylist), never both—even when one is empty. Both are arrays of non-empty tool-name strings; duplicate names are removed. `tools: []` allows no tools, while `disallowedTools: []` adds no restrictions. Omitting both preserves the normal target session's tools. Unknown allowlisted names fail with `TOOL_UNAVAILABLE`; unknown denylisted names are harmless and remain excluded if an extension registers them later.
+Roles accept either `tools` (SDK tool selection) or `disallowedTools` (exclusion patterns), never both—even when one is empty. Both are arrays of non-empty strings; duplicate entries are removed. `tools: []` allows no tools, while `disallowedTools: []` adds no restrictions. Omitting both preserves the normal target session's tools.
+
+Tool policy follows Pi SDK 1.1.0 semantics:
+
+- A non-empty `tools` list selects built-in and extension tools, but **is not a strict allowlist across all tools**: if it contains no tool names starting with `mcp__`, already registered MCP tools remain available. Including a name starting with `mcp__` filters MCP tools to those selections; naming only a resource helper such as `list_mcp_resources` does not trigger this filtering; `tools: []` excludes all tools, including MCP.
+- This package first checks each `tools` entry against exact available tool names. Unknown names fail with `TOOL_UNAVAILABLE`; glob allowlists are not supported by this package.
+- `disallowedTools` is passed to SDK `excludeTools`, where `*` is a wildcard (for example, `mcp_*`). Unknown exclusions are harmless and also apply to matching tools registered later. Exclusions take precedence over tool selections.
+- MCP tools must actually be registered in the target session. Enabling codemode alone does not connect MCP services or register their tools.
 
 For example, to keep discovered extension tools while excluding selected tools:
 
@@ -89,9 +96,9 @@ disallowedTools: [edit, write, bash, destructive_custom_tool]
 Explore without modifying files. Report evidence and file locations.
 ```
 
-The built-in `explore` uses `disallowedTools: [edit, write, bash]`, preserving its exploration prompt and other available built-in/extension tools. This does **not guarantee strict read-only execution**: other tools (including `powershell`, if enabled), extension code, and further delegation may have side effects. Use an explicit `tools` allowlist of trusted tools when tighter tool selection is needed; neither policy is a filesystem sandbox.
+The built-in `explore` uses `disallowedTools: [edit, write, bash]`, preserving its exploration prompt and other available built-in/extension tools. This does **not guarantee strict read-only execution**: other tools (including `powershell`, if enabled), extension code, and further delegation may have side effects. Use explicit `tools` selections of trusted tools when tighter selection is needed, accounting for the MCP retention rule above; neither policy is a filesystem sandbox.
 
-Policies apply by exact tool name to the SDK registry, not only the initial active tools. Dynamic extension registration/re-registration and `setActiveTools()` cannot re-enable excluded names. Runtime delegation restrictions still apply: same-cwd and depth-limited children exclude `subagent`/`ask_subagent`; denylisting `subagent` disables descendant delegation, while denylisting only `ask_subagent` leaves creation available.
+Policies apply to the SDK registry, not only the initial active tools. Dynamic extension registration/re-registration and `setActiveTools()` cannot re-enable tools matched by exclusions. Runtime delegation restrictions still apply: same-cwd and depth-limited children exclude `subagent`/`ask_subagent`; denylisting `subagent` disables descendant delegation, while denylisting only `ask_subagent` leaves creation available.
 
 The selected policy is included in the saved role snapshot and content hash. Later role file changes affect newly created logical subagents only, not subsequent asks or root recovery.
 

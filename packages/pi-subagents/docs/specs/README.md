@@ -6,7 +6,7 @@
 
 | Spec | Purpose | Status | Execution time |
 | --- | --- | --- | --- |
-| [权威规格索引与历史 V1](yesifan-pi-subagents-spec.md) | 顶部定义原 Spec 0002 整合后的最终 history/discovery 契约；V1 大节和附录仅为历史资料，不作为当前不变量。 | 当前索引 / 历史 V1（旧格式） | 未记录 |
+| [权威规格索引与历史 V1](yesifan-pi-subagents-spec.md) | 顶部定义原 Spec 0002 整合后的 history/discovery 契约与 SDK 1.1.0 工具策略（非空 tools 无 MCP 条目时保留已注册 MCP，列出 MCP 才过滤，空列表排除全部；排除项支持 * 且优先，tools 前置精确名称校验）；V1 大节和附录仅为历史资料，不作为当前不变量。 | 当前索引 / 历史 V1（旧格式） | 未记录 |
 | [0001 项目本地存储](0001-project-local-subagent-storage.md) | 原项目配置与私有存储要求，相关存储决定被 Spec 0002 和 ADR-0003 替代。 | 历史规格（旧格式） | 未记录 |
 | [0002 提示与会话存储](0002-prompt-and-session-storage.md) | name/metadata/Execution 与 SDK 私有目录 history；普通 discovery 排除新 child，独立打开/显式目录查询允许，存量 exact-path 恢复不迁移。最新 21 文件 / 245 测试通过；用户接受手测延期并关闭。 | completed | 2026-10-08 / 2026-10-09 |
 | [0003 异常退出通知](0003-terminal-exit-reporting.md) | 扩展 0002 的在线终态报告覆盖，失败/取消/无最终文本也通知有效直接 parent；不补投旧 root，不处理 parent 自身失败导致的 child 中断通知。 | not-started | 2026-10-09 |
