@@ -2,6 +2,11 @@
   "name": "@yesifan/pi-weixin-daemon",
   "version": "0.7.0",
   "description": "Connect Weixin iLink Bot with Pi Coding Agent",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Yesifan/pi-packages.git",
+    "directory": "packages/pi-weixin-daemon"
+  },
   "type": "module",
   "engines": {
     "node": ">=22.19.0"
