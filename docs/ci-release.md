@@ -46,6 +46,11 @@ pnpm -r --filter './packages/*' pack --pack-destination /tmp/pi-packages
 
 GitHub 仓库需要允许 Actions 创建 PR，并为版本 PR 与发布提供相应权限；可用分支保护要求功能 PR 和版本 PR 的 CI 通过。npm 发布需要 `@yesifan` scope 权限：尚未建立 Trusted Publisher 的包首次发布可临时使用 `NPM_TOKEN`，之后为各包配置 npm Trusted Publisher（workflow 文件名为 **`release.yml`**），验证成功后移除长期 token。具体设置以官方文档为准：
 
+发布配置注意事项：
+
+- workflow 开启了 provenance；每个公开包的 `package.json.repository.url` 必须指向实际来源仓库 `git+https://github.com/Yesifan/pi-packages.git`（大小写一致），并用 `repository.directory` 标明对应的 `packages/<pkg>` 目录。
+- Trusted Publisher 必须逐包配置。新配置需在 2 天内成功发布一次完成验证；若 npm 显示 `Expired`，删除后重新创建。已有包的发布 PUT 返回 E404 时，应检查该包的配置是否过期，以及 owner、repository、`release.yml` 和可选 environment 是否匹配，不要误判为首次发布。
+
 - [Changesets：自动发版流程](https://changesets.dev/guide/automating)
 - [npm：Trusted publishing、首次发布及 OIDC 设置](https://docs.npmjs.com/trusted-publishers/)
 - [GitHub Actions：`GITHUB_TOKEN` 权限](https://docs.github.com/en/actions/security-for-github-actions/security-guides/automatic-token-authentication)

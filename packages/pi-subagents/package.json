@@ -8,6 +8,11 @@
     "subagents"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Yesifan/pi-packages.git",
+    "directory": "packages/pi-subagents"
+  },
   "type": "module",
   "engines": {
     "node": ">=22.19.0"
