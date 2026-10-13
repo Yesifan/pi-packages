@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.1
+
+### Patch Changes
+
+- dbf7bdb: Add repository metadata required for npm provenance verification during publishing.
+
 ## 0.7.0
 
 ### Minor Changes
