@@ -6,6 +6,8 @@ A [Pi](https://pi.dev) extension that adds a `/system-prompt` slash command.
 
 ## Install
 
+Requires Node.js 22.19.0 or newer. Development is checked against Pi SDK 1.1.0.
+
 ```bash
 pi install npm:@yesifan/pi-system-prompt
 # project-local installation from a monorepo checkout:

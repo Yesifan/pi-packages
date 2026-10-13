@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { ModelRuntime, type SessionManager } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadAgentTypeRegistry, resolveAgentDefinition } from "../../src/agents.js";
@@ -20,7 +21,7 @@ afterEach(async () => {
   await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true })));
 });
 
-async function harness() {
+async function harness(withMcpTools = false) {
   const root = await mkdtemp(path.join(os.tmpdir(), "pi-subagents-tool-policy-"));
   directories.push(root);
   const cwd = path.join(root, "project");
@@ -33,7 +34,7 @@ async function harness() {
     JSON.stringify({
       providers: {
         "policy-test": {
-          api: "openai-completions",
+          api: withMcpTools ? "policy-fixture" : "openai-completions",
           apiKey: "local-test-only",
           baseUrl: "https://unused.invalid",
           models: [
@@ -81,6 +82,61 @@ export default function(pi) {
 }
 `,
   );
+  if (withMcpTools) {
+    await writeFile(
+      path.join(extensions, "mcp-policy.js"),
+      `
+import { createAssistantMessageEventStream } from ${JSON.stringify(fileURLToPath(import.meta.resolve("@earendil-works/pi-ai")))};
+export default function(pi) {
+  // Offline model drives a normal tool turn; this is not QuickJS codemode scripting.
+  pi.registerProvider("policy-test", {
+    api: "policy-fixture",
+    apiKey: "local-test-only",
+    streamSimple(model, context) {
+      const stream = createAssistantMessageEventStream();
+      const finished = context.messages.some((message) => message.role === "toolResult" && message.toolName === "codemode");
+      const message = {
+        role: "assistant",
+        content: finished
+          ? [{ type: "text", text: "Nested fixture complete" }]
+          : [{ type: "toolCall", id: "policy-nested-call", name: "codemode", arguments: { name: "mcp__fixture__write" } }],
+        api: model.api, provider: model.provider, model: model.id,
+        timestamp: Date.now(), stopReason: finished ? "stop" : "toolUse",
+        usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+      };
+      stream.push({ type: "done", reason: message.stopReason, message });
+      stream.end(message);
+      return stream;
+    },
+  });
+  const register = (name) => pi.registerTool({
+    name, label: name, description: name, exposure: "codemode",
+    parameters: { type: "object", properties: {} },
+    execute: async () => ({ content: [{ type: "text", text: name }], details: {} }),
+  });
+  pi.registerTool({
+    name: "codemode", label: "nested-call fixture", description: "Tests the nested-tool execution pathway",
+    parameters: { type: "object", properties: { name: { type: "string" } }, required: ["name"] },
+    execute: async (_id, args, _signal, _update, ctx) => {
+      const outcome = await ctx.executeTool(args.name, {});
+      if (outcome.isError) throw new Error(JSON.stringify(outcome.result));
+      return outcome.result;
+    },
+  });
+  register("mcp__fixture__read");
+  register("mcp__fixture__write");
+  register("list_mcp_resources");
+  const refresh = () => {
+    register("mcp__fixture__write");
+    register("mcp__fixture__late");
+    pi.setActiveTools(["read", "codemode", "mcp__fixture__write"]);
+  };
+  pi.on("session_start", refresh);
+  pi.on("session_shutdown", refresh);
+}
+`,
+    );
+  }
   const broker = new RootUiBroker({} as ConstructorParameters<typeof RootUiBroker>[0], false, 100);
   const factory = new ChildSessionFactory(
     agentDir,
@@ -174,6 +230,86 @@ function expectExcluded(child: OpenedChild, names: string[]) {
 }
 
 describe("child role tool policy with the real SDK", () => {
+  it.each([["read"], ["read", "codemode"], ["read", "list_mcp_resources"]])(
+    "retains registered MCP tools when selections contain no mcp__ entry: %j",
+    async (...tools) => {
+      const h = await harness(true);
+      const { child } = await h.open({ ...resolveAgentDefinition(h.registry), tools });
+      const retained = [
+        "mcp__fixture__read",
+        "mcp__fixture__write",
+        "mcp__fixture__late",
+        "list_mcp_resources",
+      ];
+      expect(child.session.getCallableToolNames()).toEqual(expect.arrayContaining(retained));
+      expectExcluded(child, ["bash", "search_web", "subagent", "ask_subagent"]);
+      if (tools.includes("codemode")) {
+        child.session.setActiveToolsByName(tools);
+        await child.session.prompt("Run the nested-tool fixture", { expandPromptTemplates: false });
+        const result = child.session.agent.state.messages.find(
+          (message) => message.role === "toolResult" && message.toolCallId === "policy-nested-call",
+        );
+        expect(result).toMatchObject({
+          role: "toolResult",
+          toolName: "codemode",
+          isError: false,
+          content: [{ type: "text", text: "mcp__fixture__write" }],
+        });
+      }
+      await child.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+      expect(child.session.getCallableToolNames()).toEqual(expect.arrayContaining(retained));
+    },
+  );
+
+  it("filters MCP tools when an MCP entry is explicitly allowlisted", async () => {
+    const h = await harness(true);
+    const { child } = await h.open({
+      ...resolveAgentDefinition(h.registry),
+      tools: ["read", "codemode", "mcp__fixture__read"],
+    });
+    expect(child.session.getCallableToolNames()).toContain("mcp__fixture__read");
+    const excluded = ["mcp__fixture__write", "mcp__fixture__late", "list_mcp_resources"];
+    expectExcluded(child, excluded);
+    await child.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+    expectExcluded(child, excluded);
+    for (const name of excluded) expect(child.session.getCallableToolNames()).not.toContain(name);
+  });
+
+  it("excludes all tools including MCP tools for an empty allowlist", async () => {
+    const h = await harness(true);
+    const { child } = await h.open({ ...resolveAgentDefinition(h.registry), tools: [] });
+    expect(child.session.getAllTools()).toEqual([]);
+    expect(child.session.getCallableToolNames()).toEqual([]);
+    await child.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+    expect(child.session.getAllTools()).toEqual([]);
+  });
+
+  it.each([["mcp__fixture__*", "late_*"], ["*"]])(
+    "uses SDK wildcard exclusions %j across dynamic registration",
+    async (...disallowedTools) => {
+      const h = await harness(true);
+      const { child } = await h.open({ ...resolveAgentDefinition(h.registry), disallowedTools });
+      const excluded = [
+        "mcp__fixture__read",
+        "mcp__fixture__write",
+        "mcp__fixture__late",
+        "late_allowed",
+        "late_blocked",
+      ];
+      expectExcluded(child, excluded);
+      await child.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+      expectExcluded(child, excluded);
+      for (const name of excluded) expect(child.session.getCallableToolNames()).not.toContain(name);
+      if (disallowedTools.includes("*")) {
+        expect(child.session.getAllTools()).toEqual([]);
+        expect(child.session.getCallableToolNames()).toEqual([]);
+      } else {
+        expect(child.session.getAllTools().map((tool) => tool.name)).toContain("search_web");
+        expect(child.session.getCallableToolNames()).toContain("list_mcp_resources");
+      }
+    },
+  );
+
   it("keeps explore extension tools and excludes built-ins despite extension re-registration", async () => {
     const h = await harness();
     const { child } = await h.open(resolveAgentDefinition(h.registry, "explore"));

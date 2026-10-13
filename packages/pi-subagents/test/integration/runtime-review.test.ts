@@ -14,7 +14,7 @@ describe("runtime final review regressions", () => {
     const child = h.child("worker");
     child.streaming = false;
     child.idle = true;
-    child.emit({ type: "agent_settled" });
+    child.emit({ type: "agent_settled", aborted: false });
     await h.flush();
     expect(execution.finalizing).toBe(false);
     expect(h.reports).toHaveLength(1);
