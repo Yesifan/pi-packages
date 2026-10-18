@@ -5,6 +5,9 @@ import { type Api, clampThinkingLevel, type Model } from "@earendil-works/pi-ai"
 import {
   type AgentSession,
   createAgentSession,
+  createCodemodeExtension,
+  createMcpExtension,
+  createToolSearchExtension,
   DefaultResourceLoader,
   type Extension,
   getAgentDir,
@@ -26,19 +29,6 @@ import {
 } from "./types.js";
 import type { RootUiBroker, SubagentUiProxy } from "./ui.js";
 
-const BUILTIN_TOOL_NAMES = new Set([
-  "read",
-  "bash",
-  "powershell",
-  "edit",
-  "write",
-  "grep",
-  "find",
-  "ls",
-  "subagent",
-  "ask_subagent",
-]);
-
 function isOwnExtension(extension: Extension, ownExtensionPath: string): boolean {
   return (
     path.resolve(extension.resolvedPath) === path.resolve(ownExtensionPath) ||
@@ -46,25 +36,24 @@ function isOwnExtension(extension: Extension, ownExtensionPath: string): boolean
   );
 }
 
-function assertRoleToolsAvailable(
-  tools: readonly string[] | undefined,
-  extensions: Extension[],
-): void {
-  if (!tools) return;
-  const available = new Set(BUILTIN_TOOL_NAMES);
-  for (const extension of extensions) {
-    for (const tool of extension.tools.keys()) available.add(tool);
-  }
-  const unknown = tools.filter((tool) => !available.has(tool));
-  if (unknown.length > 0) {
-    throw new SubagentError(
-      "TOOL_UNAVAILABLE",
-      `Agent role requests unavailable tools: ${unknown.join(", ")}`,
-    );
+async function shutdownSession(session: AgentSession): Promise<void> {
+  try {
+    const runner = session.extensionRunner;
+    if (runner.hasHandlers("session_shutdown")) {
+      await Promise.race([
+        runner.emit({ type: "session_shutdown", reason: "quit" }),
+        new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, 5_000);
+          timer.unref();
+        }),
+      ]);
+    }
+  } finally {
+    session.dispose();
   }
 }
 
-// SDK 1.0.0's branch selection is not exported. Mirror its selection using public
+// SDK 1.1.0's branch selection is not exported. Mirror its selection using public
 // entries/catalog only: a registered virtual model_change holds over physical replies.
 function historicalModel(branch: SessionEntry[], runtime: ModelRuntime): Model<Api> {
   let selection: { provider: string; modelId: string } | undefined;
@@ -288,13 +277,32 @@ Your final response is automatically reported to your direct parent.`;
       cwd,
       agentDir: this.agentDir,
       settingsManager,
-      ...(internalFactory
-        ? {
-            extensionFactories: [
-              { name: "pi-subagents:child", factory: internalFactory, hidden: true },
-            ],
-          }
-        : {}),
+      // Warning Cache Broke: rebuild the CLI's replaceable built-ins in the target
+      // resource registry. builtin entries honor target settings and load after trust;
+      // MCP retains its own exposure/activation policy rather than copying parent tools.
+      extensionFactories: [
+        {
+          name: "codemode",
+          factory: createCodemodeExtension(),
+          builtin: true,
+          replaceable: true,
+        },
+        {
+          name: "tool-search",
+          factory: createToolSearchExtension(),
+          builtin: true,
+          replaceable: true,
+        },
+        {
+          name: "mcp",
+          factory: createMcpExtension(),
+          builtin: true,
+          replaceable: true,
+        },
+        ...(internalFactory
+          ? [{ name: "pi-subagents:child", factory: internalFactory, hidden: true }]
+          : []),
+      ],
       extensionsOverride: (base) => ({
         ...base,
         extensions: base.extensions.filter(
@@ -305,7 +313,6 @@ Your final response is automatically reported to your direct parent.`;
     });
     await resourceLoader.reload({ resolveProjectTrust: async () => trusted });
     const extensionsResult = resourceLoader.getExtensions();
-    assertRoleToolsAvailable(roleSnapshot.tools, extensionsResult.extensions);
 
     // Provider registrations are mutable: each mount gets a fresh target-cwd runtime.
     const modelRuntime = await ModelRuntime.create({
@@ -371,7 +378,7 @@ Your final response is automatically reported to your direct parent.`;
         // Restoration must take the SDK's normal branch path, with no settings/parent overrides.
         ...(options.restoring ? {} : { model, thinkingLevel: options.thinking ?? "off" }),
         ...(roleSnapshot.tools ? { tools: roleSnapshot.tools } : {}),
-        // Warning Cache Broke: SDK 1.0.0 applies exclusions to the full registry on
+        // Warning Cache Broke: SDK 1.1.0 applies exclusions to the full registry on
         // every refresh, including dynamic registration; setActiveTools cannot bypass it.
         excludeTools: [
           ...(roleSnapshot.disallowedTools ?? []),
@@ -419,25 +426,16 @@ Your final response is automatically reported to your direct parent.`;
         actualThinking: openedSession.thinkingLevel as ThinkingLevel,
         dispose: async () => {
           ui.dispose();
-          try {
-            const runner = openedSession.extensionRunner;
-            if (runner.hasHandlers("session_shutdown")) {
-              await Promise.race([
-                runner.emit({ type: "session_shutdown", reason: "quit" }),
-                new Promise<void>((resolve) => {
-                  const timer = setTimeout(resolve, 5_000);
-                  timer.unref();
-                }),
-              ]);
-            }
-          } finally {
-            openedSession.dispose();
-          }
+          await shutdownSession(openedSession);
         },
       };
     } catch (error) {
       ui.dispose();
-      session?.dispose();
+      try {
+        if (session) await shutdownSession(session);
+      } catch {
+        // Preserve the opening failure; shutdownSession still disposes in its finally.
+      }
       throw error;
     }
   }

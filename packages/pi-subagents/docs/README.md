@@ -21,6 +21,10 @@
 
 - [Spec 0003：异常退出也向主代理报告](specs/0003-terminal-exit-reporting.md) — 未开始实现；包含[现场证据](specs/evidence/0003-terminal-exit-2026-10-09.md)。不因本轮目录修订声称异常退出通知或诊断完善已完成。
 
+## 原生 Codemode 与 MCP
+
+- [Spec 0004](specs/0004-sdk-builtin-tools-and-mcp.md) — 按 target session 配置加载 SDK built-in extensions，保留禁用/替换、MCP exposure 与角色工具策略；实施与验证状态见规格。
+
 ## 历史实现设计
 
 - [`ADR-0001`](adr/0001-project-local-subagent-storage.md) — 原项目本地单一权威 store 的真实背景、理由与历史记录，原文保留。

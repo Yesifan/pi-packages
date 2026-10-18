@@ -80,7 +80,7 @@ Roles accept either `tools` (SDK tool selection) or `disallowedTools` (exclusion
 Tool policy follows Pi SDK 1.1.0 semantics:
 
 - A non-empty `tools` list selects built-in and extension tools, but **is not a strict allowlist across all tools**: if it contains no tool names starting with `mcp__`, already registered MCP tools remain available. Including a name starting with `mcp__` filters MCP tools to those selections; naming only a resource helper such as `list_mcp_resources` does not trigger this filtering; `tools: []` excludes all tools, including MCP.
-- This package first checks each `tools` entry against exact available tool names. Unknown names fail with `TOOL_UNAVAILABLE`; glob allowlists are not supported by this package.
+- `tools` selections are passed directly to the SDK, including its supported patterns. This package does not prevalidate tool existence: unknown or misspelled selections match no tools instead of failing child creation with `TOOL_UNAVAILABLE`. Explicit MCP selections can match tools registered later; actual calls to unavailable tools still fail through the SDK. Check role spelling when expected tools are missing.
 - `disallowedTools` is passed to SDK `excludeTools`, where `*` is a wildcard (for example, `mcp_*`). Unknown exclusions are harmless and also apply to matching tools registered later. Exclusions take precedence over tool selections.
 - MCP tools must actually be registered in the target session. Enabling codemode alone does not connect MCP services or register their tools.
 
@@ -101,6 +101,16 @@ The built-in `explore` uses `disallowedTools: [edit, write, bash]`, preserving i
 Policies apply to the SDK registry, not only the initial active tools. Dynamic extension registration/re-registration and `setActiveTools()` cannot re-enable tools matched by exclusions. Runtime delegation restrictions still apply: same-cwd and depth-limited children exclude `subagent`/`ask_subagent`; denylisting `subagent` disables descendant delegation, while denylisting only `ask_subagent` leaves creation available.
 
 The selected policy is included in the saved role snapshot and content hash. Later role file changes affect newly created logical subagents only, not subsequent asks or root recovery.
+
+## Codemode and MCP
+
+Children load the SDK 1.1.0 built-in `codemode`, `tool_search`, and `mcp` extensions using their own target cwd, agentDir, and settings. No adapter or duplicate MCP configuration is needed. Parent tool instances, connections, and temporary CLI overrides are not copied.
+
+Loading does not unconditionally activate tools. For codemode without MCP, set `"defaultTools": ["+codemode"]` in Pi settings. Enabled MCP servers can activate codemode or tool search according to SDK configuration. MCP configuration is read from `<agentDir>/mcp.json` and trusted project `.pi/mcp.json`.
+
+The default MCP exposure is `codemode`: tools are discovered and called from scripts, not declared directly to the model. SDK `deferred`, `direct`, and `hidden` exposure behavior is preserved. Role selections and exclusions govern actual calls, including calls from codemode; codemode cannot bypass delegation restrictions.
+
+Disable built-ins through Pi settings, for example `"extensions": ["-builtin:mcp"]`. Disabling MCP prevents its built-in connections; disabling codemode alone does not disable other MCP exposure modes. Third-party extensions registering the same codemode/tool-search tool or `/mcp` command replace the corresponding built-in using SDK semantics, without duplicate registration or built-in MCP connections.
 
 ## Configuration and storage
 

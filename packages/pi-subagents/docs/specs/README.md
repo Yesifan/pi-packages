@@ -6,12 +6,13 @@
 
 | Spec | Purpose | Status | Execution time |
 | --- | --- | --- | --- |
-| [权威规格索引与历史 V1](yesifan-pi-subagents-spec.md) | 顶部定义原 Spec 0002 整合后的 history/discovery 契约与 SDK 1.1.0 工具策略（非空 tools 无 MCP 条目时保留已注册 MCP，列出 MCP 才过滤，空列表排除全部；排除项支持 * 且优先，tools 前置精确名称校验）；V1 大节和附录仅为历史资料，不作为当前不变量。 | 当前索引 / 历史 V1（旧格式） | 未记录 |
+| [权威规格索引与历史 V1](yesifan-pi-subagents-spec.md) | 顶部定义原 Spec 0002 整合后的 history/discovery 契约与 SDK 1.1.0 工具策略（非空 tools 无 MCP 条目时保留已注册 MCP，列出 MCP 才过滤，空列表排除全部；排除项支持 * 且优先，tools 直接交由 SDK 选择，不预校验名称存在性）；V1 大节和附录仅为历史资料，不作为当前不变量。 | 当前索引 / 历史 V1（旧格式） | 未记录 |
 | [0001 项目本地存储](0001-project-local-subagent-storage.md) | 原项目配置与私有存储要求，相关存储决定被 Spec 0002 和 ADR-0003 替代。 | 历史规格（旧格式） | 未记录 |
 | [0002 提示与会话存储](0002-prompt-and-session-storage.md) | name/metadata/Execution 与 SDK 私有目录 history；普通 discovery 排除新 child，独立打开/显式目录查询允许，存量 exact-path 恢复不迁移。最新 21 文件 / 245 测试通过；用户接受手测延期并关闭。 | completed | 2026-10-08 / 2026-10-09 |
 | [0003 异常退出通知](0003-terminal-exit-reporting.md) | 扩展 0002 的在线终态报告覆盖，失败/取消/无最终文本也通知有效直接 parent；不补投旧 root，不处理 parent 自身失败导致的 child 中断通知。 | not-started | 2026-10-09 |
+| [0004 原生 Codemode 与 MCP](0004-sdk-builtin-tools-and-mcp.md) | 扩展当前工具契约：target session builtin 加载、禁用/替换、MCP exposure 与取消工具存在性预校验；新增测试限加载/禁用/替换。 | completed | 2026-10-18 / 2026-10-18 |
 
-V1 与 0001 保留历史格式；其历史标签不代表本轮验收完成。0002 已补充统一 metadata，执行日期沿用首次文档提交日期；0002/0003 以各自文件 metadata 为状态与日期唯一来源。用户于 2026-10-09 接受手动 TUI/print 验收延期并关闭 0002，status 保持 completed，日期为创建日期 / 完成日期。PR #11 尚未合并，本次按用户明确要求把私有目录/discovery 最终选择直接整合进原 0002/ADR-0003，不另立后续规格或替代历史。最新目录修订的 typecheck、21 文件 / 245 测试、build、pack 通过；此前 runtime 复审不冒充该修订已复审。手测未运行，不宣称 §14 全部通过；0003 仍未开始。
+V1 与 0001 保留历史格式；其历史标签不代表本轮验收完成。0002 已补充统一 metadata，执行日期沿用首次文档提交日期；0002/0003/0004 以各自文件 metadata 为状态与日期唯一来源。用户于 2026-10-09 接受手动 TUI/print 验收延期并关闭 0002，status 保持 completed，日期为创建日期 / 完成日期。PR #11 尚未合并，本次按用户明确要求把私有目录/discovery 最终选择直接整合进原 0002/ADR-0003，不另立后续规格或替代历史。最新目录修订的 typecheck、21 文件 / 245 测试、build、pack 通过；此前 runtime 复审不冒充该修订已复审。手测未运行，不宣称 §14 全部通过；0003 仍未开始。
 
 ## Maintenance
 

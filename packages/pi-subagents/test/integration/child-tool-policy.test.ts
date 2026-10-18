@@ -426,11 +426,25 @@ describe("child role tool policy with the real SDK", () => {
           .map((tool) => tool.name)
           .sort(),
       ).toEqual(["read", "search_web"]);
-      await expect(
-        h.open({ ...resolveAgentDefinition(h.registry), tools: ["absent_tool"] }),
-      ).rejects.toMatchObject({ code: "TOOL_UNAVAILABLE" });
     },
   );
+
+  it("defers unknown selectors and pending MCP tool selection to the SDK", async () => {
+    const h = await harness(true);
+    // The fixture registers this MCP name only during session_start, not factory load.
+    const { child } = await h.open({
+      ...resolveAgentDefinition(h.registry),
+      tools: ["read", "absent_tool", "mcp__fixture__late"],
+    });
+    expect(
+      child.session
+        .getAllTools()
+        .map((tool) => tool.name)
+        .sort(),
+    ).toEqual(["mcp__fixture__late", "read"]);
+    expect(child.session.getCallableToolNames()).toContain("mcp__fixture__late");
+    expectExcluded(child, ["absent_tool", "mcp__fixture__read", "mcp__fixture__write"]);
+  });
 
   it("remounts the saved denylist while discovering current tools without injecting role messages", async () => {
     const h = await harness();
