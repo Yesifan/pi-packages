@@ -35,11 +35,13 @@ steering 的异步 input hook / tool 取消竞争修正、自动测试与独立�
 
 ### 当前工具策略（Pi SDK 1.1.0）
 
+[Spec 0004](0004-sdk-builtin-tools-and-mcp.md) 扩展本节：child mount 通过 SDK named `builtin: true` factories 加载 `codemode`、`tool_search`、`mcp`，遵循 target cwd、agentDir、有效配置、`-builtin:<name>` 禁用和第三方同名替换机制。加载不等于无条件激活；不复制 parent registry、连接或临时 CLI override。MCP 默认 codemode exposure，脚本发现与调用工具；deferred/direct/hidden 保持 SDK 行为。工具排除约束实际调用（含 codemode），trust 和委派边界不变。
+
 用户明确接受 SDK 1.1.0 的默认工具选择与排除语义，不在本包另建严格的全工具白名单。以下当前契约优先于历史 V1 §5.2/§7.2 的精确匹配与全工具白名单描述；不改写 V1 或 Spec 0002 的历史记录。
 
 - 角色 `tools` 与 `disallowedTools` 仍严格互斥（包括空数组）；字段均为数组，元素必须是非空字符串，按原顺序去重。省略两者保留 target session 正常工具集合；`disallowedTools: []` 不增加限制。
 - 非空 `tools` 按 SDK 规则选择内置/扩展工具。列表中没有以 `mcp__` 开头的工具名称时，保留 target session 已注册的 MCP 工具；只有列出以 `mcp__` 开头的名称时才过滤 MCP 工具。仅列出 `list_mcp_resources` 等 MCP resource helper 不触发该过滤。`tools: []` 排除全部工具，包括 MCP。因此不能把非空 `tools` 描述为覆盖全部工具类别的严格白名单。
-- 本包仍前置校验每个 `tools` 条目是否为 target session 实际可用工具的精确名称；未知名称返回 `TOOL_UNAVAILABLE`。即使 SDK 支持模式选择，本包也不承诺 glob 白名单，不把通配字符串当作已可用名称。
+- 按用户确认的 Spec 0004 修订，本包不再预校验工具名称是否存在，也不因未知或拼错的 `tools` 条目返回 `TOOL_UNAVAILABLE`。选择列表（含 SDK 支持的模式）直接交给 SDK；未匹配名称不提供工具，显式 MCP 选择可匹配后续动态注册。实际调用不可用工具仍由 SDK 报错。保留字段格式、互斥和去重校验；不新增 discovery 等待、轮询或连接管理。
 - `disallowedTools` 经 SDK `excludeTools` 应用，`*` 是通配符（例如 `mcp_*`），不是仅匹配字面工具名。未知排除项不报错；后续动态注册/重新注册的匹配工具仍被排除，`setActiveTools()` 不能重新启用被排除工具。排除优先于选择；runtime 委派排除项同样合并至 `excludeTools`，角色工具选择不能绕过 same-cwd、depth 或 runtime 限制。
 - MCP 工具必须在 target session 实际注册后才可用。仅启用 codemode 不等于连接 MCP 服务或注册其工具；不承诺复制 parent 的 MCP 连接或未注册工具。
 - 创建时保存完整角色策略 snapshot，后续 ask/root 恢复不重新解析同名角色替换 snapshot，但按 target cwd 当前资源和 SDK 1.1.0 规则重建工具集合。工具策略不是 filesystem sandbox；`explore` 排除 `edit/write/bash` 仍不保证严格只读，其他工具、扩展及进一步委派可能有副作用。
