@@ -1,6 +1,6 @@
 {
   "name": "@yesifan/pi-subagents",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Persistent in-process background subagents for Pi Coding Agent",
   "keywords": [
     "pi-package",
