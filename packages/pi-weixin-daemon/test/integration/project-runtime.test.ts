@@ -93,6 +93,47 @@ describe("ProjectRuntime: sender marker + project-wide notify/broadcast + idle c
     expect(h.transports.get("B")!.typingEvents.at(-1)?.typing).toBe(false);
   });
 
+  it.each(["stop", "replace"] as const)(
+    "finishes an already-started broadcast after session %s",
+    async (change) => {
+      const h = setup();
+      await h.pm.sync(fooConfig);
+      const runtime = h.fakes.get("foo")!;
+      const prime = h.pm.dispatch("A", textMsg("A", "u-a", "prime", "hello"));
+      await vi.waitFor(() => expect(runtime.prompts).toHaveLength(1));
+      runtime.complete("");
+      await prime;
+
+      let release!: () => void;
+      const blocked = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const first = h.transports.get("A")!;
+      const send = first.sendText.bind(first);
+      const sending = vi.spyOn(first, "sendText").mockImplementationOnce(async (ctx, text) => {
+        await blocked;
+        await send(ctx, text);
+      });
+      try {
+        runtime.startIndependentTurn();
+        runtime.completeIndependentTurn("finished reply");
+        await vi.waitFor(() => expect(sending).toHaveBeenCalledTimes(1));
+        expect(h.transports.get("B")!.textsTo("B")).not.toContain("finished reply");
+        if (change === "stop") await h.pm.stopAll();
+        else runtime.emit({ type: "session_bound", generation: 2 });
+        release();
+        await vi.waitFor(() => {
+          expect(first.textsTo("A")).toContain("finished reply");
+          expect(h.transports.get("B")!.textsTo("B")).toContain("finished reply");
+        });
+      } finally {
+        release();
+        sending.mockRestore();
+        await h.pm.stopAll();
+      }
+    },
+  );
+
   it("keeps the Pi project healthy when one broadcast delivery fails", async () => {
     class FailingTransport extends FakeWeixinTransport {
       override async sendText(): Promise<void> {

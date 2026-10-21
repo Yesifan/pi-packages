@@ -279,10 +279,7 @@ export class ProjectController {
     }
   };
 
-  private readonly broadcastText = async (
-    text: string,
-    isCurrent?: () => boolean,
-  ): Promise<DeliveryReport> => {
+  private readonly broadcastText = async (text: string): Promise<DeliveryReport> => {
     const report: DeliveryReport = {
       attempted: this.config.accounts.length,
       succeeded: 0,
@@ -290,7 +287,7 @@ export class ProjectController {
       failedAccounts: [],
     };
     for (const accountId of this.config.accounts) {
-      if (isCurrent && !isCurrent()) break;
+      // Once started, finish this broadcast even if the session stops or changes.
       try {
         await this.opts.transport.sendText(this.broadcastContext(accountId), text);
         report.succeeded++;

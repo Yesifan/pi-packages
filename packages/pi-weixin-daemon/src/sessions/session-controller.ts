@@ -35,10 +35,7 @@ export interface SessionControllerDeps {
   /** Login user allowed to answer a directed interaction on this account. */
   resolveRecipientUserId: (accountId: string) => string | undefined;
   /** Broadcast a turn's final reply / idle-close notice to bound project users. */
-  broadcastText?: (
-    text: string,
-    isCurrent?: () => boolean,
-  ) => Promise<DeliveryReport> | Promise<void>;
+  broadcastText?: (text: string) => Promise<DeliveryReport> | Promise<void>;
   /** Set or clear typing for all bound project users. */
   broadcastTyping?: (typing: boolean) => Promise<void>;
   /** Typing refresh interval; primarily configurable for tests. */
@@ -124,12 +121,7 @@ export class SessionController {
     const deliver = async () => {
       if (generation !== this.generation || !this.deps.host.hasSession()) return;
       try {
-        await this.deliverOutcome(
-          run.origin,
-          outcome,
-          run.messageId,
-          () => generation === this.generation && this.deps.host.hasSession(),
-        );
+        await this.deliverOutcome(run.origin, outcome, run.messageId);
       } catch (err) {
         this.deps.logger.error(
           { err, project: this.deps.projectId },
@@ -515,12 +507,11 @@ export class SessionController {
     turn: TurnContext | undefined,
     outcome: TurnOutcome,
     messageId?: string,
-    isCurrent?: () => boolean,
   ): Promise<void> {
     if (outcome.status === "success") {
       if (outcome.text) {
         if (this.deps.broadcastText) {
-          const report = await this.deps.broadcastText(outcome.text, isCurrent);
+          const report = await this.deps.broadcastText(outcome.text);
           if (report && report.failed > 0) {
             this.deps.logger[report.succeeded === 0 ? "error" : "warn"](
               { project: this.deps.projectId, messageId, ...report },
