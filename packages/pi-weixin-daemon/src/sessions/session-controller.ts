@@ -33,7 +33,7 @@ export interface SessionControllerDeps {
   /** Idle window before the session is disposed (min for tests). */
   sessionIdleMs?: number;
   /** Login user allowed to answer a directed interaction on this account. */
-  resolveRecipientUserId?: (accountId: string) => string | undefined;
+  resolveRecipientUserId: (accountId: string) => string | undefined;
   /** Broadcast a turn's final reply / idle-close notice to bound project users. */
   broadcastText?: (
     text: string,
@@ -338,9 +338,7 @@ export class SessionController {
   }
 
   private isInteractionRecipient(origin: TurnContext, incoming: TurnContext): boolean {
-    const userId = this.deps.resolveRecipientUserId
-      ? this.deps.resolveRecipientUserId(origin.accountId)
-      : origin.senderId;
+    const userId = this.deps.resolveRecipientUserId(origin.accountId);
     return origin.accountId === incoming.accountId && !!userId && userId === incoming.senderId;
   }
 

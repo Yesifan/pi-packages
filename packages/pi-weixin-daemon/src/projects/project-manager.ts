@@ -1,9 +1,5 @@
 import type { Logger } from "../util/logger.js";
-import {
-  RecipientUnavailableError,
-  type ResolveRecipientAccount,
-  resolveRecipientAccount,
-} from "../weixin/recipient.js";
+import { RecipientUnavailableError, type ResolveRecipientAccount } from "../weixin/recipient.js";
 import type { InboundMessage, WeixinTransport } from "../weixin/types.js";
 import { type ProjectRuntimeConfig, runtimeKeyOf } from "./project-config.js";
 import { ProjectController, type ProjectHostFactory } from "./project-controller.js";
@@ -14,7 +10,7 @@ export interface ProjectManagerOptions {
   /** Resolve the per-account transport (owned by AccountManager). */
   getTransport: (accountId: string) => WeixinTransport | undefined;
   /** Login user and exact cached token, shared by all project delivery. */
-  resolveBroadcastAccount?: ResolveRecipientAccount;
+  resolveBroadcastAccount: ResolveRecipientAccount;
   /** Build the per-project agent host (real PiSdkHost or fake in tests). */
   factory: ProjectHostFactory;
   logger: Logger;
@@ -45,7 +41,7 @@ export class ProjectManager {
   constructor(private readonly opts: ProjectManagerOptions) {
     this.transport = new ProjectTransport(
       opts.getTransport,
-      opts.resolveBroadcastAccount ?? resolveRecipientAccount,
+      opts.resolveBroadcastAccount,
       opts.logger,
     );
   }
@@ -110,8 +106,7 @@ export class ProjectManager {
       const controller = new ProjectController({
         config: snapshot,
         transport: this.transport,
-        resolveRecipientUserId: (id) =>
-          (this.opts.resolveBroadcastAccount ?? resolveRecipientAccount)(id)?.userId,
+        resolveRecipientUserId: (id) => this.opts.resolveBroadcastAccount(id)?.userId,
         logger: this.opts.logger,
         factory: this.opts.factory,
         resolveSenderName: this.opts.resolveSenderName,

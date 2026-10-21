@@ -27,8 +27,6 @@ export class OutboundDeliveryError extends Error {
  * so the controller consumes inbound directly (see ProjectController).
  */
 export class ProjectTransport implements WeixinTransport {
-  private handlers: Array<(message: InboundMessage) => Promise<void>> = [];
-
   constructor(
     private readonly getTransport: (accountId: string) => WeixinTransport | undefined,
     private readonly resolveAccount: ResolveRecipientAccount,
@@ -82,10 +80,8 @@ export class ProjectTransport implements WeixinTransport {
     }
   }
 
-  onMessage(handler: (message: InboundMessage) => Promise<void>): () => void {
-    this.handlers.push(handler);
-    return () => {
-      this.handlers = this.handlers.filter((h) => h !== handler);
-    };
+  /** Outbound-only facade: inbound dispatch goes directly to ProjectController. */
+  onMessage(_handler: (message: InboundMessage) => Promise<void>): () => void {
+    return () => {};
   }
 }

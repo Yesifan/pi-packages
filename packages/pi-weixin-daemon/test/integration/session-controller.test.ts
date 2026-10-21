@@ -35,6 +35,8 @@ function setup(
   });
   const session = new SessionController({
     projectId: "foo",
+    resolveRecipientUserId: (id) =>
+      id === "acct-a" ? "user-a" : id === "acct-b" ? "user-b" : undefined,
     host: runtime,
     interaction,
     transport,
