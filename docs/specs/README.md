@@ -6,7 +6,7 @@
 
 | Spec | Purpose | Status | Execution time |
 | --- | --- | --- | --- |
-| [pi-session](pi-session.md) | Session 名称引用补全、授权 cwd 正文搜索及通过完整 ID 继续原会话的轻量后台对话。 | not-started | 2026-10-08 |
+| [pi-session](pi-session.md) | Session 名称引用补全、授权 cwd 正文搜索及通过完整 ID 继续原会话的轻量后台对话。 | completed | 2026-10-08 / 2026-10-21 |
 
 包内既有规格仍由其自身索引维护：[pi-subagents 规格索引](../../packages/pi-subagents/docs/specs/README.md)。本目录不迁移或重复维护包内历史规格。
 

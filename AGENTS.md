@@ -9,6 +9,7 @@
 - `@yesifan/pi-weixin-daemon`：连接微信 iLink Bot 与 Pi Coding Agent 的 TypeScript 守护进程及 `pi-wx` CLI。
 - `@yesifan/pi-system-prompt`：提供 `/system-prompt` 命令，显示当前会话实际发送给模型的系统提示词和工具定义。
 - `@yesifan/pi-subagents`：提供持久化后台 subagent 与嵌套委派工具。
+- `@yesifan/pi-session`：提供 session 引用补全、授权目录正文搜索与轻量后台会话提问。
 
 在根目录使用 pnpm filter 运行子 package 的命令：
 
