@@ -4,6 +4,7 @@ import { pino } from "pino";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createLogger } from "../../src/util/logger.js";
 import type { GetUpdatesFn } from "../../src/weixin/api/api.js";
+import { _resetForTest, getRemainingPauseMs } from "../../src/weixin/api/session-guard.js";
 import type { GetUpdatesResp, WeixinMessage } from "../../src/weixin/api/types.js";
 import { monitorWeixinProvider } from "../../src/weixin/monitor/monitor.js";
 
@@ -25,6 +26,8 @@ afterEach(() => {
   if (OLD_DATA === undefined) delete process.env.PI_WEIXIN_DATA_DIR;
   else process.env.PI_WEIXIN_DATA_DIR = OLD_DATA;
   fs.rmSync(stateDir, { recursive: true, force: true });
+  vi.useRealTimers();
+  _resetForTest();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -43,6 +46,79 @@ function makeMessage(overrides: Partial<WeixinMessage> = {}): WeixinMessage {
 }
 
 describe("monitorWeixinProvider", () => {
+  it.each([
+    {
+      name: "mixed business/network failures accumulate and backoff resets the counter",
+      responses: [{ ret: 1 }, new Error("network"), { errcode: 1 }, { ret: 1 }],
+      times: [0, 2000, 4000, 34000, 36000],
+    },
+    {
+      name: "success resets mixed failure counts",
+      responses: [{ ret: 1 }, new Error("network"), { ret: 0 }, { ret: 1 }],
+      times: [0, 2000, 4000, 4000, 6000],
+    },
+    {
+      name: "stale ret resets failures and waits an hour",
+      responses: [{ ret: 1 }, new Error("network"), { ret: -14 }, { ret: 1 }],
+      times: [0, 2000, 4000, 3604000, 3606000],
+    },
+    {
+      name: "stale errcode resets failures and waits an hour",
+      responses: [{ ret: 1 }, new Error("network"), { errcode: -14 }, { ret: 1 }],
+      times: [0, 2000, 4000, 3604000, 3606000],
+    },
+  ])("$name", async ({ responses, times }) => {
+    vi.useFakeTimers();
+    const started = Date.now();
+    const calls: number[] = [];
+    const control = new AbortController();
+    const getUpdatesFn: GetUpdatesFn = vi.fn(async () => {
+      calls.push(Date.now() - started);
+      const response = responses.shift();
+      if (response instanceof Error) throw response;
+      if (response) return response;
+      control.abort();
+      return { ret: 0 };
+    });
+    const monitoring = monitorWeixinProvider({
+      baseUrl: "https://example.test",
+      accountId: "acct-a",
+      abortSignal: control.signal,
+      getUpdatesFn,
+      logger,
+      onInbound: vi.fn(async () => {}),
+    });
+    await vi.runAllTimersAsync();
+    await monitoring;
+    expect(calls).toEqual(times);
+  });
+
+  it.each(["retry", "backoff", "stale"])(
+    "aborts during %s waiting without another poll",
+    async (waiting) => {
+      vi.useFakeTimers();
+      const control = new AbortController();
+      const getUpdatesFn: GetUpdatesFn = vi.fn(async () => ({
+        ret: waiting === "stale" ? -14 : 1,
+      }));
+      const monitoring = monitorWeixinProvider({
+        baseUrl: "https://example.test",
+        accountId: "acct-a",
+        abortSignal: control.signal,
+        getUpdatesFn,
+        logger,
+        onInbound: vi.fn(async () => {}),
+      });
+      await vi.advanceTimersByTimeAsync(waiting === "backoff" ? 4000 : 0);
+      expect(getUpdatesFn).toHaveBeenCalledTimes(waiting === "backoff" ? 3 : 1);
+      if (waiting === "stale") expect(getRemainingPauseMs("acct-a")).toBe(3600000);
+      control.abort();
+      await monitoring;
+      expect(vi.getTimerCount()).toBe(0);
+      expect(getUpdatesFn).toHaveBeenCalledTimes(waiting === "backoff" ? 3 : 1);
+    },
+  );
+
   it.each(["business", "http", "invalid-json", "network"])(
     "keeps retry/backoff and safe caller logs after %s API failures",
     async (failure) => {

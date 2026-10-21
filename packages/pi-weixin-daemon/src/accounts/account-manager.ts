@@ -2,7 +2,8 @@ import type { AccountInfo, AccountStatus } from "../projects/types.js";
 import type { Logger } from "../util/logger.js";
 import type { InboundMessage, WeixinTransport } from "../weixin/types.js";
 
-export interface ManagedAccount {
+interface ManagedAccount {
+  unsubscribe: () => void;
   accountId: string;
   transport: WeixinTransport;
   status: AccountStatus;
@@ -26,7 +27,6 @@ export interface AccountManagerOptions {
 export class AccountManager {
   private accounts = new Map<string, ManagedAccount>();
   private inboundHandlers: Array<(message: InboundMessage) => Promise<void>> = [];
-  private unsubscribes = new Map<string, () => void>();
 
   constructor(private readonly opts: AccountManagerOptions) {}
 
@@ -42,16 +42,15 @@ export class AccountManager {
       transport,
       status: "online",
       userId,
+      unsubscribe: unsub,
     });
-    this.unsubscribes.set(accountId, unsub);
     this.opts.logger.info({ account: accountId }, "account registered");
   }
 
   async remove(accountId: string): Promise<void> {
     const mgd = this.accounts.get(accountId);
     if (!mgd) return;
-    this.unsubscribes.get(accountId)?.();
-    this.unsubscribes.delete(accountId);
+    mgd.unsubscribe();
     this.accounts.delete(accountId);
     await mgd.transport
       .stop()
@@ -101,7 +100,7 @@ export class AccountManager {
   }
 
   async stopAll(): Promise<void> {
-    for (const id of [...this.unsubscribes.keys()]) {
+    for (const id of [...this.accounts.keys()]) {
       await this.remove(id).catch(() => {});
     }
   }
