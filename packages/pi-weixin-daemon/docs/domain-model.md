@@ -29,7 +29,7 @@
   - `name`：用户用 `--name` 起的**别名**（全局唯一，如 `personal`/`work`）。
   - `token`：`bot_token`，用于鉴权（绝不打日志）。
   - `baseUrl`：有效 API base URL。
-  - `userId`：绑定的微信真人用户（= owner）。
+  - `userId`：扫码登录结果中的微信用户。
   - `savedAt`：登录时间。
 - **归属**：一个 account 至多属于一个 project（多绑第二个会报错）。
 
@@ -37,6 +37,7 @@
 
 - 把若干 account 聚合到**同一个工作目录**，并共享至多一个活动 Pi 会话。
 - **标识**：`projectId`（项目名，配置记录的 key）。
+- **微信用户集合**：由绑定账号的 `account.userId` 投影得到，不设独立联系人或动态参与者登记。
 - **属性**（存于 `config.json`）：`cwd`、`accounts: accountId[]`、`enabled`。
 - **运行时**：`ProjectController`（一个项目一个），内含 `SessionController`
   （单一会话状态机：busy / abort / 发言范围 / 命令执行）。项目启动时只启动 controller/host，
@@ -57,9 +58,9 @@
 | 字段 | 含义 |
 |---|---|
 | `accountId` | 收到这条消息的 **bot 账号** |
-| `senderId` | 入站报文中的实际发件人（owner-scoped 协议下通常为 owner） |
+| `senderId` | 入站报文中的实际发件人，不保证等于登录用户 |
 | `messageId` | 消息 id（`message_id` 或 `client_id`） |
-| `contextToken` | 微信下发的会话上下文 token，回复必须回传 |
+| `contextToken` | 微信下发的会话上下文 token，按实际 sender 保存；仅可用于同一账号/用户 |
 | `text` | 原始文本内容（含语音转写 `voice_item.text`，不含识别错误备注），用于命令和 UI 回复解析；空转写不生成文本 |
 | `promptText` | 可选的 Agent 输入文本；对应语音转写后追加识别错误备注，不用于控制解析；未提供时使用 `text` |
 | `attachments` | 附件（入站微信生成 image / file / video）；image 走多模态，file/video 以 context note 带入；语音不下载、不生成附件 |
@@ -68,9 +69,9 @@
 
 ### 1.6 回合上下文（TurnContext）
 
-本轮 agent 回复的"来源 / 接收方"。**发文件、UI 询问、错误和不完整输出只回到这个 context**；
-成功文本回复会给项目内所有参与者各发一份（见 [`routing.md`](routing.md) 的"回复 / 广播"）。
-字段：`accountId`、`senderId`、`messageId`、`contextToken`。
+本轮 agent 的来源记录，保留 `accountId`、实际 `senderId`、`messageId` 和 `contextToken`。
+**文件、UI 询问、错误和不完整输出仍定向到来源账号的 `account.userId`**，不是直接使用原始 sender 作为收件人；UI 允许回答者与该投递对象一致。
+成功文本回复发给项目绑定账号的微信用户（见 [`routing.md`](routing.md) 的"回复 / 广播"）。
 
 ### 1.7 组合示例：两个用户 + 一个项目
 
@@ -78,12 +79,12 @@
                         项目 project
                 ┌───────────┴───────────┐
             账号A (bot)               账号B (bot)
-              │  1:1 owner-scoped        │
+              │  扫码登录用户            │
           用户a ───────────          用户b
         (userId_a / senderId_a)     (userId_b / senderId_b)
 ```
 
-- 用户a ↔ 账号A：A 只服务 a；用户b ↔ 账号B：B 只服务 b。
+- 用户a 扫码登录账号A，用户b 扫码登录账号B；本例中的入站 sender 恰好等于登录用户，不代表协议保证。
 - 两个账号都绑到**同一个项目**，共享**同一个会话**。
 - 用户a 只通过账号A 发消息（`accountId=A`、`senderId=a`）；用户b 只通过账号B
   （`accountId=B`、`senderId=b`）。
@@ -101,15 +102,15 @@
 |---|---|---|---|
 | `accountId` | 登录 `ilink_bot_id` | **bot 账号**（收消息的一方） | 路由 key；账号存储索引 |
 | `name` | `--name` | 账号**别名**（人话标识） | 全局唯一；仅展示/CLI |
-| `userId` | 登录 `ilink_user_id` | **owner（扫码真人）** | 协议上通常对应 `senderId`；本地不校验 |
-| `senderId` | 入站 `from_user_id` | 实际发消息的**真人** | 回复/广播使用此观测值 |
+| `userId` | 登录 `ilink_user_id` | **扫码登录用户** | 出站收件人来源；不推断与 `senderId` 相等 |
+| `senderId` | 入站 `from_user_id` | 实际发消息的**真人** | 入站来源及 token 归属，不直接决定出站收件人 |
 | `context_token` | 入站消息 | 会话上下文 token | 按 (account, user) 持久化 |
 | `projectId` | 项目名 | 项目的 key | 一个账号 → 至多一个项目 |
 | `sessionFile/sessionId` | Pi 会话 | 当前共享会话 | 一个项目至多一个活动会话 |
 
-> **一句话**：`accountId` 是**机器人**；`userId` 是扫码 owner，`senderId` 是报文中实际发件人；
-> owner-scoped 协议下二者通常对应，但本地既不校验也不依赖相等。`name` 是机器人的**别名**。
-> 因此找人 / 广播使用参与者注册表中实际观测到的 `senderId`，不靠 `account.userId` 猜。
+> **一句话**：`accountId` 是**机器人**；`userId` 是扫码登录用户，`senderId` 是报文中实际发件人；
+> 本地不以二者相等作为入站条件。`name` 是机器人的**别名**。
+> 出站使用 `account.userId` 及其精确 token，这是应用策略，不是对两种 ID 映射的猜测。
 
 ---
 
@@ -131,13 +132,13 @@
   pi agent 处理，生成回复消息B
          │
          ▼
-  pi-weixin 把消息B 发给微信服务器      # 接收方 = 实际 senderId + context_token
+  pi-weixin 把消息B 发给微信服务器      # 接收方 = 绑定账号的 userId + 精确 context_token
          │
          ▼
-  微信服务器 通过 bot 把消息B 发回给 user
+  微信服务器 通过各目标 bot 把消息B 发给其登录用户
 ```
 
-- 一个项目可绑定多个 account；每个 account 对应一台"bot"，服务各自的 owner。
+- 一个项目可绑定多个 account；每个 account 对应一个 bot，记录各自的扫码登录用户。
 - 一个项目只有一个会话，所以多个账号 / 用户**共用**同一份上下文。
 
 ---
@@ -146,19 +147,14 @@
 
 1. **`accountId` 是 bot；`userId` 是扫码用户，`senderId` 是实际发送者，本地不校验相等**。
    - 未找到服务端保证二者恒等的契约；官方与 Hermes adapter 的客户端策略不能替代此保证（见 `ilink-protocol.md` §11）。
-   - 本地没有 pairing/allowFrom 鉴权，也没有验证 `senderId === userId`；因此身份和路由逻辑
-     **不依赖**二者字节相等，一律使用实际报文中的 `senderId`。
-2. **实现用"参与者注册表"跟踪真实 `senderId`**。
-   - 每条到达 `ProjectController` 的入站消息（包括 daemon 命令）都会把
-     `(accountId, senderId)` upsert 进当前项目的注册表，
-     记录 `contextToken` / `lastSeenAt`。
-   - 找"要给谁发消息 / 广播"**一律用注册表里的 `senderId`（=`from_user_id`）**，不用
-     `account.userId` 去猜。这样即使 `ilink_user_id ≠ from_user_id` 也不出错。
-3. **`context_token` 只能从入站消息获得**（或从持久化的 context-token 存储取）。
-   - 注册表在收到消息时同步保存它；"没发过消息 / 无 token"的账号不会出现在注册表里，
-     也就不会被广播到（已知取舍）。
-4. **回复不猜身份**：系统将每条报文的 `from_user_id` 记录为参与者 `senderId`，并与该条
-   `context_token` 配对用于后续回复；不从登录 `userId` 推导接收方。
+   - 本地没有 pairing/allowFrom 鉴权，不增加 sender 白名单；入站仍按账号绑定、项目启用及运行状态路由。
+2. **项目微信用户来自绑定账号的 `account.userId`**。
+   - 成功最终文本、typing、互通及主动通知使用这一用户来源；互通排除来源账号。
+   - 命令、错误、warning、文件、进度和 UI 仍定向到来源账号的微信用户；未绑定或停用提示也使用该账号用户，不要求先有项目。
+3. **`context_token` 按 `(accountId, userId)` 精确关联**。
+   - 入站 token 按实际 sender 保存，不改写成登录用户。当前消息 token 仅在 sender 与收件人一致时可直接使用，否则查收件人的精确缓存。
+   - 重启后不需要重新发言，已有精确缓存 token 即可投递；缺用户、token 或可用 transport 时跳过并记录，不借用其他用户 token，也不切换收件人。
+4. **尽力发送，不保证送达**：逐目标失败隔离，无自动重试、token TTL 或刷新机制；缓存 token 仍可能被服务端拒绝。
 
 ---
 
@@ -169,8 +165,7 @@
 - **本地 `src/` 未实现**发送方鉴权。`ILinkWeixinTransport` 在媒体下载前丢弃明确的
   BOT/非 USER 记录；为兼容旧报文，缺失 `message_type` 时仍作为 USER 输入。由于没有
   pairing 校验，代码不将 `senderId === account.userId` 作为安全边界。
-- 找人 / 广播：**不做"白名单"鉴权**，改为**参与者注册表**（记录实际发过消息的
-  `senderId`），用它做互通与广播目标（见 `routing.md`）。
+- 出站统一使用账号登录用户及精确 token，不沿用官方普通回复直接使用 sender 的策略；这不是服务端 owner-only 保证（见协议 §11）。
 - 「道 2：路由解析」对应本项目的 `accountId → projectId` 索引（见 `routing.md`）。
 
 ---
@@ -179,8 +174,8 @@
 
 | 旧说法 | 本文件术语 |
 |---|---|
-| 微信用户 / 用户 | 微信真人用户（owner），标识 `userId`/`senderId` |
+| 微信用户 / 用户 | 微信真人用户；登录用户 `userId` 与入站发送者 `senderId` 分别记录 |
 | 机器人 | Bot 账号（account），标识 `accountId`，别名 `name` |
 | 项目 | 项目（project），`cwd` + 若干账号 + 一个会话 |
 | 会话 | 会话（session），一个项目一个 Pi 会话 |
-| 回复只回发起者 | 成功文本按参与者注册表广播；文件、UI、错误及不完整输出只回当前 `TurnContext` |
+| 回复只回发起者 | 成功文本发给绑定账号用户；文件、UI、错误及不完整输出定向到当前 `TurnContext` 来源账号用户 |

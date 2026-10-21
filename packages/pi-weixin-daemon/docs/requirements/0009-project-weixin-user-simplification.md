@@ -2,8 +2,8 @@
 
 ---
 
-status: not-started
-execution_time: "2026-10-21"
+status: completed
+execution_time: "2026-10-21 / 2026-10-21"
 commit: null
 version: null
 related_documents:
@@ -14,6 +14,7 @@ related_documents:
   - "[需求 0010：默认会话、CLI 与 MCP](0010-project-session-cli-mcp.md)"
   - "[ADR-0004：分层](../adr/0004-layering-and-dependency-direction.md)"
   - "[ADR-0006：会话级回复](../adr/0006-session-wide-agent-reply-routing.md)"
+  - "[ADR-0007：项目微信用户与统一投递](../adr/0007-project-weixin-users.md)"
 
 ---
 
@@ -92,7 +93,9 @@ related_documents:
 
 ## Further Notes
 
-- 当前代码存在两套目标：CLI broadcast 使用 `account.userId`，Agent 广播使用内存 participant；本 spec 明确取代后者，调整需求 0006/ADR-0006 的收件范围，不取消独立 Agent 回合的发送能力。
+- 实施前存在两套目标：CLI broadcast 使用 `account.userId`，Agent 广播使用内存 participant。本次已删除 participant，使用统一收件人解析；调整需求 0006/ADR-0006 的收件范围，不取消独立 Agent 回合的发送能力。
+- 完成验证：受影响包 typecheck、build、Biome 及全部离线测试（25 文件、167 项）通过；补充 typing 目标/token 断言后再次通过类型检查和全部离线测试。独立变更审查未发现新增阻塞问题；真实微信/模型送达未验证。
+- 范围外既有问题单列后续：[未使用 token 推断函数 #19](https://github.com/Yesifan/pi-packages/issues/19)、[广播代际检查透传 #20](https://github.com/Yesifan/pi-packages/issues/20)、[底层 API 错误日志统一 #21](https://github.com/Yesifan/pi-packages/issues/21)。本次投递层包装不记录原始上游错误，但不宣称既有底层所有端点日志已完成脱敏。需求 0010 未实施。
 - 目前未取得同一账号登录响应与入站报文的完整关联日志，也未确认官方保证两种 ID 必然相等。已有登录日志只保留 ID 前缀与长度，不能据此证明完整相等。
 - 实施前在可访问且获准的部署日志和官方协议资料中核实；只记录来源、版本、样本/账号数量、匹配统计及限制，不提交原始用户 ID、token 或凭据。没有证据时明确记为未知，不阻塞已确认的不新增过滤策略。
 - 入站信任与出站定向是用户明确选择的应用策略；文档不得将其包装成平台强制安全保证。

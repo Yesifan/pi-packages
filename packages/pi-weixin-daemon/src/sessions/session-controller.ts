@@ -32,12 +32,14 @@ export interface SessionControllerDeps {
   logger: Logger;
   /** Idle window before the session is disposed (min for tests). */
   sessionIdleMs?: number;
-  /** Broadcast a turn's final reply / idle-close notice to all participants. */
+  /** Login user allowed to answer a directed interaction on this account. */
+  resolveRecipientUserId?: (accountId: string) => string | undefined;
+  /** Broadcast a turn's final reply / idle-close notice to bound project users. */
   broadcastText?: (
     text: string,
     isCurrent?: () => boolean,
   ) => Promise<DeliveryReport> | Promise<void>;
-  /** Set or clear typing for all authorized project participants. */
+  /** Set or clear typing for all bound project users. */
   broadcastTyping?: (typing: boolean) => Promise<void>;
   /** Typing refresh interval; primarily configurable for tests. */
   typingKeepaliveMs?: number;
@@ -335,15 +337,22 @@ export class SessionController {
     }
   }
 
+  private isInteractionRecipient(origin: TurnContext, incoming: TurnContext): boolean {
+    const userId = this.deps.resolveRecipientUserId
+      ? this.deps.resolveRecipientUserId(origin.accountId)
+      : origin.senderId;
+    return origin.accountId === incoming.accountId && !!userId && userId === incoming.senderId;
+  }
+
   /** Route an ordinary user message (UI answer, busy refusal, or a new turn). */
   async handleUserMessage(msg: InboundMessage): Promise<void> {
     this.lastActivityAt = Date.now();
     this.scheduleIdleCheck();
 
-    // UI answer routing: only the turn origin resolves the pending dialog.
+    // UI answers must come from the account user who receives the dialog.
     if (this.deps.interaction.isUiInteractionActive()) {
       const turn = this.deps.currentTurn.get();
-      if (turn && msg.accountId === turn.accountId && msg.senderId === turn.senderId) {
+      if (turn && this.isInteractionRecipient(turn, msg)) {
         this.deps.logger.info({ accountId: msg.accountId }, "UI response received");
         this.deps.interaction.tryResolveUi(turn, msg.text ?? "");
       } else {
@@ -359,7 +368,7 @@ export class SessionController {
     const turn = toTurnContext(msg);
 
     if (this.selector) {
-      if (sameOrigin(this.selector.turn, turn)) {
+      if (this.isInteractionRecipient(this.selector.turn, turn)) {
         await this.handleSelectorInput(msg.text ?? "");
         return;
       }
@@ -780,7 +789,7 @@ export class SessionController {
       return;
     }
 
-    // Real dispose: the SDK runtime is torn down; the wrapper/bridge/participants
+    // Real dispose: the SDK runtime is torn down; the wrapper/bridge
     // survive. The next message rebuilds a fresh session (new sessionId).
     this.state = "replacing";
     this.invalidateRuns();
@@ -846,10 +855,6 @@ type SlashSelector =
   | (SlashSelectorBase & { kind: "model"; options: ModelChoice[] })
   | (SlashSelectorBase & { kind: "thinking"; options: string[] })
   | (SlashSelectorBase & { kind: "resume"; options: SessionChoice[] });
-
-function sameOrigin(a: TurnContext, b: TurnContext): boolean {
-  return a.accountId === b.accountId && a.senderId === b.senderId;
-}
 
 function selectorLabel(item: ModelChoice | SessionChoice | string): string {
   if (typeof item === "string") return item;

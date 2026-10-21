@@ -8,6 +8,7 @@ import { sendTextMessage } from "./messaging/send.js";
 import { sendWeixinMediaFile } from "./messaging/send-media.js";
 import { monitorWeixinProvider } from "./monitor/monitor.js";
 import { normalizeInboundMessage } from "./normalize.js";
+import { RecipientUnavailableError, resolveRecipient } from "./recipient.js";
 import { restoreContextTokens, setContextToken } from "./storage/context-token.js";
 import type { InboundMessage, TurnContext, WeixinTransport } from "./types.js";
 
@@ -178,7 +179,7 @@ export class ILinkWeixinTransport implements WeixinTransport {
   private async handleInbound(raw: WeixinMessage): Promise<void> {
     // getUpdates may include bot-originated records. Only user messages are
     // valid Pi input; reject everything else before project lookup, media
-    // download, context-token persistence, or participant registration.
+    // download or context-token persistence.
     if (raw.message_type !== undefined && raw.message_type !== MessageType.USER) {
       this.opts.logger.debug(
         {
@@ -190,6 +191,11 @@ export class ILinkWeixinTransport implements WeixinTransport {
         "dropping non-user inbound message",
       );
       return;
+    }
+
+    // Tokens belong to the actual sender, including messages rejected by the project gate.
+    if (raw.from_user_id && raw.context_token) {
+      setContextToken(this.opts.accountId, raw.from_user_id, raw.context_token);
     }
 
     // Multi-project gate before media download: when a project inbox resolver is
@@ -212,19 +218,23 @@ export class ILinkWeixinTransport implements WeixinTransport {
       logger: this.opts.logger,
     });
     const msg = normalizeInboundMessage(this.opts.accountId, raw, attachments, failures);
-    if (msg.senderId && msg.contextToken) {
-      setContextToken(this.opts.accountId, msg.senderId, msg.contextToken);
-    }
     const hasEmptyVoiceTranscript = raw.item_list?.some(
       (item) => item.type === MessageItemType.VOICE && !item.voice_item?.text?.trim(),
     );
     if (hasEmptyVoiceTranscript) {
       if (msg.senderId) {
         try {
-          await this.sendText(msg, "未获取到语音转录文本，请重新发送语音或改用文字。");
+          await this.sendText(
+            resolveRecipient(msg),
+            "未获取到语音转录文本，请重新发送语音或改用文字。",
+          );
         } catch (err) {
           this.opts.logger.warn(
-            { err, accountId: this.opts.accountId, messageId: msg.messageId },
+            {
+              reason: err instanceof RecipientUnavailableError ? err.reason : "delivery-failed",
+              accountId: this.opts.accountId,
+              messageId: msg.messageId,
+            },
             "empty voice transcript reply failed (ignored)",
           );
         }
@@ -238,7 +248,7 @@ export class ILinkWeixinTransport implements WeixinTransport {
     }
   }
 
-  /** Send a gate (unbound / disabled) reply back to the sender. */
+  /** Send a gate (unbound / disabled) reply to the account's login user. */
   private async replyGate(raw: WeixinMessage, reason?: "unbound" | "disabled"): Promise<void> {
     if (!raw.from_user_id) return;
     const ctx: TurnContext = {
@@ -249,9 +259,15 @@ export class ILinkWeixinTransport implements WeixinTransport {
     };
     const text = reason === "disabled" ? GATE_DISABLED_REPLY : GATE_UNBOUND_REPLY;
     try {
-      await this.sendText(ctx, text);
+      await this.sendText(resolveRecipient(ctx), text);
     } catch (err) {
-      this.opts.logger.warn({ err, accountId: this.opts.accountId }, "gate reply failed (ignored)");
+      this.opts.logger.warn(
+        {
+          reason: err instanceof RecipientUnavailableError ? err.reason : "delivery-failed",
+          accountId: this.opts.accountId,
+        },
+        "gate reply failed (ignored)",
+      );
     }
   }
 }

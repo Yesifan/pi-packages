@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { PiInitializationError } from "../../src/pi/runtime-factory.js";
+import type { ProjectHostFactoryContext } from "../../src/projects/project-controller.js";
 import { ProjectManager } from "../../src/projects/project-manager.js";
 import type { ProjectConfig } from "../../src/projects/types.js";
 import { createLogger } from "../../src/util/logger.js";
+import type { ResolveRecipientAccount } from "../../src/weixin/recipient.js";
 import { FakeAgentRuntime } from "../helpers/fake-runtime.js";
 import { FakeWeixinTransport, makeInboundMessage } from "../helpers/fake-transport.js";
 
@@ -14,28 +16,37 @@ interface H {
   pm: ProjectManager;
   transports: Map<string, FakeWeixinTransport>;
   fakes: Map<string, FakeAgentRuntime>;
+  contexts: Map<string, ProjectHostFactoryContext>;
 }
 
-function setup(opts: { sessionIdleMs?: number } = {}): H {
+function setup(opts: { sessionIdleMs?: number; resolveAccount?: ResolveRecipientAccount } = {}): H {
   const transports = new Map<string, FakeWeixinTransport>();
   const fakes = new Map<string, FakeAgentRuntime>();
+  const contexts = new Map<string, ProjectHostFactoryContext>();
   const getTransport = (id: string) => {
     if (!transports.has(id)) transports.set(id, new FakeWeixinTransport());
     return transports.get(id)!;
   };
-  const factory = async (ctx: { projectId: string; cwd: string }) => {
+  const factory = async (ctx: ProjectHostFactoryContext) => {
+    contexts.set(ctx.projectId, ctx);
     const fake = new FakeAgentRuntime(ctx.cwd);
     fakes.set(ctx.projectId, fake);
     return fake;
   };
   const pm = new ProjectManager({
     getTransport,
+    resolveBroadcastAccount:
+      opts.resolveAccount ??
+      ((id) => ({
+        userId: `u-${id.toLowerCase()}`,
+        contextToken: `cached-${id}`,
+      })),
     factory,
     logger,
     resolveSenderName: (id) => `name-${id}`,
     sessionIdleMs: opts.sessionIdleMs,
   });
-  return { pm, transports, fakes };
+  return { pm, transports, fakes, contexts };
 }
 
 const fooConfig: Array<{ name: string; config: ProjectConfig }> = [
@@ -60,15 +71,9 @@ describe("ProjectRuntime: sender marker + project-wide notify/broadcast + idle c
     await p;
   });
 
-  it("notifies other participants when a sender speaks, and broadcasts the reply to all", async () => {
+  it("notifies bound users without prior inbound and broadcasts final text and typing", async () => {
     const h = setup();
     await h.pm.sync(fooConfig as never);
-
-    // B registers first.
-    const pB = h.pm.dispatch("B", textMsg("B", "u-b", "m1", "hi from b"));
-    await tick();
-    h.fakes.get("foo")!.complete("");
-    await pB;
 
     // A speaks -> B gets "[name-A]: hello from a"; A (origin) does not.
     const pA = h.pm.dispatch("A", textMsg("A", "u-a", "m2", "hello from a"));
@@ -101,6 +106,10 @@ describe("ProjectRuntime: sender marker + project-wide notify/broadcast + idle c
     const runtime = new FakeAgentRuntime("/fake/foo");
     const pm = new ProjectManager({
       getTransport: (id) => transports.get(id),
+      resolveBroadcastAccount: (id) => ({
+        userId: `u-${id.toLowerCase()}`,
+        contextToken: `cached-${id}`,
+      }),
       factory: async () => runtime,
       logger,
     });
@@ -166,6 +175,114 @@ describe("ProjectRuntime: sender marker + project-wide notify/broadcast + idle c
   });
 });
 
+describe("ProjectRuntime: login user delivery", () => {
+  it("keeps file, progress, error and UI directed, preserves origin, and lets the recipient answer", async () => {
+    const h = setup();
+    await h.pm.sync(fooConfig);
+    const pending = h.pm.dispatch("A", {
+      ...textMsg("A", "other-sender", "origin", "hello"),
+      contextToken: "other-token",
+    });
+    await tick();
+    const { interaction, transport } = h.contexts.get("foo")!;
+    const origin = interaction.getCurrentTurn()!;
+    expect(origin).toMatchObject({
+      senderId: "other-sender",
+      contextToken: "other-token",
+      messageId: "origin",
+    });
+    await transport.sendFile(origin, "/fake/report.txt", "file");
+    await transport.sendText(origin, "progress");
+    await interaction.sendText(origin, "question");
+    const response = interaction.waitForResponse(origin);
+    await h.pm.dispatch("B", textMsg("B", "u-b", "wrong-account", "wrong"));
+    await h.pm.dispatch("A", textMsg("A", "other-sender", "wrong-user", "wrong"));
+    expect(interaction.isUiInteractionActive()).toBe(true);
+    await h.pm.dispatch("A", textMsg("A", "u-a", "answer", "yes"));
+    await expect(response).resolves.toBe("yes");
+    h.fakes.get("foo")!.completeWithError("failure", "partial");
+    await pending;
+    const a = h.transports.get("A")!;
+    const b = h.transports.get("B")!;
+    expect(a.sentFiles[0]).toMatchObject({ ctx: { senderId: "u-a", contextToken: "cached-A" } });
+    for (const text of ["progress", "question"]) {
+      expect(a.sentTexts.find((sent) => sent.text === text)?.ctx).toMatchObject({
+        senderId: "u-a",
+        contextToken: "cached-A",
+      });
+      expect(b.sentTexts.some((sent) => sent.text === text)).toBe(false);
+    }
+    expect(a.sentTexts.at(-1)?.ctx.senderId).toBe("u-a");
+    expect(a.sentTexts.at(-1)?.text).toContain("failure");
+    expect(b.sentTexts.some((sent) => sent.text.includes("failure"))).toBe(false);
+    expect(b.sentFiles).toHaveLength(0);
+    expect(origin.senderId).toBe("other-sender");
+    await h.pm.stopAll();
+  });
+
+  it("lets a command selector's login recipient answer despite a different original sender", async () => {
+    const h = setup();
+    await h.pm.sync(fooConfig);
+    await h.pm.dispatch("A", textMsg("A", "other-sender", "command", "/model"));
+    await h.pm.dispatch("A", textMsg("A", "u-a", "choice", "a"));
+    expect(h.fakes.get("foo")!.selectedModels).toHaveLength(1);
+    expect(h.fakes.get("foo")!.prompts).toHaveLength(0);
+    await h.pm.stopAll();
+  });
+
+  it("skips a login user without its token, never borrowing the sender token, and continues other targets", async () => {
+    const h = setup({
+      resolveAccount: (id) => ({
+        userId: `u-${id.toLowerCase()}`,
+        contextToken: id === "B" ? "cached-B" : undefined,
+      }),
+    });
+    await h.pm.sync(fooConfig);
+    const pending = h.pm.dispatch("A", {
+      ...textMsg("A", "other-sender", "origin", "hello"),
+      contextToken: "other-token",
+    });
+    await tick();
+    h.fakes.get("foo")!.complete("answer");
+    await pending;
+    expect(h.transports.get("A")?.sentTexts ?? []).toHaveLength(0);
+    expect(h.transports.get("B")!.textsTo("B")).toContain("answer");
+    expect(await h.pm.broadcast("foo", "notice")).toEqual({ succeeded: 1, skipped: 1, failed: 0 });
+    // A matching inbound token can still serve its own directed command.
+    await h.pm.dispatch("A", {
+      ...textMsg("A", "u-a", "command", "/status"),
+      contextToken: "current-A",
+    });
+    expect(h.transports.get("A")!.sentTexts.at(-1)?.ctx.contextToken).toBe("current-A");
+    await h.pm.stopAll();
+  });
+
+  it("accepts a different sender but directs commands and final text to login users with exact tokens", async () => {
+    const h = setup();
+    await h.pm.sync(fooConfig);
+    const incoming = textMsg("A", "other-sender", "different", "/status");
+    incoming.contextToken = "other-token";
+    await h.pm.dispatch("A", incoming);
+    expect(h.transports.get("A")!.sentTexts.at(-1)?.ctx).toMatchObject({
+      senderId: "u-a",
+      contextToken: "cached-A",
+      messageId: "different",
+    });
+    const pending = h.pm.dispatch("A", { ...incoming, text: "hello" });
+    await tick();
+    expect(h.fakes.get("foo")!.prompts).toHaveLength(1);
+    h.fakes.get("foo")!.complete("answer");
+    await pending;
+    for (const id of ["A", "B"]) {
+      expect(h.transports.get(id)!.sentTexts.at(-1)).toMatchObject({
+        ctx: { senderId: `u-${id.toLowerCase()}`, contextToken: `cached-${id}` },
+        text: "answer",
+      });
+    }
+    await h.pm.stopAll();
+  });
+});
+
 describe("ProjectRuntime: W1 fail-closed diagnostics", () => {
   it("fatal init error -> project error state + refuses further messages", async () => {
     const transports = new Map<string, FakeWeixinTransport>();
@@ -182,6 +299,10 @@ describe("ProjectRuntime: W1 fail-closed diagnostics", () => {
 
     const pm = new ProjectManager({
       getTransport,
+      resolveBroadcastAccount: (id) => ({
+        userId: `u-${id.toLowerCase()}`,
+        contextToken: `cached-${id}`,
+      }),
       factory: async (ctx) => new FatalRuntime(ctx.cwd),
       logger,
     });

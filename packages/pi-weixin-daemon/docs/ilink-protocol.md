@@ -122,6 +122,8 @@ context_token 歧义。
 - `ilink/bot/getconfig`：取该用户的 `typing_ticket`（`context_token` 需回传）。
 - `ilink/bot/getuploadurl`：媒体上传（见 §4）。
 
+本地出站统一解析账号的 `account.userId` 及其 `(accountId, userId)` 精确缓存 token；项目层决定广播或来源账号定向范围。入站 token 仍按实际 sender 保存，只有 sender 与收件人一致时才可直接使用当前 token。缺用户、token 或可用 transport 时跳过并记录，逐目标失败隔离，不借用其他 sender 的 token、不自动重试。已有缓存可跨 daemon 重启使用，不要求重新发言，也不保证 token 仍有效。这是本项目投递策略，不是服务端身份恒等或 token 强绑定保证。
+
 ### 生命周期 notify
 
 - `ilink/bot/msg/notifystart` / `ilink/bot/msg/notifystop`：channel 启动/停止通知
@@ -219,7 +221,7 @@ if (!route.agentId) {
 4. **媒体处理（参考 Hermes，不混合）**：每条 iLink 消息独立成回合；image → 多模态
    （base64+mime）；file / video → **context note**（类型+保存路径+“自己读/处理”）给 agent；
    voice 仅用 `voice_item.text`（iLink 自带语音转写）当文本，追加识别错误备注，不下载音频；
-   空转写直接提示发送者，没有其他有效输入时不调用 Pi，不等待或处理后续补发转写；
+   空转写直接提示来源账号的微信用户，没有其他有效输入时不调用 Pi，不等待或处理后续补发转写；
    其他媒体下载/解密失败 → 记录为 `mediaFailures`，由 agent 告知用户，不阻塞消息。
 
 ---
@@ -278,7 +280,7 @@ if (!route.agentId) {
 - `src/weixin/auth/login-qr.ts`（扫码状态机）
 - `src/weixin/monitor/monitor.ts`（长轮询）
 - `src/weixin/transport.ts`（每账号 ILinkWeixinTransport facade）
-- `src/projects/`（项目路由、参与者注册与广播）
+- `src/projects/`（项目路由、绑定账号用户范围与广播）
 - `src/sessions/`（busy / TurnContext / 命令与会话状态机）
 - `src/pi/`、`src/weixin/interaction-controller.ts`（Pi host 与微信 UI 闭环）
 
@@ -287,7 +289,7 @@ if (!route.agentId) {
 ## 11. 扫码身份与入站发送者核查（2026-10-21）
 
 本节使用固定上游 commit，区分客户端行为与服务端保证；不是实际账号日志验证。
-当前本地仍有 participant；[需求 0009](requirements/0009-project-weixin-user-simplification.md) 的删除与统一用户投递尚未实现。
+本地已按[需求 0009](requirements/0009-project-weixin-user-simplification.md) 移除动态参与者登记，统一向账号登录用户投递，并使用精确 token；不新增普通入站 sender 身份过滤。决策及行为变化见 [ADR-0007](adr/0007-project-weixin-users.md)。
 
 - 腾讯官方 `Tencent/openclaw-weixin`，固定 commit `874637a0dbc24050f72d1385add4fc6170a2d726`：[扫码返回 userId](https://github.com/Tencent/openclaw-weixin/blob/874637a0dbc24050f72d1385add4fc6170a2d726/src/auth/login-qr.ts#L460-L473) 与 [入站授权](https://github.com/Tencent/openclaw-weixin/blob/874637a0dbc24050f72d1385add4fc6170a2d726/src/messaging/process-message.ts#L184-L200) 分开处理；普通消息使用实际 sender，allowFrom 为空时才以登录 userId 作为授权列表兜底。这是客户端策略，不是服务端身份恒等保证；该版本插件 slash handler 在这段授权之前运行，不能概括为所有入口都先校验。
 - 腾讯正常回复以 [入站 from_user_id 和 context_token](https://github.com/Tencent/openclaw-weixin/blob/874637a0dbc24050f72d1385add4fc6170a2d726/src/messaging/inbound.ts#L255-L270) 为上下文，并非一律用扫码 userId。官方 [协议说明](https://github.com/Tencent/openclaw-weixin/blob/874637a0dbc24050f72d1385add4fc6170a2d726/docs/protocol.md#L248) 建议回传入站 token；客户端能发出无 token 请求不等于服务端一定接受。

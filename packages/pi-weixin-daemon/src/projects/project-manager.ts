@@ -1,4 +1,9 @@
 import type { Logger } from "../util/logger.js";
+import {
+  RecipientUnavailableError,
+  type ResolveRecipientAccount,
+  resolveRecipientAccount,
+} from "../weixin/recipient.js";
 import type { InboundMessage, WeixinTransport } from "../weixin/types.js";
 import { type ProjectRuntimeConfig, runtimeKeyOf } from "./project-config.js";
 import { ProjectController, type ProjectHostFactory } from "./project-controller.js";
@@ -8,11 +13,8 @@ import type { ProjectBroadcastResult, ProjectConfig, ProjectStatus } from "./typ
 export interface ProjectManagerOptions {
   /** Resolve the per-account transport (owned by AccountManager). */
   getTransport: (accountId: string) => WeixinTransport | undefined;
-  /** Owner details and exact cached token, supplied by the account/Weixin layer. */
-  resolveBroadcastAccount?: (accountId: string) => {
-    userId?: string;
-    contextToken?: string;
-  } | null;
+  /** Login user and exact cached token, shared by all project delivery. */
+  resolveBroadcastAccount?: ResolveRecipientAccount;
   /** Build the per-project agent host (real PiSdkHost or fake in tests). */
   factory: ProjectHostFactory;
   logger: Logger;
@@ -38,7 +40,15 @@ export class ProjectManager {
   private configs = new Map<string, ProjectConfig>();
   private accountProject = new Map<string, string>();
 
-  constructor(private readonly opts: ProjectManagerOptions) {}
+  private readonly transport: ProjectTransport;
+
+  constructor(private readonly opts: ProjectManagerOptions) {
+    this.transport = new ProjectTransport(
+      opts.getTransport,
+      opts.resolveBroadcastAccount ?? resolveRecipientAccount,
+      opts.logger,
+    );
+  }
 
   getRuntime(projectId: string): ProjectController | undefined {
     return this.controllers.get(projectId);
@@ -92,7 +102,6 @@ export class ProjectManager {
         this.controllers.delete(name);
       }
 
-      const transport = new ProjectTransport(this.opts.getTransport);
       const snapshot: ProjectRuntimeConfig = {
         projectId: name,
         cwd: cfg.cwd,
@@ -100,7 +109,9 @@ export class ProjectManager {
       };
       const controller = new ProjectController({
         config: snapshot,
-        transport,
+        transport: this.transport,
+        resolveRecipientUserId: (id) =>
+          (this.opts.resolveBroadcastAccount ?? resolveRecipientAccount)(id)?.userId,
         logger: this.opts.logger,
         factory: this.opts.factory,
         resolveSenderName: this.opts.resolveSenderName,
@@ -131,32 +142,28 @@ export class ProjectManager {
         { account: accountId, project: projectId },
         "dropping inbound: project not running",
       );
-      // Tell the sender instead of silently dropping (bound+enabled but runtime not up).
-      const transport = this.opts.getTransport(accountId);
-      if (transport && msg.senderId) {
-        await transport
-          .sendText(
-            {
-              accountId,
-              senderId: msg.senderId,
-              messageId: "not-running",
-              contextToken: msg.contextToken,
-            },
-            "⚠️ 项目当前未运行（可能启动失败或仍在启动），请稍后重试。",
-          )
-          .catch((err: unknown) =>
-            this.opts.logger.warn(
-              { err, account: accountId },
-              "project-not-running reply failed (ignored)",
-            ),
-          );
-      }
+      await this.transport
+        .sendText(
+          {
+            accountId,
+            senderId: msg.senderId,
+            messageId: "not-running",
+            contextToken: msg.contextToken,
+          },
+          "⚠️ 项目当前未运行（可能启动失败或仍在启动），请稍后重试。",
+        )
+        .catch((err: unknown) =>
+          this.opts.logger.warn(
+            { err, account: accountId },
+            "project-not-running reply failed (ignored)",
+          ),
+        );
       return;
     }
     await controller.handleMessage(msg);
   }
 
-  /** Explicit owner notification; deliberately independent of Pi and session participants. */
+  /** Explicit project notification, independent of Pi session state. */
   async broadcast(projectId: string, text: string): Promise<ProjectBroadcastResult> {
     const config = this.configs.get(projectId);
     if (!config) throw new Error(`project "${projectId}" does not exist`);
@@ -164,34 +171,33 @@ export class ProjectManager {
     if (!text.trim()) throw new Error("broadcast text must not be blank");
 
     const result: ProjectBroadcastResult = { succeeded: 0, skipped: 0, failed: 0 };
-    // Snapshot the bound accounts, not the actual-sender participant registry.
+    // Snapshot bound accounts; all exits share the same recipient/token resolver.
     for (const accountId of [...config.accounts]) {
-      const account = this.opts.resolveBroadcastAccount?.(accountId);
-      const userId = account?.userId;
-      const contextToken = account?.contextToken;
-      const transport = this.opts.getTransport(accountId);
-      const target = { project: projectId, account: accountId, user: userId };
-      if (!account || !userId || !contextToken || !transport) {
-        const reason = !account
-          ? "missing-account"
-          : !userId
-            ? "missing-user"
-            : !contextToken
-              ? "missing-context-token"
-              : "missing-transport";
+      const target = {
+        project: projectId,
+        account: accountId,
+        user: undefined as string | undefined,
+      };
+      let recipient: ReturnType<ProjectTransport["resolve"]>;
+      try {
+        recipient = this.transport.resolve({
+          accountId,
+          senderId: "",
+          messageId: "project-broadcast",
+        });
+      } catch (err) {
+        if (!(err instanceof RecipientUnavailableError)) throw err;
         result.skipped++;
+        target.user = err.userId;
         this.opts.logger.warn(
-          { ...target, status: "skipped", reason },
+          { ...target, status: "skipped", reason: err.reason },
           "project broadcast target skipped",
         );
         continue;
       }
-
+      target.user = recipient.ctx.senderId;
       try {
-        await transport.sendText(
-          { accountId, senderId: userId, contextToken, messageId: "project-broadcast" },
-          text,
-        );
+        await recipient.transport.sendText(recipient.ctx, text);
         result.succeeded++;
         this.opts.logger.info({ ...target, status: "succeeded" }, "project broadcast target sent");
       } catch {

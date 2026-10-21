@@ -40,6 +40,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { createLogger } from "../../src/util/logger.js";
 import { TypingStatus } from "../../src/weixin/api/types.js";
+import { saveWeixinAccount } from "../../src/weixin/auth/accounts.js";
+import {
+  clearContextTokensForAccount,
+  getContextToken,
+  setContextToken,
+} from "../../src/weixin/storage/context-token.js";
 import { ILinkWeixinTransport } from "../../src/weixin/transport.js";
 
 const logger = createLogger({ level: "silent" });
@@ -52,6 +58,8 @@ beforeEach(() => {
   stateDir = fs.mkdtempSync(path.join(process.cwd(), "test/.tmp", "transport-state-"));
   process.env.PI_WEIXIN_STATE_DIR = stateDir;
   process.env.PI_WEIXIN_DATA_DIR = stateDir;
+  clearContextTokensForAccount("acct-a");
+  saveWeixinAccount("acct-a", { userId: "user-1" });
   apiMocks.getConfig.mockResolvedValue({ ret: 0, typing_ticket: "ticket-abc" });
   apiMocks.sendTyping.mockResolvedValue(undefined);
   apiMocks.sendMessage.mockResolvedValue(undefined);
@@ -200,7 +208,54 @@ describe("ILinkWeixinTransport (mocked api)", () => {
     await t.stop();
   });
 
-  it("replies to the sender when the account is unbound (gate)", async () => {
+  it.each(["unbound", "disabled", "empty-voice"] as const)(
+    "directs %s replies to the login user with its exact token",
+    async (reason) => {
+      saveWeixinAccount("acct-a", { userId: "login-user" });
+      setContextToken("acct-a", "login-user", "cached-login");
+      const t = new ILinkWeixinTransport({
+        accountId: "acct-a",
+        token: "tok",
+        baseUrl: "https://example.com",
+        logger,
+        resolveInboxDir: reason === "empty-voice" ? undefined : () => ({ reason }),
+      });
+      await t.start();
+      const handler = vi.fn(async () => undefined);
+      t.onMessage(handler);
+      await capturedOnInbound.current!(
+        makeRawMessage(
+          reason === "empty-voice" ? { item_list: [{ type: 3, voice_item: { text: "" } }] } : {},
+        ),
+      );
+      const body = apiMocks.sendMessage.mock.calls[0]?.[0];
+      expect(body.body.msg.to_user_id).toBe("login-user");
+      expect(body.body.msg.context_token).toBe("cached-login");
+      expect(getContextToken("acct-a", "user-1")).toBe("tok-msg-7");
+      expect(getContextToken("acct-a", "login-user")).toBe("cached-login");
+      expect(handler).not.toHaveBeenCalled();
+      await t.stop();
+    },
+  );
+
+  it("does not borrow a different sender's token for a gate reply", async () => {
+    saveWeixinAccount("acct-a", { userId: "login-user" });
+    const t = new ILinkWeixinTransport({
+      accountId: "acct-a",
+      token: "tok",
+      baseUrl: "https://example.com",
+      logger,
+      resolveInboxDir: () => ({ reason: "unbound" }),
+    });
+    await t.start();
+    await capturedOnInbound.current!(makeRawMessage());
+    expect(apiMocks.sendMessage).not.toHaveBeenCalled();
+    expect(getContextToken("acct-a", "login-user")).toBeUndefined();
+    expect(getContextToken("acct-a", "user-1")).toBe("tok-msg-7");
+    await t.stop();
+  });
+
+  it("replies to the login user when the account is unbound (gate)", async () => {
     const t = new ILinkWeixinTransport({
       accountId: "acct-a",
       token: "tok",
