@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import net from "node:net";
 import { resolveDaemonSocket } from "../config/paths.js";
+import type { ProjectBroadcastResult } from "../projects/types.js";
 
 export class DaemonNotRunningError extends Error {
   constructor() {
@@ -30,18 +31,12 @@ export async function rpcCall<T = unknown>(
   return callRpc<T>(method, params, socketPath, 15_000);
 }
 
-export interface BroadcastResult {
-  succeeded: number;
-  skipped: number;
-  failed: number;
-}
-
 /** Wait for project broadcast completion without an overall RPC timeout or retries. */
 export async function rpcBroadcast(
   params: { name: string; text: string },
   socketPath = resolveDaemonSocket(),
-): Promise<BroadcastResult> {
-  return callRpc<BroadcastResult>("project.broadcast", params, socketPath, 0);
+): Promise<ProjectBroadcastResult> {
+  return callRpc<ProjectBroadcastResult>("project.broadcast", params, socketPath, 0);
 }
 
 async function callRpc<T>(
