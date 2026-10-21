@@ -23,9 +23,6 @@ export interface ProjectManagerOptions {
   abortGraceMs?: number;
 }
 
-/** Result of a desired-state reconcile (ADR-0004 Invariant 3). */
-export type ReconcileResult = "none" | "restart";
-
 /**
  * Owns `Map<ProjectId, ProjectController>` and the derived `accountId -> projectId`
  * index. Reconciles desired-state (`enabled`) from config via diff → restart

@@ -10,12 +10,6 @@ interface RpcRequest {
   params?: Record<string, unknown>;
 }
 
-export interface StatusResult {
-  version: string;
-  projects: unknown[];
-  accounts: unknown[];
-}
-
 /**
  * Unix Domain Socket RPC server (typed JSON). No TCP/HTTP — local control plane only.
  * Socket perms 0600. Stale socket file is removed on start when not in use.

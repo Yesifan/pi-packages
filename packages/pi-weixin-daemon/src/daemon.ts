@@ -150,14 +150,9 @@ export class Daemon {
 
     // --- Account monitors: one per registered account, independent of project ---
     for (const accountId of listIndexedWeixinAccountIds()) {
-      restoreContextTokens(accountId);
-      const account = loadWeixinAccount(accountId);
-      if (!account?.token) {
+      if (!(await this.startAccount(accountId))) {
         logger.warn({ account: accountId }, "account has no token, skipping monitor");
-        continue;
       }
-      const transport = await this.accountTransport(accountId, account.token, account.baseUrl);
-      await this.accountManager.register(accountId, transport, account.userId);
     }
 
     // --- Project runtimes: reconcile desired state (enabled) from config ---
@@ -284,12 +279,18 @@ export class Daemon {
     // Start monitors for newly-logged-in accounts.
     for (const accountId of index) {
       if (this.accountManager.has(accountId)) continue;
-      restoreContextTokens(accountId);
-      const account = loadWeixinAccount(accountId);
-      if (!account?.token) continue;
-      const transport = await this.accountTransport(accountId, account.token, account.baseUrl);
-      await this.accountManager.register(accountId, transport, account.userId);
+      await this.startAccount(accountId);
     }
+  }
+
+  /** Returns false when the indexed account has no usable credentials. */
+  private async startAccount(accountId: string): Promise<boolean> {
+    restoreContextTokens(accountId);
+    const account = loadWeixinAccount(accountId);
+    if (!account?.token) return false;
+    const transport = await this.accountTransport(accountId, account.token, account.baseUrl);
+    await this.accountManager.register(accountId, transport, account.userId);
+    return true;
   }
 
   /** Log out an account: clear credentials, unbind from projects, stop its monitor. */
