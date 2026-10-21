@@ -134,6 +134,10 @@ pnpm --filter @yesifan/<pkg> pack --pack-destination /tmp
 - ./docs/local-install.md 指导如何本地安装开发版本
 - ./docs/reference-rules.md 指导如何管理参考项目
 
+### Specifications
+
+新增、编辑或实施 spec 前，先阅读 [spec 索引与维护规则](docs/specs/README.md)，并同步维护规格及索引。包内已有规格继续遵循对应包的索引和规则。
+
 ### ADR 约定
 
 影响系统结构、关键质量属性或难以撤销的决策，应记录到 `packages/*/docs/adr/`。普通实现细节不需要 ADR。决策变更时应新增 ADR 并关联旧记录，不要覆盖原有理由。
