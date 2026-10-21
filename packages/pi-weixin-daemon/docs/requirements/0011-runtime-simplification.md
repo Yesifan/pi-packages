@@ -2,9 +2,9 @@
 
 ---
 
-status: not-started
-execution_time: "2026-10-21"
-commit: null
+status: completed
+execution_time: "2026-10-21 / 2026-10-21"
+commit: 94b958e
 version: null
 related_documents:
   - "[需求 0009：项目微信用户与消息投递简化](0009-project-weixin-user-simplification.md)"
@@ -15,6 +15,7 @@ related_documents:
   - "[ADR-0005：Slash 命令与交互仲裁](../adr/0005-weixin-slash-session-controls.md)"
   - "[ADR-0006：会话级回复](../adr/0006-session-wide-agent-reply-routing.md)"
   - "[ADR-0007：统一投递](../adr/0007-project-weixin-users.md)"
+  - "[ADR-0008：Pi 业务单入口与内部适配精简](../adr/0008-pi-business-entry-simplification.md)"
   - "[Issue #23：logout RPC 错误回退（独立处理）](https://github.com/Yesifan/pi-packages/issues/23)"
 
 ---
@@ -136,6 +137,12 @@ related_documents:
 - 将 SDK 内部 extension command callbacks 强制重新接入 PiSdkHost 公共方法，或将环境诊断改造成活动会话业务。
 
 ## Further Notes
+
+- 已分阶段实施：`569aadd` 删除闲置适配/下载支线/只写字段/测试兼容分支，`94b958e` 收口账号生命周期、启动步骤与 monitor 退避。运行时代码共新增 58 行、删除 302 行，净减少 244 行；测试增长用于锁定现有行为，不计为运行时简化收益。
+- 修改后验证：全仓 `pnpm check`、`pnpm lint`、`pnpm test`、`pnpm build` 通过；pi-weixin-daemon 27 文件/223 项测试，pi-subagents 22 文件/259 项测试。check/lint 有 pi-subagents 既有的 16 项 non-null assertion 警告，本次未修改该包。
+- 使用实际临时源码验证 pi-ai 根包 import：Pi 边界外被 Biome 拒绝，边界内通过；临时文件已清理。全仓引用检查未发现被删除符号的代码消费者。
+- 清理旧 dist 后重新构建并 pack，tarball 不含删除的三个 Pi 模块，也未混入测试、内部文档、AGENTS 或开发配置。独立完整 diff 审查无阻塞问题；未运行真实模型、真实微信、登录或部署服务。
+- 需求 0010、logout #23、GET/POST helper 合并、嵌套 token Map 均未实施。
 
 - 本规格来自 2026-10-21 的只读分区审查；Pi 适配核查基于当时锁定 SDK 1.1.0。实施时若依赖升级，应重新核对涉及的类型和实现，不照搬旧版本结论。
 - 用户已确认内部 dist 深层导出不属于承诺 API，以及使用现有离线测试边界；不存在因此阻塞第一、第二阶段的未决产品选择。
