@@ -10,6 +10,7 @@
 | [0008：微信语音仅传递转录文本](0008-voice-transcript-only.md) | 入站语音只传递微信转录及识别错误备注，空转录提示发送者，不再下载或携带音频。 | completed | 2026-10-12 / 2026-10-12 |
 | [0009：项目微信用户与消息投递实现简化](0009-project-weixin-user-simplification.md) | 删除 participant，统一以 account.userId 投递；调整 0006/0007 的收件范围约定。 | completed | 2026-10-21 / 2026-10-21 |
 | [0010：项目默认会话、CLI prompt 与 MCP](0010-project-session-cli-mcp.md) | 基于 0009 增加共享默认/活动会话、prompt、Authelia MCP、状态与历史查询。 | not-started | 2026-10-21 |
+| [0011：运行时代码与状态精简](0011-runtime-simplification.md) | 统一 PiSdkHost 业务入口，分阶段删除闲置代码并合并重复状态/步骤；不含 0010 或 logout #23。 | not-started | 2026-10-21 |
 
 ## 维护规则
 
