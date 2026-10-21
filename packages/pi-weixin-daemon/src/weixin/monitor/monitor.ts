@@ -7,7 +7,6 @@ import {
 import { getRemainingPauseMs, pauseSession, STALE_TOKEN_ERRCODE } from "../api/session-guard.js";
 import type { WeixinMessage } from "../api/types.js";
 import { loadGetUpdatesBuf, saveGetUpdatesBuf } from "../storage/sync-buf.js";
-import { redactBody } from "../util/redact.js";
 
 const DEFAULT_LONG_POLL_TIMEOUT_MS = 35_000;
 const MAX_CONSECUTIVE_FAILURES = 3;
@@ -86,7 +85,12 @@ export async function monitorWeixinProvider(opts: MonitorWeixinOpts): Promise<vo
 
         consecutiveFailures += 1;
         log.error(
-          `getUpdates failed: ret=${resp.ret} errcode=${resp.errcode} errmsg=${resp.errmsg ?? ""} (${consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES}) body=${redactBody(JSON.stringify(resp))}`,
+          {
+            type: "business",
+            consecutiveFailures,
+            maxConsecutiveFailures: MAX_CONSECUTIVE_FAILURES,
+          },
+          "getUpdates failed",
         );
         if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
           log.error(
@@ -129,7 +133,12 @@ export async function monitorWeixinProvider(opts: MonitorWeixinOpts): Promise<vo
       consecutiveFailures += 1;
       const classified = classifyFetchError(err);
       log.error(
-        `getUpdates error (${consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES}): ${String(err)} type=${classified.type} description=${classified.description}${classified.code ? ` code=${classified.code}` : ""}`,
+        {
+          type: classified.type,
+          consecutiveFailures,
+          maxConsecutiveFailures: MAX_CONSECUTIVE_FAILURES,
+        },
+        "getUpdates request failed",
       );
       if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
         log.error(`getUpdates: ${MAX_CONSECUTIVE_FAILURES} consecutive failures, backing off 30s`);

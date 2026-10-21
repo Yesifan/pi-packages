@@ -62,7 +62,8 @@ async function uploadMediaToCdn(params: {
   const uploadParam = uploadUrlResp.upload_param;
   if (!uploadFullUrl && !uploadParam) {
     logger.error(
-      `${label}: getUploadUrl returned no upload URL, resp=${JSON.stringify(uploadUrlResp)}`,
+      { endpoint: "/ilink/bot/getuploadurl", type: "missing-upload-url" },
+      "getUploadUrl returned no upload URL",
     );
     throw new Error(`${label}: getUploadUrl returned no upload URL`);
   }

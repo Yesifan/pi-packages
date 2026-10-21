@@ -232,6 +232,8 @@ if (!route.agentId) {
 `redactUrl`）。**禁止打印**：`bot_token`、`context_token`、AES key、完整
 `Authorization` header。日志字段建议含 `component`/`project`/`account`/`event`/`error`。
 
+iLink GET/POST 失败诊断统一只记录方法、端点路径、HTTP 状态、超时设置及固定错误分类。HTTP 错误正文、网络异常 cause/code、JSON 解析片段及业务错误描述不进入失败日志或向上抛出的错误；业务失败和非法 JSON 也不先打印原始响应 debug。保留调用方原有 ret/errcode 处理、stale-token 暂停、超时/中止和重试语义。本次未扩展审查请求或成功响应的 debug 字段。
+
 ---
 
 ## 9. 版本与兼容性注意事项

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { apiGetFetch, apiPostFetch } from "../api/api.js";
+import { apiGetFetch, apiPostFetch, parseApiResponse } from "../api/api.js";
 import { listIndexedWeixinAccountIds, loadWeixinAccount } from "./accounts.js";
 
 type ActiveLogin = {
@@ -100,7 +100,7 @@ async function fetchQRCode(apiBaseUrl: string, botType: string): Promise<QRCodeR
     body: JSON.stringify({ local_token_list: localTokenList }),
     label: "fetchQRCode",
   });
-  return JSON.parse(rawText) as QRCodeResponse;
+  return parseApiResponse<QRCodeResponse>(rawText);
 }
 
 /** 从 stdin 读取一行用户输入（配对码）。 */
@@ -139,7 +139,7 @@ async function pollQRStatus(
       timeoutMs: QR_LONG_POLL_TIMEOUT_MS,
       label: "pollQRStatus",
     });
-    return JSON.parse(rawText) as StatusResponse;
+    return parseApiResponse<StatusResponse>(rawText);
   } catch (err) {
     if (err instanceof Error && err.name === "AbortError") {
       // Long-poll timeout: normal, keep waiting.

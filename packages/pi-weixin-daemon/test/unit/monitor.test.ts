@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { pino } from "pino";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createLogger } from "../../src/util/logger.js";
 import type { GetUpdatesFn } from "../../src/weixin/api/api.js";
@@ -25,6 +26,7 @@ afterEach(() => {
   else process.env.PI_WEIXIN_DATA_DIR = OLD_DATA;
   fs.rmSync(stateDir, { recursive: true, force: true });
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 function makeMessage(overrides: Partial<WeixinMessage> = {}): WeixinMessage {
@@ -41,6 +43,46 @@ function makeMessage(overrides: Partial<WeixinMessage> = {}): WeixinMessage {
 }
 
 describe("monitorWeixinProvider", () => {
+  it.each(["business", "http", "invalid-json", "network"])(
+    "keeps retry/backoff and safe caller logs after %s API failures",
+    async (failure) => {
+      const control = new AbortController();
+      const logs: string[] = [];
+      const log = pino({ level: "debug" }, { write: (line: string) => logs.push(line) });
+      const marker = "PRIVATE-TEXT BOT-SECRET CONTEXT-SECRET";
+      let calls = 0;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => {
+          if (++calls === 4) {
+            control.abort();
+            return new Response(JSON.stringify({ ret: 0, msgs: [] }));
+          }
+          if (failure === "network")
+            throw new Error(marker, { cause: { code: `ECONNREFUSED ${marker}` } });
+          return new Response(
+            failure === "invalid-json"
+              ? marker
+              : JSON.stringify({ ret: -1, errcode: 1001, errmsg: marker }),
+            { status: failure === "http" ? 500 : 200 },
+          );
+        }),
+      );
+      await monitorWeixinProvider({
+        baseUrl: "https://example.test",
+        accountId: "acct-a",
+        abortSignal: control.signal,
+        retryDelayMs: 1,
+        backoffDelayMs: 1,
+        logger: log,
+        onInbound: vi.fn(async () => {}),
+      });
+      expect(calls).toBe(4);
+      expect(logs.join("")).toContain("3 consecutive failures");
+      for (const secret of marker.split(" ")) expect(logs.join("")).not.toContain(secret);
+    },
+  );
+
   it("polls, persists get_updates_buf and forwards inbound messages", async () => {
     const control = new AbortController();
     const onInbound = vi.fn(async () => {});
