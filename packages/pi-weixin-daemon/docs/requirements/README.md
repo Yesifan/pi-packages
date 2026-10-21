@@ -8,6 +8,8 @@
 | ---- | ------- | ------ | -------------- |
 | [0007：通过 CLI 向项目绑定用户广播通知](0007-project-cli-broadcast.md) | 向启用项目的绑定账号扫码用户直接发送微信通知，不经过 Pi。 | completed | 2026-10-01 / 2026-10-01 |
 | [0008：微信语音仅传递转录文本](0008-voice-transcript-only.md) | 入站语音只传递微信转录及识别错误备注，空转录提示发送者，不再下载或携带音频。 | completed | 2026-10-12 / 2026-10-12 |
+| [0009：项目微信用户与消息投递实现简化](0009-project-weixin-user-simplification.md) | 删除 participant，统一以 account.userId 投递；调整 0006/0007 的收件范围约定。 | not-started | 2026-10-21 |
+| [0010：项目默认会话、CLI prompt 与 MCP](0010-project-session-cli-mcp.md) | 基于 0009 增加共享默认/活动会话、prompt、Authelia MCP、状态与历史查询。 | not-started | 2026-10-21 |
 
 ## 维护规则
 
