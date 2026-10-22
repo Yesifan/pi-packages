@@ -9,6 +9,7 @@ A monorepo of [Pi](https://github.com/badlogic/pi-mono) packages published under
 | [`@yesifan/pi-weixin-daemon`](./packages/pi-weixin-daemon/) | Connect Weixin iLink Bot with Pi Coding Agent |
 | [`@yesifan/pi-system-prompt`](./packages/pi-system-prompt/) | Display the system prompt and tools sent to the model |
 | [`@yesifan/pi-subagents`](./packages/pi-subagents/) | Run persistent background subagents with nested delegation |
+| [`@yesifan/pi-session`](./packages/pi-session/) | Reference, search and ask existing Pi sessions |
 
 ## Development
 
