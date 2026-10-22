@@ -40,7 +40,7 @@ export interface ProjectStatus {
   error?: string;
 }
 
-/** Counts returned after an explicit notification to a project's bound account owners. */
+/** Counts returned after an explicit notification to a project's bound account users. */
 export interface ProjectBroadcastResult {
   succeeded: number;
   skipped: number;

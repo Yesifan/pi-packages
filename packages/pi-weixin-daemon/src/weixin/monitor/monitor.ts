@@ -7,7 +7,6 @@ import {
 import { getRemainingPauseMs, pauseSession, STALE_TOKEN_ERRCODE } from "../api/session-guard.js";
 import type { WeixinMessage } from "../api/types.js";
 import { loadGetUpdatesBuf, saveGetUpdatesBuf } from "../storage/sync-buf.js";
-import { redactBody } from "../util/redact.js";
 
 const DEFAULT_LONG_POLL_TIMEOUT_MS = 35_000;
 const MAX_CONSECUTIVE_FAILURES = 3;
@@ -54,6 +53,21 @@ export async function monitorWeixinProvider(opts: MonitorWeixinOpts): Promise<vo
   let nextTimeoutMs = longPollTimeoutMs ?? DEFAULT_LONG_POLL_TIMEOUT_MS;
   let consecutiveFailures = 0;
 
+  async function waitAfterFailure(type: string, message: string): Promise<void> {
+    consecutiveFailures += 1;
+    log.error(
+      { type, consecutiveFailures, maxConsecutiveFailures: MAX_CONSECUTIVE_FAILURES },
+      message,
+    );
+    if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+      log.error(`getUpdates: ${MAX_CONSECUTIVE_FAILURES} consecutive failures, backing off 30s`);
+      consecutiveFailures = 0;
+      await sleep(backoffDelayMs, abortSignal);
+    } else {
+      await sleep(retryDelayMs, abortSignal);
+    }
+  }
+
   while (!abortSignal?.aborted) {
     try {
       const resp = await getUpdates({
@@ -84,19 +98,7 @@ export async function monitorWeixinProvider(opts: MonitorWeixinOpts): Promise<vo
           continue;
         }
 
-        consecutiveFailures += 1;
-        log.error(
-          `getUpdates failed: ret=${resp.ret} errcode=${resp.errcode} errmsg=${resp.errmsg ?? ""} (${consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES}) body=${redactBody(JSON.stringify(resp))}`,
-        );
-        if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-          log.error(
-            `getUpdates: ${MAX_CONSECUTIVE_FAILURES} consecutive failures, backing off 30s`,
-          );
-          consecutiveFailures = 0;
-          await sleep(backoffDelayMs, abortSignal);
-        } else {
-          await sleep(retryDelayMs, abortSignal);
-        }
+        await waitAfterFailure("business", "getUpdates failed");
         continue;
       }
 
@@ -126,18 +128,7 @@ export async function monitorWeixinProvider(opts: MonitorWeixinOpts): Promise<vo
         log.info("monitor stopped (aborted)");
         return;
       }
-      consecutiveFailures += 1;
-      const classified = classifyFetchError(err);
-      log.error(
-        `getUpdates error (${consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES}): ${String(err)} type=${classified.type} description=${classified.description}${classified.code ? ` code=${classified.code}` : ""}`,
-      );
-      if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-        log.error(`getUpdates: ${MAX_CONSECUTIVE_FAILURES} consecutive failures, backing off 30s`);
-        consecutiveFailures = 0;
-        await sleep(backoffDelayMs, abortSignal);
-      } else {
-        await sleep(retryDelayMs, abortSignal);
-      }
+      await waitAfterFailure(classifyFetchError(err).type, "getUpdates request failed");
     }
   }
   log.info("monitor ended");

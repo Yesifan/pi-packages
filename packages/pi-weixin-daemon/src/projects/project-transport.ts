@@ -1,3 +1,9 @@
+import type { Logger } from "../util/logger.js";
+import {
+  RecipientUnavailableError,
+  type ResolveRecipientAccount,
+  resolveRecipient,
+} from "../weixin/recipient.js";
 import type { InboundMessage, TurnContext, WeixinTransport } from "../weixin/types.js";
 
 export class OutboundDeliveryError extends Error {
@@ -6,7 +12,10 @@ export class OutboundDeliveryError extends Error {
     readonly accountId: string,
     options: { cause: unknown },
   ) {
-    super(`weixin ${operation} delivery failed for account ${accountId}`, options);
+    // Upstream errors can contain payloads or credentials; never retain them in logged errors.
+    super(`weixin ${operation} delivery failed for account ${accountId}`, {
+      cause: options.cause instanceof RecipientUnavailableError ? options.cause : undefined,
+    });
     this.name = "OutboundDeliveryError";
   }
 }
@@ -18,16 +27,36 @@ export class OutboundDeliveryError extends Error {
  * so the controller consumes inbound directly (see ProjectController).
  */
 export class ProjectTransport implements WeixinTransport {
-  private handlers: Array<(message: InboundMessage) => Promise<void>> = [];
+  constructor(
+    private readonly getTransport: (accountId: string) => WeixinTransport | undefined,
+    private readonly resolveAccount: ResolveRecipientAccount,
+    private readonly logger: Logger,
+  ) {}
 
-  constructor(private readonly getTransport: (accountId: string) => WeixinTransport | undefined) {}
+  resolve(ctx: TurnContext): { ctx: TurnContext; transport: WeixinTransport } {
+    try {
+      const recipient = resolveRecipient(ctx, this.resolveAccount);
+      const transport = this.getTransport(ctx.accountId);
+      if (!transport) throw new RecipientUnavailableError("missing-transport", recipient.senderId);
+      return { ctx: recipient, transport };
+    } catch (err) {
+      if (err instanceof RecipientUnavailableError) {
+        this.logger.warn(
+          { account: ctx.accountId, status: "skipped", reason: err.reason },
+          "weixin delivery target skipped",
+        );
+      }
+      throw err;
+    }
+  }
 
   async start(): Promise<void> {}
   async stop(): Promise<void> {}
 
   async sendText(ctx: TurnContext, text: string): Promise<void> {
     try {
-      await this.require(ctx).sendText(ctx, text);
+      const target = this.resolve(ctx);
+      await target.transport.sendText(target.ctx, text);
     } catch (cause) {
       throw new OutboundDeliveryError("text", ctx.accountId, { cause });
     }
@@ -35,7 +64,8 @@ export class ProjectTransport implements WeixinTransport {
 
   async sendFile(ctx: TurnContext, path: string, caption?: string): Promise<void> {
     try {
-      await this.require(ctx).sendFile(ctx, path, caption);
+      const target = this.resolve(ctx);
+      await target.transport.sendFile(target.ctx, path, caption);
     } catch (cause) {
       throw new OutboundDeliveryError("file", ctx.accountId, { cause });
     }
@@ -43,24 +73,15 @@ export class ProjectTransport implements WeixinTransport {
 
   async setTyping(ctx: TurnContext, typing: boolean): Promise<void> {
     try {
-      await this.require(ctx).setTyping(ctx, typing);
+      const target = this.resolve(ctx);
+      await target.transport.setTyping(target.ctx, typing);
     } catch (cause) {
       throw new OutboundDeliveryError("typing", ctx.accountId, { cause });
     }
   }
 
-  onMessage(handler: (message: InboundMessage) => Promise<void>): () => void {
-    this.handlers.push(handler);
-    return () => {
-      this.handlers = this.handlers.filter((h) => h !== handler);
-    };
-  }
-
-  private require(ctx: TurnContext): WeixinTransport {
-    const t = this.getTransport(ctx.accountId);
-    if (!t) {
-      throw new Error(`no weixin transport for account: ${ctx.accountId}`);
-    }
-    return t;
+  /** Outbound-only facade: inbound dispatch goes directly to ProjectController. */
+  onMessage(_handler: (message: InboundMessage) => Promise<void>): () => void {
+    return () => {};
   }
 }

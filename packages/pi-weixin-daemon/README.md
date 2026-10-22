@@ -29,17 +29,16 @@
 - **一个 account 只属于一个 project**：`account → project` 单向映射；一账号绑第二个 project 会报错。未绑定 / disabled 的账号消息直接丢弃，不进入 Pi。
 - **busy / abort 是 Project 作用域**：foo 忙、foo 被 abort、foo 出错都不影响 bar（严格故障隔离）。
 - **多微信账号**：一次扫码登录一个账号，可重复添加；每个账号独立 monitor，多个账号可绑定到同一 project。
-- **会话级回复广播**：活动 Pi 会话中每个完成的 Agent 回合（包括扩展触发的独立回合）的成功最终文本，发送给项目内已登记的参与者；无最终文本不发送。微信发起的失败、warning、文件、UI 询问及进度仍只回到发起者。
+- **会话级回复广播**：活动 Pi 会话中每个完成的 Agent 回合（包括扩展触发的独立回合）的成功最终文本，发送给项目绑定账号的微信用户；无最终文本不发送。微信发起的失败、warning、文件、UI 询问及进度仍只发给来源账号的微信用户。
 - **会话空闲自动关闭**：项目会话 10 分钟无消息自动关闭（广播"本次会话已关闭"），下一条消息自动新建会话。
 - **每次启动新建会话**：项目启动（含 daemon 重启）总是新建会话，**不跨重启恢复**上一个会话。
 - **发送者标记**：入站消息交给 agent 的文本末尾追加 `-- from weixin <账号name>`。
-- **同项目互通**：某账号的用户发消息时，通知同项目**其他**参与者 "`<账号name>`: 消息文本"。
-- **参与者注册表**：记录每个项目"实际发过消息的 `(accountId, senderId)` + `context_token`"，互通/广播从它取目标
-  （不依赖 `account.userId`，避免 `ilink_user_id ≠ from_user_id` 时出错）。
+- **同项目互通**：某账号收到消息时，通知同项目**其他账号的微信用户** "`<账号name>`: 消息文本"。
+- **统一微信用户与投递**：项目用户来自绑定账号的 `account.userId`，所有微信出口使用收件用户及精确对应 `(accountId, userId)` 的 `context_token`。缺少用户、token 或可用 transport 时跳过并记录原因；某个目标失败不影响其他目标。**重启后不需要重新发言，已有精确缓存 token 即可投递**，但不保证服务端接受。入站仍按账号路由，不新增 sender 身份过滤，也不假定 sender 必然等于登录用户。
 - **Busy / Refuse**：不建消息队列；Agent 忙时新普通消息立即拒绝。
 - **控制命令**：`/help` `/status` `/new` `/abort` `/compact`，其中 `/status` `/abort` 在 Agent 忙时仍可用。
 - **项目自管理**：项目自己的 `.pi/settings.json`、`.pi/extensions/`、`.pi/skills/`、`AGENTS.md` 完全生效；daemon 运行时能力（`weixin_send_file`、微信 UI 适配）在内存中注入，不写入项目。
-- **媒体**：微信图片进入 Pi 多模态输入；微信文件/视频下载到 `<cwd>/.pi-weixin/inbox/`；语音仅传递微信转录文本及识别错误备注，空转录提示发送者，不下载音频；Agent 可通过 `weixin_send_file` 发送原生微信附件。
+- **媒体**：微信图片进入 Pi 多模态输入；微信文件/视频下载到 `<cwd>/.pi-weixin/inbox/`；语音仅传递微信转录文本及识别错误备注，空转录提示来源账号的微信用户，不下载音频；Agent 可通过 `weixin_send_file` 发送原生微信附件。
 - **Extension UI 经微信闭环**：项目 extension 的 `ctx.ui.confirm/select/input/notify` 通过微信完成（WAITING_FOR_UI 状态）。
 - 无 HTTP server、无数据库、无消息队列、无 tmux、不经过 PI WEB。
 
@@ -136,7 +135,7 @@ pi-wx broadcast --project foo --message "部署已完成"
 
 须先启动 daemon，且 project 必须处于启用状态。通知直接发送给该项目所有绑定账号的扫码登录用户，不经过 Pi；没有活动 Pi 会话或 Pi 正忙也可发送，不改变会话状态。
 
-发送需要缓存中精确对应账号和扫码用户的 `context_token`。缺少接收用户、token 或可用 transport 时跳过并记录日志；某个账号失败不阻断其他账号。不检查 token 的本地有效期，微信接口仍可能拒绝发送。此接收范围与 Agent 回复使用的已登记参与者不同。
+发送需要缓存中精确对应账号和扫码用户的 `context_token`。缺少接收用户、token 或可用 transport 时跳过并记录日志；某个账号失败不阻断其他账号。不检查 token 的本地有效期，微信接口仍可能拒绝发送。此接收范围与 Agent 成功最终回复一致，共用用户解析及投递规则。
 
 CLI 等待处理完成，详细成功、跳过和失败记录通过 `pi-wx logs` 查看。只有非空接收集合全部发送成功时退出码为 `0`；存在跳过、失败、没有绑定账号或请求错误时为 `1`。广播不使用普通 RPC 的 15 秒总超时，底层微信请求仍有超时。
 
@@ -202,9 +201,9 @@ daemon 通过 Pi SDK 运行模型，需要对应 provider 的凭据。若运行�
 
 ## Agent 能力
 
-- **`weixin_send_file(path, caption?)`**：daemon 内存注入的工具（不写入项目 `.pi/extensions`，普通 `pi`/PI WEB 会话不可见）。自动发送到当前 Turn 的微信用户；仅要求文件存在且为普通文件（文件名 sanitize），**不设路径边界**——权限模型 = agent 进程权限，与 bash/read/write 一致（可发 `cwd` 之外 agent 可读的文件）。
-- **入站媒体**：图片 → 多模态输入；文件/视频 → 下载到 `<cwd>/.pi-weixin/inbox/<message-id>/` 并在 prompt 中说明路径；语音 → 仅使用微信提供的转录文本，追加 `【以上为用户的语音转录的信息，可能有识别错误】`，不下载或携带音频。空转录回复发送者「未获取到语音转录文本，请重新发送语音或改用文字。」，没有其他有效输入时不调用 Pi。`.pi-weixin/` 会自动加入项目 `.gitignore`。
-- **Extension UI**：项目 extension 调用 `ctx.ui.confirm/select/input` 时，daemon 进入 `WAITING_FOR_UI`，通过微信与用户交互（其他账号仍 busy）；`ctx.ui.notify` 直接推送消息。`ctx.ui.custom()` resolve undefined、`ctx.ui.editor()` 降级为输入框、`ctx.ui.theme` 返回真实最小 Theme 对象；其余 TUI 专属原语 no-op 不 throw。全部公开 UI 方法在 Pi SDK 包装后的扩展上下文中仍可调用。
+- **`weixin_send_file(path, caption?)`**：daemon 内存注入的工具（不写入项目 `.pi/extensions`，普通 `pi`/PI WEB 会话不可见）。自动发送到当前 Turn 来源账号的微信用户；仅要求文件存在且为普通文件（文件名 sanitize），**不设路径边界**——权限模型 = agent 进程权限，与 bash/read/write 一致（可发 `cwd` 之外 agent 可读的文件）。
+- **入站媒体**：图片 → 多模态输入；文件/视频 → 下载到 `<cwd>/.pi-weixin/inbox/<message-id>/` 并在 prompt 中说明路径；语音 → 仅使用微信提供的转录文本，追加 `【以上为用户的语音转录的信息，可能有识别错误】`，不下载或携带音频。空转录回复来源账号的微信用户「未获取到语音转录文本，请重新发送语音或改用文字。」，没有其他有效输入时不调用 Pi。`.pi-weixin/` 会自动加入项目 `.gitignore`。
+- **Extension UI**：项目 extension 调用 `ctx.ui.confirm/select/input` 时，daemon 进入 `WAITING_FOR_UI`，向来源账号的微信用户发送询问，且只接受该账号对应用户的回答（其他账号仍 busy）；`ctx.ui.notify` 直接推送消息。`ctx.ui.custom()` resolve undefined、`ctx.ui.editor()` 降级为输入框、`ctx.ui.theme` 返回真实最小 Theme 对象；其余 TUI 专属原语 no-op 不 throw。全部公开 UI 方法在 Pi SDK 包装后的扩展上下文中仍可调用。
 - **runner-level settings 不支持（W8）**：`resourceLoader` 层的项目配置正常生效；runner 级 settings（如 `sessionDir`）在 daemon 内不支持。
 
 ## 架构
@@ -222,7 +221,7 @@ Tencent/openclaw-weixin          # 微信协议参考（MIT，见 LICENSE.attrib
         └─ UDS RPC（控制面）→  CLI project/service/control/login
 ```
 
-依赖方向：`weixin → accounts/projects → sessions → pi`。**只有 `src/pi/` import Pi SDK**（含类型，Biome 强制）；业务层只见领域类型与 port；`daemon.ts` 做组合。
+依赖方向：`weixin → accounts/projects → sessions → pi`。**只有 `src/pi/` import Pi SDK**（含类型，Biome 强制）；运行会话业务统一经 `SessionRuntimePort → PiSdkHost → SDK`，不另设 PiSessionHost 转发层。host 内部工厂、扩展回调及 UI/事件适配保留；版本/环境诊断通过独立 `sdk-info` 入口，不操纵活动会话。业务层只见领域类型与 port；`daemon.ts` 做组合。
 
 ## 配置与存储（XDG）
 

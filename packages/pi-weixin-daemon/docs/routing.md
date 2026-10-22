@@ -9,7 +9,7 @@
 ## 路由：微信真人 → 账号 → 项目 → 会话
 
 ```
-  微信真人用户(owner)
+  微信真人用户
      │  把消息发给哪个"账号"(bot)?
      ▼
    账号(account)
@@ -26,14 +26,13 @@
                    会话
                      │
                      ▼
-          agent 处理,回复回给发起者(见下方"回复/广播")
+          agent 处理,按范围投递给账号用户(见下方"回复/广播")
 ```
 
 - 一个账号只属于一个项目；一个项目可绑多个账号。
 - 一个项目至多有一个活动会话，所以多个账号 / 真人共用同一份活动上下文。
-- owner-scoped 协议下，一个账号（bot）通常只服务扫码 owner；但本地没有 pairing/allowFrom
-  鉴权，也不校验 `senderId === account.userId`。回复和广播始终使用报文中实际观测到的
-  `senderId`，不把二者字节相等作为安全边界。
+- 本地没有 pairing/allowFrom 鉴权，不新增 `senderId === account.userId` 检查；不同 sender 仍按账号路由。
+  出站统一使用账号的 `account.userId`，不把它与 sender 相等或服务端 owner-only 当作保证。
 
 ---
 
@@ -55,16 +54,16 @@
   pi agent 处理，生成回复消息B
         │
         ▼
-  pi-weixin 把消息B 发给微信服务器      # 接收方 = 实际 senderId + context_token
+  pi-weixin 把消息B 发给微信服务器      # 接收方 = 绑定账号的 userId + 精确 context_token
         │
         ▼
-  微信服务器 通过 bot 把消息B 发回给 user
+  微信服务器 通过各目标 bot 把消息B 发给其登录用户
 ```
 
 - **入站**：`getupdates` 长轮询 → 归一化 `InboundMessage` → 按 `accountId` 路由到项目 →
   `SessionController.handleUserMessage`。
-- **出站**：回复使用 `TurnContext`（`accountId`/`senderId`/`context_token`）回传；
-  `context_token` 必须原样回传。
+- **出站**：按消息范围选择账号的 `account.userId`，使用 `(accountId, userId)` 精确 token。
+  `TurnContext` 保留实际 sender 和回合来源；当前 token 仅在 sender 与收件人一致时可直接使用，否则查收件人的精确缓存。入站 token 始终按实际 sender 保存。
 
 ### 入站 gate 与丢弃前告知
 
@@ -78,7 +77,7 @@ transport 首先丢弃明确的 BOT/非 USER 记录；该检查发生在项目�
 - **已绑定但项目未运行**（绑定且启用但 runtime 没起来）：`⚠️ 项目当前未运行（可能启动失败或仍在启动），请稍后重试。`
 
 > 前三者分别在 `transport` 层（绑定/停用）与 `ProjectManager.dispatch`（未运行）处理；
-> 都需要把告知回发给**发送者**（`from_user_id` + `context_token`）。
+> 告知均定向到**来源账号的微信用户**（`account.userId` + 精确 token），不要求先有项目；缺少投递条件则跳过并记录。
 
 ---
 
@@ -91,7 +90,7 @@ transport 首先丢弃明确的 BOT/非 USER 记录；该检查发生在项目�
   类型 + 保存路径 + “自己用工具读/处理，别让用户粘贴/描述”的指令，避免 agent 反问她。
 - **语音** → 仅用 iLink 自带的 `voice_item.text`（语音转写）**当作文本**，末尾追加
   `【以上为用户的语音转录的信息，可能有识别错误】`；不下载音频、不生成语音附件或路径提示。
-  转写缺失、为空或纯空白时，仅提示发送者「未获取到语音转录文本，请重新发送语音或改用文字。」；
+  转写缺失、为空或纯空白时，仅提示来源账号的微信用户「未获取到语音转录文本，请重新发送语音或改用文字。」；
   没有其他有效输入时不调用 Pi，混合消息的其他内容仍按现有规则处理。
 - **下载 / 解密失败** → 不阻塞消息，但记录到 `mediaFailures`，交由 agent 告知用户“附件下载失败”。
 
@@ -103,15 +102,16 @@ transport 首先丢弃明确的 BOT/非 USER 记录；该检查发生在项目�
 ## 回复 / 广播
 
 - **成功文本回复**：project 层通过 `broadcastText` 将 agent 最终成功回复广播给项目内
-  **所有**参与者（含发起者）。错误、可能不完整的部分输出和 extension warning 只回发起者。
-- **中间进度**：长任务可调用 `weixin_send_progress`，立即向当前 `TurnContext` 发简短进度；
+  绑定账号的微信用户；活动会话中扩展触发的独立回合也走同一出口，无最终文本不发送。
+  错误、可能不完整的部分输出和 extension warning 只发给来源账号的微信用户。
+- **中间进度**：长任务可调用 `weixin_send_progress`，立即向当前 `TurnContext` 来源账号的微信用户发简短进度；
   它不广播、不进入最终回复文本，且在没有活动 turn 时拒绝发送。
-- **消息互通**：某账号的 sender 发来消息时，同时通知同项目**其他**参与者，
+- **消息互通**：某账号的 sender 发来消息时，同时通知同项目**其他账号的微信用户**，
   内容为 "`<该账号name>`: 消息文本"——需求③。
-- **目标来源**：广播 / 互通的目标取自 **参与者注册表**（`ProjectController` 记录每个项目下
-  "实际发过消息的 `(accountId, senderId)` + `contextToken`"），不靠 `account.userId` 猜
-  （避免 `ilink_user_id ≠ from_user_id` 出错）。
-- **限制**：没发过消息 / 无 token 的账号不会出现在注册表里，也就不会收到（已知取舍）。
+- **目标来源**：项目绑定账号的 `account.userId`；最终文本、typing、互通及主动通知统一使用该来源，互通排除来源账号。CLI broadcast 与 Agent 出口共用用户解析及投递规则。
+- **定向范围**：命令结果、错误、warning、文件、进度及 UI 仍只投递到来源账号用户；本文的“发起者”定向回复均指该用户，不是原始 sender。
+- **投递限制**：缺用户、精确 token 或可用 transport 时跳过并记录；单目标失败不影响其他目标，不借用其他用户 token，不自动重试。重启后无需重新发言，已有精确缓存即可发送，但服务端仍可能拒绝。
+- **已开始的广播继续完成**：即使发送第一个目标期间会话被停止或替换，仍尝试其余目标；transport 已停止时仍可能发送失败，不承诺送达。旧会话事件和尚未开始的过期投递仍由既有代际检查隔离，不产生新的旧会话广播。
 
 > 多用户场景（两用户→两账号→一项目）见 [`docs/domain-model.md`](domain-model.md) §1.7。
 
@@ -137,7 +137,7 @@ transport 首先丢弃明确的 BOT/非 USER 记录；该检查发生在项目�
 命中权限系统需要批准（也是一种 ask）。此时 interaction controller 进入 `WAITING_FOR_UI`，等用户的**下一条普通消息**
 作为答复。
 
-- **答复路由**：只有**当前 turn 的发起者**（`(accountId, senderId)` 与 turn 一致）的普通消息才被当作答复；
+- **答复路由**：只有**询问的收件用户**（来源 `accountId` 与该账号的 `account.userId`）的普通消息才被当作答复；原始 sender 仅保留为来源记录。这是交互关联检查，不是新增普通入站过滤；
   其他账号/发件人的消息仍按 busy 拒绝。
 - **不阻塞接收**：`getupdates` 长轮询**不会等待 turn 处理完成**——它在 `onInbound` 处 fire-and-forget，
   turn 进行中依然持续轮询。因此用户对 ask 的答复能及时收回，不会因为 turn 卡住而被丢弃（旧版死锁）。
@@ -174,4 +174,4 @@ transport 首先丢弃明确的 BOT/非 USER 记录；该检查发生在项目�
 - 已有活动会话时 `/new` 才会替换它；inactive 状态下 `/new` 只提示直接发送普通消息。
   空闲自动关闭后，下一条普通消息会创建新会话。`/compact`、`/abort` 不主动换会话。
 - 项目忙时（`busy`），普通消息**直接拒绝、不排队**，不进会话；`WAITING_FOR_UI` 时只有
-  当前 turn 发起者的消息作为答复，其余同样拒绝（见上方「UI / 权限交互」）。
+  询问收件用户的消息作为答复，其余同样拒绝（见上方「UI / 权限交互」）。

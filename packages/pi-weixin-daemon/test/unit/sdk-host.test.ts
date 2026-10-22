@@ -1,4 +1,5 @@
 import type {
+  AgentSession,
   AgentSessionRuntime,
   CreateAgentSessionRuntimeFactory,
 } from "@earendil-works/pi-coding-agent";
@@ -60,7 +61,93 @@ beforeEach(() => {
 
 afterEach(() => project.cleanup());
 
+function mockPromptSession() {
+  return {
+    prompt: vi.fn<AgentSession["prompt"]>().mockResolvedValue(undefined),
+    bindExtensions: vi.fn<AgentSession["bindExtensions"]>().mockResolvedValue(undefined),
+    subscribe: vi.fn<AgentSession["subscribe"]>().mockReturnValue(vi.fn()),
+  };
+}
+
+function createPromptHost() {
+  const session = mockPromptSession();
+  const runtime = {
+    session,
+    diagnostics: [],
+    setRebindSession: vi.fn<AgentSessionRuntime["setRebindSession"]>(),
+    newSession: vi.fn<AgentSessionRuntime["newSession"]>(),
+    dispose: sdk.dispose,
+  };
+  sdk.createRuntime.mockResolvedValue(runtime);
+  return { host: new PiSdkHost({ cwd: project.dir, logger }), runtime, session };
+}
+
 describe("daemon SDK adapter", () => {
+  it.each([
+    { label: "no images", input: { text: "hello" }, options: undefined },
+    { label: "empty images", input: { text: "hello", images: [] }, options: undefined },
+    {
+      label: "multiple images",
+      input: {
+        text: "hello",
+        images: [
+          { data: "first", mimeType: "image/png" },
+          { data: "second", mimeType: "image/jpeg" },
+        ],
+      },
+      options: {
+        images: [
+          { type: "image", data: "first", mimeType: "image/png" },
+          { type: "image", data: "second", mimeType: "image/jpeg" },
+        ],
+      },
+    },
+  ])("forwards a prompt with $label through the lazy host", async ({ input, options }) => {
+    const { host, session } = createPromptHost();
+    try {
+      await host.start();
+      expect(sdk.createRuntime).not.toHaveBeenCalled();
+      await host.prompt(input);
+      expect(sdk.createRuntime).toHaveBeenCalledOnce();
+      expect(session.prompt).toHaveBeenCalledExactlyOnceWith("hello", options);
+    } finally {
+      await host.stop();
+    }
+  });
+
+  it("propagates the original SDK prompt rejection", async () => {
+    const { host, session } = createPromptHost();
+    const error = new Error("prompt rejected");
+    session.prompt.mockRejectedValue(error);
+    try {
+      await expect(host.prompt({ text: "hello" })).rejects.toBe(error);
+    } finally {
+      await host.stop();
+    }
+  });
+
+  it("prompts the replacement session rather than the original session", async () => {
+    const { host, runtime, session } = createPromptHost();
+    const replacement = mockPromptSession();
+    runtime.newSession.mockImplementation(async () => {
+      runtime.session = replacement;
+      const rebind = runtime.setRebindSession.mock.calls[0]![0]!;
+      await rebind(replacement as unknown as AgentSession);
+      return { cancelled: false };
+    });
+    try {
+      await host.prompt({ text: "before" });
+      await expect(host.newSession()).resolves.toEqual({ cancelled: false });
+      await host.prompt({ text: "after" });
+      expect(sdk.createRuntime).toHaveBeenCalledOnce();
+      expect(session.prompt).toHaveBeenCalledExactlyOnceWith("before", undefined);
+      expect(replacement.prompt).toHaveBeenCalledExactlyOnceWith("after", undefined);
+      expect(replacement.bindExtensions).toHaveBeenCalledOnce();
+    } finally {
+      await host.stop();
+    }
+  });
+
   it("uses the factory's effective cwd and forwards injected extensions and trust policy", async () => {
     const extension = vi.fn();
     settings.drainErrors.mockReturnValue([

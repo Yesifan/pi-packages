@@ -8,6 +8,9 @@
 | ---- | ------- | ------ | -------------- |
 | [0007：通过 CLI 向项目绑定用户广播通知](0007-project-cli-broadcast.md) | 向启用项目的绑定账号扫码用户直接发送微信通知，不经过 Pi。 | completed | 2026-10-01 / 2026-10-01 |
 | [0008：微信语音仅传递转录文本](0008-voice-transcript-only.md) | 入站语音只传递微信转录及识别错误备注，空转录提示发送者，不再下载或携带音频。 | completed | 2026-10-12 / 2026-10-12 |
+| [0009：项目微信用户与消息投递实现简化](0009-project-weixin-user-simplification.md) | 删除 participant，统一以 account.userId 投递；调整 0006/0007 的收件范围约定。 | completed | 2026-10-21 / 2026-10-21 |
+| [0010：项目默认会话、CLI prompt 与 MCP](0010-project-session-cli-mcp.md) | 基于 0009 增加共享默认/活动会话、prompt、Authelia MCP、状态与历史查询。 | not-started | 2026-10-21 |
+| [0011：运行时代码与状态精简](0011-runtime-simplification.md) | 统一 PiSdkHost 业务入口，分阶段删除闲置代码并合并重复状态/步骤；不含 0010 或 logout #23。 | completed | 2026-10-21 / 2026-10-21 |
 
 ## 维护规则
 
@@ -31,3 +34,5 @@
 - [`requirements/0005-weixin-typing-keepalive-and-broadcast.md`](requirements/0005-weixin-typing-keepalive-and-broadcast.md) —— 需求：Pi turn 期间每 5 秒续发微信正在输入状态，并广播给项目参与者。**✅ 已完成（`0.6.7`）**
 - [`0006-session-wide-agent-replies.md`](0006-session-wide-agent-replies.md) —— 需求：活动 Pi 会话的所有来源 Agent 回合统一广播成功最终文本。**✅ 已完成（`0.6.11`）**
 - [`ADR-0006`](../adr/0006-session-wide-agent-reply-routing.md) —— Pi 会话级统一路由 Agent 最终回复，不依赖具体扩展。**Accepted**
+- [`ADR-0007`](../adr/0007-project-weixin-users.md) —— 统一账号微信用户及精确 token 投递，移除动态参与者登记；调整 ADR-0006 的收件范围。**Accepted**
+- [`ADR-0008`](../adr/0008-pi-business-entry-simplification.md) —— PiSdkHost 业务单入口与内部适配精简；保留 ADR-0004 的 SDK 隔离原则。**Accepted**
