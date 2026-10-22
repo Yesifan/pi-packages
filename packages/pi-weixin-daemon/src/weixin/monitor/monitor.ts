@@ -53,6 +53,21 @@ export async function monitorWeixinProvider(opts: MonitorWeixinOpts): Promise<vo
   let nextTimeoutMs = longPollTimeoutMs ?? DEFAULT_LONG_POLL_TIMEOUT_MS;
   let consecutiveFailures = 0;
 
+  async function waitAfterFailure(type: string, message: string): Promise<void> {
+    consecutiveFailures += 1;
+    log.error(
+      { type, consecutiveFailures, maxConsecutiveFailures: MAX_CONSECUTIVE_FAILURES },
+      message,
+    );
+    if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+      log.error(`getUpdates: ${MAX_CONSECUTIVE_FAILURES} consecutive failures, backing off 30s`);
+      consecutiveFailures = 0;
+      await sleep(backoffDelayMs, abortSignal);
+    } else {
+      await sleep(retryDelayMs, abortSignal);
+    }
+  }
+
   while (!abortSignal?.aborted) {
     try {
       const resp = await getUpdates({
@@ -83,24 +98,7 @@ export async function monitorWeixinProvider(opts: MonitorWeixinOpts): Promise<vo
           continue;
         }
 
-        consecutiveFailures += 1;
-        log.error(
-          {
-            type: "business",
-            consecutiveFailures,
-            maxConsecutiveFailures: MAX_CONSECUTIVE_FAILURES,
-          },
-          "getUpdates failed",
-        );
-        if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-          log.error(
-            `getUpdates: ${MAX_CONSECUTIVE_FAILURES} consecutive failures, backing off 30s`,
-          );
-          consecutiveFailures = 0;
-          await sleep(backoffDelayMs, abortSignal);
-        } else {
-          await sleep(retryDelayMs, abortSignal);
-        }
+        await waitAfterFailure("business", "getUpdates failed");
         continue;
       }
 
@@ -130,23 +128,7 @@ export async function monitorWeixinProvider(opts: MonitorWeixinOpts): Promise<vo
         log.info("monitor stopped (aborted)");
         return;
       }
-      consecutiveFailures += 1;
-      const classified = classifyFetchError(err);
-      log.error(
-        {
-          type: classified.type,
-          consecutiveFailures,
-          maxConsecutiveFailures: MAX_CONSECUTIVE_FAILURES,
-        },
-        "getUpdates request failed",
-      );
-      if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-        log.error(`getUpdates: ${MAX_CONSECUTIVE_FAILURES} consecutive failures, backing off 30s`);
-        consecutiveFailures = 0;
-        await sleep(backoffDelayMs, abortSignal);
-      } else {
-        await sleep(retryDelayMs, abortSignal);
-      }
+      await waitAfterFailure(classifyFetchError(err).type, "getUpdates request failed");
     }
   }
   log.info("monitor ended");

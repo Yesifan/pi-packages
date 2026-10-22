@@ -430,7 +430,7 @@ describe("M6 commands over weixin", () => {
       }
     }
     const { transport, session } = setup({ runtime: new CompactFailureRuntime() });
-    await session.handleCommand("compact", msgA("/compact"));
+    await session.handleCommand("compact", "", msgA("/compact"));
     expect(transport.textsTo("acct-a").at(-1)).toContain("compact exploded");
   });
 
@@ -439,7 +439,7 @@ describe("M6 commands over weixin", () => {
     const turnPromise = session.handleUserMessage(msgA("task"));
     await vi.waitFor(() => expect(runtime.prompts.length).toBe(1));
 
-    await session.handleCommand("status", msgA("/status", "m-status"));
+    await session.handleCommand("status", "", msgA("/status", "m-status"));
     const statusReply = transport.textsTo("acct-a").at(-1)!;
     expect(statusReply).toContain("Project:");
     expect(statusReply).toContain("Agent state: busy");
@@ -457,14 +457,14 @@ describe("M6 commands over weixin", () => {
     const turnPromise = session.handleUserMessage(msgA("task"));
     await vi.waitFor(() => expect(runtime.prompts.length).toBe(1));
 
-    await session.handleCommand("new", msgA("/new", "m-new-busy"));
+    await session.handleCommand("new", "", msgA("/new", "m-new-busy"));
     expect(transport.textsTo("acct-a").at(-1)).toContain("忙时不能新建会话");
     expect(runtime.newSessionCalls).toBe(0);
 
     runtime.complete("done");
     await turnPromise;
 
-    await session.handleCommand("new", msgA("/new", "m-new-idle"));
+    await session.handleCommand("new", "", msgA("/new", "m-new-idle"));
     expect(runtime.newSessionCalls).toBe(1);
   });
 
@@ -474,7 +474,7 @@ describe("M6 commands over weixin", () => {
     const turnPromise = session.handleUserMessage(msgA("long task"));
     await vi.waitFor(() => expect(runtime.prompts.length).toBe(1));
 
-    await session.handleCommand("abort", msgA("/abort", "m-abort"));
+    await session.handleCommand("abort", "", msgA("/abort", "m-abort"));
     await turnPromise;
 
     expect(runtime.prompts.length).toBe(1); // no second prompt

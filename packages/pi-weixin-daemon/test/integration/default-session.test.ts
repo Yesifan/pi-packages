@@ -76,8 +76,8 @@ function setup(defaultSessionId?: string) {
 describe("project default session", () => {
   it("holds the project gate until resume notifications finish and preserves the next turn's busy state", async () => {
     const h = setup();
-    await h.controller.handleCommand("new", message("/new"));
-    await h.controller.handleCommand("new", message("/new"));
+    await h.controller.handleCommand("new", "", message("/new"));
+    await h.controller.handleCommand("new", "", message("/new"));
     let release!: () => void;
     const blocked = new Promise<void>((resolve) => {
       release = resolve;
@@ -92,7 +92,7 @@ describe("project default session", () => {
     await h.controller.handleUserMessage(message("during notification"));
     expect(h.runtime.prompts).toHaveLength(0);
     expect(h.controller.getState()).toBe("replacing");
-    await h.controller.handleCommand("compact", message("/compact"));
+    await h.controller.handleCommand("compact", "", message("/compact"));
     expect(h.runtime.compactCalls).toBe(0);
     expect(h.controller.getState()).toBe("replacing");
     release();
@@ -100,7 +100,7 @@ describe("project default session", () => {
     const pending = h.controller.handleUserMessage(message("after notification"));
     await vi.waitFor(() => expect(h.runtime.prompts).toHaveLength(1));
     expect(h.controller.getState()).toBe("busy");
-    await h.controller.handleCommand("new", message("/new"));
+    await h.controller.handleCommand("new", "", message("/new"));
     expect(h.runtime.id).toBe("session-1");
     h.runtime.complete("done");
     await pending;
@@ -109,8 +109,8 @@ describe("project default session", () => {
 
   it("does not clear faulted after SDK replacement destroys the previous session", async () => {
     const h = setup();
-    await h.controller.handleCommand("new", message("/new"));
-    await h.controller.handleCommand("new", message("/new"));
+    await h.controller.handleCommand("new", "", message("/new"));
+    await h.controller.handleCommand("new", "", message("/new"));
     vi.spyOn(h.runtime, "resumeSession").mockImplementation(async () => {
       // A stale host reference may still claim a session after SDK disposal.
       throw new Error("replacement failed after disposal");
@@ -125,7 +125,7 @@ describe("project default session", () => {
   it("notification failure never rolls back a successful activation", async () => {
     const h = setup();
     h.broadcast.mockRejectedValueOnce(new Error("transport failed"));
-    await h.controller.handleCommand("new", message("/new"));
+    await h.controller.handleCommand("new", "", message("/new"));
     expect(h.runtime.id).toBe("session-1");
     expect(h.saved).toEqual(["session-1"]);
     expect(h.controller.getState()).toBe("ready");
@@ -134,10 +134,10 @@ describe("project default session", () => {
 
   it("creates inactive /new, preserves the first default and only /default changes it", async () => {
     const h = setup();
-    await h.controller.handleCommand("new", message("/new"));
+    await h.controller.handleCommand("new", "", message("/new"));
     expect(h.saved).toEqual(["session-1"]);
     expect(h.notices).toEqual(["当前会话已切换为「session-1」"]);
-    await h.controller.handleCommand("new", message("/new"));
+    await h.controller.handleCommand("new", "", message("/new"));
     expect(h.saved).toEqual(["session-1"]);
     await h.controller.handleCommand("default", "session-1", message("/default session-1"));
     expect(h.runtime.id).toBe("session-2");
@@ -152,8 +152,8 @@ describe("project default session", () => {
 
   it("restores recorded default after runtime release without switch notification", async () => {
     const h = setup();
-    await h.controller.handleCommand("new", message("/new"));
-    await h.controller.handleCommand("new", message("/new"));
+    await h.controller.handleCommand("new", "", message("/new"));
+    await h.controller.handleCommand("new", "", message("/new"));
     await h.controller.stop();
     await h.controller.start();
     h.notices.length = 0;
@@ -172,9 +172,9 @@ describe("project default session", () => {
     expect(h.runtime.prompts).toHaveLength(0);
     expect(h.runtime.ensureSessionCalls).toBe(0);
     expect(h.transport.sentTexts.at(-1)?.text).toContain("missing");
-    await h.controller.handleCommand("new", message("/new"));
+    await h.controller.handleCommand("new", "", message("/new"));
     expect(h.controller.getStatus().defaultSessionId).toBe("missing");
-    await h.controller.handleCommand("default", message("/default"));
+    await h.controller.handleCommand("default", "", message("/default"));
     expect(h.saved).toEqual(["session-1"]);
     await h.controller.stop();
   });

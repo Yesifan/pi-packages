@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-ai";
+import type { ImageContent } from "@earendil-works/pi-ai/compat";
 import {
   type AgentSession,
   type AgentSessionRuntime,
@@ -16,7 +17,6 @@ import { type PiHostEvent, toPiHostEvent } from "./events.js";
 import { PiExtensionHost } from "./extension-host.js";
 import { resolveProjectTrust } from "./project-trust.js";
 import { createPiRuntimeFactory, PiInitializationError } from "./runtime-factory.js";
-import { PiSessionHost } from "./session-host.js";
 import { persistSessionIdentity } from "./session-persistence.js";
 import type {
   HostExtensionMode,
@@ -188,7 +188,16 @@ export class PiSdkHost {
   async prompt(input: HostPromptInput): Promise<void> {
     const runtime = await this.ensureRuntime();
     this.opts.logger.info({ sessionId: runtime.session.sessionId }, "prompt");
-    await new PiSessionHost(runtime).prompt(input);
+    const images = input.images?.length
+      ? input.images.map(
+          (image): ImageContent => ({
+            type: "image",
+            data: image.data,
+            mimeType: image.mimeType,
+          }),
+        )
+      : undefined;
+    await runtime.session.prompt(input.text, images ? { images } : undefined);
   }
 
   /** Abort the current agent run. No-op when no session is active. */

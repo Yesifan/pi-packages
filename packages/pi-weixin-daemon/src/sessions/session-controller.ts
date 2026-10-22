@@ -145,7 +145,7 @@ export class SessionController {
     const deliver = async () => {
       if (generation !== this.generation || !this.deps.host.hasSession()) return;
       try {
-        await this.deliverOutcome(run.origin, outcome, run.messageId);
+        await this.deliverOutcome(run.origin, outcome);
       } catch (err) {
         this.deps.logger.error(
           { err, project: this.deps.projectId },
@@ -171,10 +171,6 @@ export class SessionController {
 
   getState(): SessionState {
     return this.state;
-  }
-
-  getCurrentTurn(): TurnOrigin | undefined {
-    return this.deps.currentTurn.get();
   }
 
   getFault(): string | undefined {
@@ -304,16 +300,7 @@ export class SessionController {
   }
 
   /** Execute an explicitly-mapped daemon command (classification done upstream). */
-  async handleCommand(command: DaemonCommand, msg: InboundMessage): Promise<void>;
-  async handleCommand(command: DaemonCommand, args: string, msg: InboundMessage): Promise<void>;
-  async handleCommand(
-    command: DaemonCommand,
-    argsOrMsg: string | InboundMessage,
-    maybeMsg?: InboundMessage,
-  ): Promise<void> {
-    const args = typeof argsOrMsg === "string" ? argsOrMsg : "";
-    const msg = typeof argsOrMsg === "string" ? maybeMsg : argsOrMsg;
-    if (!msg) throw new Error("command message is required");
+  async handleCommand(command: DaemonCommand, args: string, msg: InboundMessage): Promise<void> {
     this.lastActivityAt = Date.now();
     this.scheduleIdleCheck();
 
@@ -1051,7 +1038,6 @@ export class SessionController {
 type AgentRun = {
   accumulator: ResponseAccumulator;
   origin?: TurnOrigin;
-  messageId?: string;
   generation: number;
   delivered?: Promise<void>;
 };

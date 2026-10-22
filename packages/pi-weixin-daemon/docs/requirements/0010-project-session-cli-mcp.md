@@ -14,7 +14,7 @@ related_documents:
   - "[ADR-0004：分层](../adr/0004-layering-and-dependency-direction.md)"
   - "[ADR-0005：Slash 命令](../adr/0005-weixin-slash-session-controls.md)"
   - "[ADR-0006：会话级回复](../adr/0006-session-wide-agent-reply-routing.md)"
-  - "[ADR-0008：共享默认会话与 CLI 回合来源](../adr/0008-shared-default-session-cli.md)"
+  - "[ADR-0009：共享默认会话与 CLI 回合来源](../adr/0009-shared-default-session-cli.md)"
 
 ---
 

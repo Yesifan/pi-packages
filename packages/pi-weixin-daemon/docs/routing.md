@@ -182,4 +182,4 @@ CLI 回合向调用方返回文字询问；同 project 的所有本地 CLI 视�
 - 项目 busy 时拒绝新任务及切换，即使指定其他历史也不排队；合格 UI 答复走原任务。保留 `/status`、`/abort`，`/compact` 不主动换会话。
 - 释放 runtime 不删除历史；闲置继续广播“本次会话已关闭”。`broadcast` 不激活或延长会话。其他项目不受 busy/abort/错误影响。
 
-决策及与旧生命周期约定的关系见 [ADR-0008](adr/0008-shared-default-session-cli.md)。
+决策及与旧生命周期约定的关系见 [ADR-0009](adr/0009-shared-default-session-cli.md)。

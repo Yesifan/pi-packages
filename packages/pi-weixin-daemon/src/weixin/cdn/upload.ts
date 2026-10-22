@@ -1,12 +1,8 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
-import path from "node:path";
 import { createLogger } from "../../util/logger.js";
 import { getUploadUrl, type WeixinApiOptions } from "../api/api.js";
 import { UploadMediaType } from "../api/types.js";
-import { getExtensionFromContentTypeOrUrl } from "../media/mime.js";
-import { tempFileName } from "../util/random.js";
-import { redactUrl } from "../util/redact.js";
 import { aesEcbPaddedSize } from "./aes-ecb.js";
 import { uploadBufferToCdn } from "./cdn-upload.js";
 
@@ -130,34 +126,4 @@ export async function uploadFileAttachmentToWeixin(params: {
     mediaType: UploadMediaType.FILE,
     label: "uploadFileAttachmentToWeixin",
   });
-}
-
-/**
- * Download a remote media URL to a local temp file in destDir.
- * Returns the local file path; extension inferred from Content-Type / URL.
- */
-export async function downloadRemoteImageToTemp(url: string, destDir: string): Promise<string> {
-  logger.debug(`downloadRemoteImageToTemp: fetching url=${redactUrl(url)}`);
-  let res: Response;
-  try {
-    res = await fetch(url);
-  } catch (err) {
-    logger.error(
-      `downloadRemoteImageToTemp: fetch network error url=${redactUrl(url)} error=${String(err)}`,
-    );
-    throw err;
-  }
-  if (!res.ok) {
-    const msg = `remote media download failed: ${res.status} ${res.statusText} url=${redactUrl(url)}`;
-    logger.error(`downloadRemoteImageToTemp: ${msg}`);
-    throw new Error(msg);
-  }
-  const buf = Buffer.from(await res.arrayBuffer());
-  await fs.mkdir(destDir, { recursive: true });
-  const ext = getExtensionFromContentTypeOrUrl(res.headers.get("content-type"), url);
-  const name = tempFileName("weixin-remote", ext);
-  const filePath = path.join(destDir, name);
-  await fs.writeFile(filePath, buf);
-  logger.debug(`downloadRemoteImageToTemp: saved to ${filePath} ext=${ext}`);
-  return filePath;
 }
