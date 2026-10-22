@@ -97,12 +97,13 @@ describe("sendMessage API logging", () => {
           },
         },
       });
-      if (outcome === "fetch-error") await expect(request).rejects.toBe(fetchError);
-      else if (outcome === "api-error")
-        await expect(request).rejects.toThrow(`sendMessage ret=-14 errmsg=${echoed}`);
-      else if (outcome === "http-error")
-        await expect(request).rejects.toThrow(`sendMessage 500: ${raw}`);
-      else await expect(request).resolves.toBeUndefined();
+      if (outcome === "success") await expect(request).resolves.toBeUndefined();
+      else {
+        const error = await request.catch((err: unknown) => err);
+        expect(error).toBeInstanceOf(Error);
+        expect(String(error)).not.toContain(echoed);
+        expect((error as Error).cause).toBeUndefined();
+      }
 
       expect(fetch).toHaveBeenCalledWith(
         "https://example.test/ilink/bot/sendmessage",
@@ -116,7 +117,7 @@ describe("sendMessage API logging", () => {
         expect(recorded).not.toContain(secret);
       }
       expect(recorded).toContain("body=omitted");
-      if (outcome !== "fetch-error") expect(recorded).toContain("response=omitted");
+      if (outcome === "success") expect(recorded).toContain("response=omitted");
     },
   );
 });

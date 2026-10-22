@@ -11,6 +11,8 @@ export interface ProjectConfig {
   accounts: string[];
   /** Persisted desired state. true = daemon should maintain this ProjectController. */
   enabled: boolean;
+  /** Explicit Pi history identity; independent of the temporary active session. */
+  defaultSessionId?: string;
 }
 
 /** The persisted config file shape. */
@@ -32,6 +34,7 @@ export interface ProjectStatus {
   state: ProjectRuntimeState | "off";
   sessionFile?: string;
   sessionId?: string;
+  defaultSessionId?: string;
   model?: string;
   /** Live project-trust decision (W7). */
   configuredTrust?: boolean;
@@ -40,7 +43,7 @@ export interface ProjectStatus {
   error?: string;
 }
 
-/** Counts returned after an explicit notification to a project's bound account owners. */
+/** Counts returned after an explicit notification to a project's bound account users. */
 export interface ProjectBroadcastResult {
   succeeded: number;
   skipped: number;

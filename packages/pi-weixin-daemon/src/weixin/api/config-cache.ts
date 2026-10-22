@@ -1,5 +1,5 @@
 import type { Logger } from "../../util/logger.js";
-import { getConfig } from "./api.js";
+import { classifyFetchError, getConfig } from "./api.js";
 
 /** Subset of getConfig fields that we actually need; add new fields here as needed. */
 export interface CachedConfig {
@@ -57,7 +57,7 @@ export class WeixinConfigManager {
           fetchOk = true;
         }
       } catch (err) {
-        this.logger.debug(`getConfig failed for ${userId} (ignored): ${String(err)}`);
+        this.logger.debug({ type: classifyFetchError(err).type }, "getConfig failed (ignored)");
       }
       if (!fetchOk) {
         const prevDelay = entry?.retryDelayMs ?? CONFIG_CACHE_INITIAL_RETRY_MS;

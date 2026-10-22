@@ -1,5 +1,16 @@
 import type { InboundMessage, TurnContext } from "../weixin/types.js";
 
+export interface CliTurnOrigin {
+  kind: "cli";
+  messageId: string;
+}
+
+export type TurnOrigin = TurnContext | CliTurnOrigin;
+
+export function isCliTurn(turn: TurnOrigin): turn is CliTurnOrigin {
+  return "kind" in turn && turn.kind === "cli";
+}
+
 /** Convert an inbound message into the reply origin (TurnContext) for it. */
 export function toTurnContext(msg: InboundMessage): TurnContext {
   return {
@@ -15,13 +26,13 @@ export function toTurnContext(msg: InboundMessage): TurnContext {
  * reply, file send and UI prompt must go back to this origin only.
  */
 export class CurrentTurn {
-  private turn: TurnContext | undefined;
+  private turn: TurnOrigin | undefined;
 
-  set(turn: TurnContext | undefined): void {
+  set(turn: TurnOrigin | undefined): void {
     this.turn = turn;
   }
 
-  get(): TurnContext | undefined {
+  get(): TurnOrigin | undefined {
     return this.turn;
   }
 }

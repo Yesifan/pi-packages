@@ -63,6 +63,7 @@
               "options": {
                 "paths": {
                   "@earendil-works/pi-coding-agent": "Only src/pi/ may import the Pi SDK. Use domain types/ports instead.",
+                  "@earendil-works/pi-ai": "Only src/pi/ may import the Pi SDK. Use domain types/ports instead.",
                   "@earendil-works/pi-ai/compat": "Only src/pi/ may import the Pi SDK. Use domain types/ports instead."
                 },
                 "patterns": [

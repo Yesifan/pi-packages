@@ -130,6 +130,14 @@ export class ProjectStore {
     this.write(data);
   }
 
+  setDefaultSession(name: string, sessionId: string): void {
+    const data = this.read();
+    const project = data.projects[name];
+    if (!project) throw new Error(`project "${name}" does not exist`);
+    project.defaultSessionId = sessionId;
+    this.write(data);
+  }
+
   remove(name: string): void {
     const data = this.read();
     if (!(name in data.projects)) throw new Error(`project "${name}" does not exist`);

@@ -1,4 +1,9 @@
 import type { InteractionPort } from "../pi/ports.js";
+import type {
+  CliPromptRequest,
+  CliPromptResult,
+  PromptDeliveryResult,
+} from "../sessions/cli-prompt.js";
 import type { SessionRuntimePort } from "../sessions/runtime-port.js";
 import { SessionController } from "../sessions/session-controller.js";
 import { CurrentTurn, toTurnContext } from "../sessions/turn-context.js";
@@ -6,9 +11,8 @@ import type { DeliveryReport } from "../sessions/turn-outcome.js";
 import type { Logger } from "../util/logger.js";
 import { formatUserFacingError } from "../util/user-facing-error.js";
 import { WeixinInteractionController } from "../weixin/interaction-controller.js";
-import type { InboundMessage, WeixinTransport } from "../weixin/types.js";
+import type { InboundMessage, TurnContext, WeixinTransport } from "../weixin/types.js";
 import { CommandRouter } from "./command-router.js";
-import { type Participant, ParticipantRegistry } from "./participant-registry.js";
 import type { ProjectRuntimeConfig } from "./project-config.js";
 import { OutboundDeliveryError } from "./project-transport.js";
 import type { ProjectRuntimeState } from "./types.js";
@@ -18,6 +22,7 @@ export interface ProjectHostFactoryContext {
   projectId: string;
   cwd: string;
   accounts: string[];
+  resolveFileRecipients?: (userId?: string) => TurnContext[];
   transport: WeixinTransport;
   interaction: InteractionPort;
   logger: Logger;
@@ -26,12 +31,15 @@ export type ProjectHostFactory = (ctx: ProjectHostFactoryContext) => Promise<Ses
 
 export interface ProjectControllerOptions {
   config: ProjectRuntimeConfig;
+  defaultSessionId?: string;
+  saveDefaultSession?: (sessionId: string) => void;
   /** Per-project outbound facade; also used by the weixin runtime extension. */
   transport: WeixinTransport;
   logger: Logger;
   factory: ProjectHostFactory;
   /** Human label for an account (e.g. its name) used in "-- from weixin <name>". */
   resolveSenderName?: (accountId: string) => string;
+  resolveRecipientUserId: (accountId: string) => string | undefined;
   /** Idle window before the shared session is auto-closed (min for tests). */
   sessionIdleMs?: number;
   /** Maximum duration and abort grace for one Pi turn. */
@@ -43,6 +51,7 @@ export interface ProjectStatusView {
   state: ProjectRuntimeState | "off";
   sessionFile?: string;
   sessionId?: string;
+  defaultSessionId?: string;
   model?: string;
   configuredTrust?: boolean;
   activeSessionTrust?: boolean;
@@ -51,7 +60,7 @@ export interface ProjectStatusView {
 
 /**
  * One project's runtime (ADR-0004): composes a SessionController + CommandRouter
- * + ParticipantRegistry over an immutable config snapshot.
+ * over an immutable config snapshot of bound accounts.
  *
  * Fault isolation: whatever happens here (turn error, pi crash) is contained to
  * this instance. `state` mirrors the session state machine while a turn is
@@ -64,7 +73,6 @@ export class ProjectController {
 
   private session?: SessionController;
   private readonly router = new CommandRouter();
-  private readonly registry = new ParticipantRegistry();
   /** Set once start() settles (extensions bound / session_start dispatched). */
   private resolveStarted!: () => void;
   private readonly started: Promise<void> = new Promise((r) => (this.resolveStarted = r));
@@ -84,6 +92,8 @@ export class ProjectController {
       const currentTurn = new CurrentTurn();
       const interaction = new WeixinInteractionController({
         getCurrentTurn: () => currentTurn.get(),
+        onCliText: (text) => this.session?.recordCliText(text),
+        onCliWaiting: () => this.session?.cliWaiting(),
         transport: this.opts.transport,
         logger: this.opts.logger,
       });
@@ -91,6 +101,22 @@ export class ProjectController {
         projectId: this.config.projectId,
         cwd: this.config.cwd,
         accounts: this.config.accounts,
+        resolveFileRecipients: (userId) => {
+          const accounts = this.config.accounts.filter(
+            (id) => !userId || this.opts.resolveRecipientUserId(id) === userId,
+          );
+          if (userId && !accounts.length) throw new Error("user does not belong to this project");
+          const seen = new Set<string>();
+          return accounts
+            .filter((id) => {
+              const user = this.opts.resolveRecipientUserId(id);
+              if (!user) return true; // Preserve an explicit skipped/failed delivery for missing recipients.
+              if (seen.has(user)) return false;
+              seen.add(user);
+              return true;
+            })
+            .map((accountId) => ({ accountId, senderId: "", messageId: "file-broadcast" }));
+        },
         transport: this.opts.transport,
         interaction,
         logger: this.opts.logger,
@@ -98,6 +124,11 @@ export class ProjectController {
       this.session = new SessionController({
         projectId: this.config.projectId,
         host,
+        defaultSessionId: this.opts.defaultSessionId,
+        saveDefaultSession: (id) => {
+          this.opts.saveDefaultSession?.(id);
+          this.opts.defaultSessionId = id;
+        },
         interaction,
         transport: this.opts.transport,
         currentTurn,
@@ -105,8 +136,9 @@ export class ProjectController {
         sessionIdleMs: this.opts.sessionIdleMs,
         turnTimeoutMs: this.opts.turnTimeoutMs,
         abortGraceMs: this.opts.abortGraceMs,
-        broadcastText: (text) => this.broadcastToRegistry(text),
-        broadcastTyping: (typing) => this.broadcastTypingToRegistry(typing),
+        broadcastText: (text) => this.broadcastText(text),
+        broadcastTyping: (typing) => this.broadcastTyping(typing),
+        resolveRecipientUserId: this.opts.resolveRecipientUserId,
         resolveSenderLabel: (msg) => this.opts.resolveSenderName?.(msg.accountId) ?? msg.accountId,
       });
       await this.session.start();
@@ -127,9 +159,6 @@ export class ProjectController {
 
   /** Route one inbound message into this project's session. */
   async handleMessage(msg: InboundMessage): Promise<void> {
-    // Any inbound (command or not) counts as activity and (re)registers the sender.
-    this.registry.register(msg);
-
     // ① Wait until the runtime finished starting so the first tool call is gated
     //    against the fully-configured project scope.
     await this.started;
@@ -175,7 +204,7 @@ export class ProjectController {
         };
       }
 
-      // ③ Notify other project participants when a sender speaks (ordinary messages only).
+      // Notify other bound accounts when a sender speaks (ordinary messages only).
       await this.notifyOthers(msg).catch((err: unknown) =>
         this.opts.logger.warn(
           { err, project: this.projectId, messageId: msg.messageId },
@@ -216,6 +245,21 @@ export class ProjectController {
     }
   }
 
+  async prompt(
+    input: CliPromptRequest,
+    deliver: (text: string) => Promise<PromptDeliveryResult>,
+  ): Promise<CliPromptResult> {
+    await this.started;
+    if (this.state === "error" || this.state === "off" || this.state === "stopping")
+      throw new Error(this.error ?? "project is not running");
+    const session = this.requireSession();
+    try {
+      return await session.handleCliPrompt(input, deliver);
+    } finally {
+      this.reflectState(session);
+    }
+  }
+
   async stop(): Promise<void> {
     this.state = "stopping";
     await this.session
@@ -246,6 +290,7 @@ export class ProjectController {
       state,
       sessionFile: s?.sessionFile,
       sessionId: s?.sessionId,
+      defaultSessionId: s?.defaultSessionId,
       model: s?.model,
       configuredTrust: s?.configuredTrust,
       activeSessionTrust: s?.activeSessionTrust,
@@ -264,91 +309,61 @@ export class ProjectController {
     } else this.state = "idle";
   }
 
-  // --- participants / broadcast --------------------------------------------
-
-  /** Authorized targets: observed senders ∩ currently-configured accounts. */
-  private broadcastTargets() {
-    return this.registry.getBroadcastTargets(this.config.accounts);
+  /** Every bound account participates, even before its first inbound this process. */
+  private broadcastContext(accountId: string) {
+    return { accountId, senderId: "", messageId: "broadcast" };
   }
 
-  /** Send a proactive text to a participant via their account's transport. */
-  private async sendTo(p: Participant, text: string): Promise<void> {
-    await this.opts.transport.sendText(
-      {
-        accountId: p.accountId,
-        senderId: p.senderId,
-        messageId: "broadcast",
-        contextToken: p.contextToken,
-      },
-      text,
-    );
-  }
-
-  /** Set or clear typing independently for every authorized participant. */
-  private readonly broadcastTypingToRegistry = async (typing: boolean): Promise<void> => {
-    for (const p of this.broadcastTargets()) {
+  private readonly broadcastTyping = async (typing: boolean): Promise<void> => {
+    for (const accountId of this.config.accounts) {
       try {
-        await this.opts.transport.setTyping(
-          {
-            accountId: p.accountId,
-            senderId: p.senderId,
-            messageId: "typing",
-            contextToken: p.contextToken,
-          },
-          typing,
-        );
-      } catch (err) {
+        await this.opts.transport.setTyping(this.broadcastContext(accountId), typing);
+      } catch {
         this.opts.logger.warn(
-          { err, project: this.projectId, account: p.accountId, sender: p.senderId, typing },
-          "typing broadcast to participant failed (ignored)",
+          { project: this.projectId, account: accountId, typing },
+          "typing broadcast failed (ignored)",
         );
       }
     }
   };
 
-  /** ④ Broadcast the agent's final reply to every authorized participant. */
-  private readonly broadcastToRegistry = async (
-    text: string,
-    isCurrent?: () => boolean,
-  ): Promise<DeliveryReport> => {
-    const targets = this.broadcastTargets();
+  private readonly broadcastText = async (text: string): Promise<DeliveryReport> => {
     const report: DeliveryReport = {
-      attempted: targets.length,
+      attempted: this.config.accounts.length,
       succeeded: 0,
       failed: 0,
       failedAccounts: [],
     };
-    for (const p of targets) {
-      if (isCurrent && !isCurrent()) break;
+    for (const accountId of this.config.accounts) {
+      // Once started, finish this broadcast even if the session stops or changes.
       try {
-        await this.sendTo(p, text);
-        report.succeeded += 1;
-      } catch (err) {
-        report.failed += 1;
-        report.failedAccounts.push(p.accountId);
+        await this.opts.transport.sendText(this.broadcastContext(accountId), text);
+        report.succeeded++;
+      } catch {
+        report.failed++;
+        report.failedAccounts.push(accountId);
         this.opts.logger.warn(
-          { err, project: this.projectId, account: p.accountId, sender: p.senderId },
-          "broadcast to participant failed",
+          { project: this.projectId, account: accountId },
+          "project broadcast delivery failed",
         );
       }
     }
     return report;
   };
 
-  /** ③ Notify every other authorized participant that a sender spoke. */
   private async notifyOthers(msg: InboundMessage): Promise<void> {
-    const originKey = `${msg.accountId}:${msg.senderId}`;
     const name = this.opts.resolveSenderName?.(msg.accountId) ?? msg.accountId;
     const text = msg.text?.trim() ? msg.text.trim() : attachmentPlaceholder(msg);
-    const notify = `${name}: ${text}`;
-    for (const p of this.broadcastTargets()) {
-      if (`${p.accountId}:${p.senderId}` === originKey) continue;
-      await this.sendTo(p, notify).catch((err: unknown) =>
-        this.opts.logger.warn(
-          { err, account: p.accountId, sender: p.senderId },
-          "notify other participant failed",
-        ),
-      );
+    for (const accountId of this.config.accounts) {
+      if (accountId === msg.accountId) continue;
+      await this.opts.transport
+        .sendText(this.broadcastContext(accountId), `${name}: ${text}`)
+        .catch(() =>
+          this.opts.logger.warn(
+            { project: this.projectId, account: accountId },
+            "notify other project user failed",
+          ),
+        );
     }
   }
 

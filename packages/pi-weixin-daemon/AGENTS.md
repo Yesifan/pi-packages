@@ -12,17 +12,18 @@ Weixin iLink → account monitor → AccountManager → ProjectManager
 ```
 
 - 入站消息按 `accountId → projectId` 路由。
-- `ProjectController` 负责项目生命周期、参与者注册、互通和广播。
+- `ProjectController` 负责项目生命周期、绑定账号用户范围、互通和广播。
 - `SessionController` 负责单会话状态机、busy/abort、命令、超时及错误回复。
-- `src/pi/` 是唯一允许直接依赖 Pi SDK 的边界；项目和会话层只使用本项目定义的领域接口。
-- 文本回复可广播给同项目参与者；文件发送和 Extension UI 始终回到当前 `TurnContext`。
+- `src/pi/` 是唯一允许直接依赖 Pi SDK 的边界；项目和会话层经 `SessionRuntimePort → PiSdkHost` 操作运行会话。PiSdkHost 内部工厂、扩展回调及 UI/事件适配可调用 SDK；环境诊断可用独立 `sdk-info` 入口，不操纵活动会话。
+- 微信及独立回合的成功最终文本广播给项目绑定账号的 `account.userId`；CLI 回合按 reply 投递，交互答复按 `TurnOrigin` 区分 CLI/微信。微信来源的文件、错误、进度和 UI 默认定向到来源账号用户；文件工具另支持项目 userId 目标，无微信来源时默认向项目用户发送。UI 回答者与询问对象保持一致。
+- 所有微信出口使用收件用户及 `(accountId, userId)` 精确 token；缺用户/token/transport 时跳过并记录。入站 token 按实际 sender 保存，不借用其他用户的 token；不新增普通入站 sender 过滤。
 - 无 HTTP server、数据库或消息队列，控制面使用 Unix Domain Socket RPC。
 
 ## 主要目录
 
 - `src/accounts/`：微信账号 transport 的注册与生命周期。
 - `src/weixin/`：iLink API、长轮询、消息归一化、媒体及发送实现。
-- `src/projects/`：账号到项目的路由、项目控制器、配置和参与者注册表。
+- `src/projects/`：账号到项目的路由、项目控制器、配置和绑定账号用户范围。
 - `src/sessions/`：共享 Pi 会话状态机、prompt 构造和回复结果处理。
 - `src/pi/`：Pi SDK host、事件转换、Extension/UI 适配。
 - `src/daemon.ts`：运行时组合根；`src/cli/`：`pi-wx` CLI 和 RPC 客户端。
