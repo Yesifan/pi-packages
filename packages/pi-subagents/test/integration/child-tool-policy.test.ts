@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -380,18 +380,42 @@ describe("child role tool policy with the real SDK", () => {
     expect(saved).not.toHaveProperty("disallowedTools");
   });
 
-  it("rejects header-only restoration rather than silently choosing a default model", async () => {
+  it("restores header-only history with SDK defaults without replacing its identity", async () => {
     const h = await harness();
-    const restored = await h.factory.openSessionManager({
+    const settingsFile = path.join(h.cwd, ".pi", "settings.json");
+    await writeFile(
+      settingsFile,
+      JSON.stringify({
+        ...JSON.parse(await readFile(settingsFile, "utf8")),
+        defaultProvider: "policy-test",
+        defaultModel: "policy-model",
+        defaultThinkingLevel: "low",
+      }),
+    );
+    const identity = {
       sessionId: h.manager.getSessionId(),
       sessionFile: h.manager.getSessionFile()!,
-    });
+    };
+    const before = await readFile(identity.sessionFile, "utf8");
+    expect(h.manager.getEntries()).toEqual([]);
     await expect(
-      h.open(resolveAgentDefinition(h.registry), restored, false, true),
-    ).rejects.toMatchObject({
-      code: "SESSION_HISTORY_UNAVAILABLE",
-      message: "Child history has no restorable conversation context",
-    });
+      h.factory.openSessionManager({ ...identity, sessionId: "wrong-identity" }),
+    ).rejects.toMatchObject({ code: "SESSION_HISTORY_UNAVAILABLE" });
+    expect(await readFile(identity.sessionFile, "utf8")).toBe(before);
+
+    const restored = await h.factory.openSessionManager(identity);
+    const role = resolveAgentDefinition(h.registry);
+    const { child } = await h.open(role, restored, false, true);
+    expect(child.session.model?.provider).toBe("policy-test");
+    expect(child.session.model?.id).toBe("policy-model");
+    expect(child.actualThinking).toBe("low");
+    expect(child.session.sessionManager).toBe(restored);
+    expect(restored.getSessionId()).toBe(identity.sessionId);
+    expect(restored.getSessionFile()).toBe(identity.sessionFile);
+    expect(restored.getHeader()?.cwd).toBe(h.cwd);
+    expect(child.session.messages).toEqual([]);
+    expect(child.session.systemPrompt).toContain(role.prompt);
+    expectExcluded(child, ["subagent", "ask_subagent"]);
   });
 
   it("independently excludes ask_subagent on a delegation-capable child", async () => {

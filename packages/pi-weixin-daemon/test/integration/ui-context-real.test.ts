@@ -52,6 +52,13 @@ describe("real SDK extension UI context", () => {
             const unsubscribe = ctx.ui.onTerminalInput(() => undefined);
             unsubscribe();
             ctx.ui.setStatus("test", "ready");
+            ctx.ui.setWorkingIndicator({});
+            ctx.ui.setWidget("text", ["ready"]);
+            ctx.ui.setWidget("component", () => ({ render: () => [], invalidate() {} }));
+            ctx.ui.setFooter(undefined);
+            ctx.ui.setHeader(undefined);
+            ctx.ui.setEditorComponent(undefined);
+            expect(ctx.ui.getEditorComponent()).toBeUndefined();
             if (ctx.ui.getEditorText() !== "" || !ctx.ui.theme) throw new Error("invalid UI");
             ctx.ui.notify("UI context works", "info");
             starts.push({

@@ -16,7 +16,7 @@ Restart Pi or run `/reload` after installation.
 
 ### `subagent`
 
-Starts a background logical subagent and returns as soon as Pi accepts its prompt. Independent `subagent` calls emitted in the same assistant turn run in parallel, subject to the root project's shared `max_live_agents` limit.
+Submits a background logical subagent and returns `status: "submitted"` once local preparation is persisted and `session.prompt()` has been called with background completion handling attached. This does not guarantee that the SDK has started a run or called a model. Independent `subagent` calls emitted in the same assistant turn run in parallel, subject to the root project's shared `max_live_agents` limit.
 
 ```json
 {
@@ -42,7 +42,7 @@ Starts another run on a directly owned idle logical subagent. Prefer reusing one
 { "name": "reviewer", "prompt": "Now check the tests." }
 ```
 
-A normal ask against a busy subagent immediately returns `SUBAGENT_BUSY`; requests are not queued. `ask_subagent` is not a status or result-polling tool.
+The subagent remains busy until captured prompt/steer calls and session cleanup finish, even if model streaming has ended. A normal ask against a busy subagent immediately returns `SUBAGENT_BUSY`; requests are not queued. `ask_subagent` is not a status or result-polling tool.
 
 To steer an actively streaming run without creating a new run:
 
@@ -50,7 +50,7 @@ To steer an actively streaming run without creating a new run:
 { "name": "reviewer", "prompt": "Focus on the authorization boundary.", "isSteer": true }
 ```
 
-Steering can adjust the direction of an actively streaming run or add new context. Both `subagent` and `ask_subagent` tool results remind the caller of this option. Steering returns the same name with `status: "steered"`. It does not create a separate report. Idle, released, finalizing, or waiting-for-children agents are not steerable.
+Steering can adjust the direction of an actively streaming run or add new context. Both `subagent` and `ask_subagent` tool results remind the caller of this option. Public `session.steer()` returns `queued` or `handled`: `status: "steered"` means queued, not guaranteed consumption. Input hooks may outlive the original run; no new run is started to consume late steering. Handled input does not enqueue steering or abort the original task. Skills and prompt templates expand according to the SDK, and extension commands are rejected. Cancellation before the call prevents submission; cancellation during a hook cannot guarantee zero enqueueing, and already queued input cannot be retracted. It does not create a separate report. Idle, released, finalizing, or waiting-for-children agents are not steerable.
 
 See [the delegation examples](examples/delegation.md) for parallel tasks, exact-name follow-ups, and active steering.
 
@@ -77,7 +77,7 @@ Report concrete evidence and file locations. Do not modify files.
 
 Roles accept either `tools` (SDK tool selection) or `disallowedTools` (exclusion patterns), never both—even when one is empty. Both are arrays of non-empty strings; duplicate entries are removed. `tools: []` allows no tools, while `disallowedTools: []` adds no restrictions. Omitting both preserves the normal target session's tools.
 
-Tool policy follows Pi SDK 1.1.0 semantics:
+Tool policy follows Pi SDK 1.4.0 semantics:
 
 - A non-empty `tools` list selects built-in and extension tools, but **is not a strict allowlist across all tools**: if it contains no tool names starting with `mcp__`, already registered MCP tools remain available. Including a name starting with `mcp__` filters MCP tools to those selections; naming only a resource helper such as `list_mcp_resources` does not trigger this filtering; `tools: []` excludes all tools, including MCP.
 - `tools` selections are passed directly to the SDK, including its supported patterns. This package does not prevalidate tool existence: unknown or misspelled selections match no tools instead of failing child creation with `TOOL_UNAVAILABLE`. Explicit MCP selections can match tools registered later; actual calls to unavailable tools still fail through the SDK. Check role spelling when expected tools are missing.
@@ -104,7 +104,7 @@ The selected policy is included in the saved role snapshot and content hash. Lat
 
 ## Codemode and MCP
 
-Children load the SDK 1.1.0 built-in `codemode`, `tool_search`, and `mcp` extensions using their own target cwd, agentDir, and settings. No adapter or duplicate MCP configuration is needed. Parent tool instances, connections, and temporary CLI overrides are not copied.
+Children load the SDK 1.4.0 built-in `codemode`, `tool_search`, and `mcp` extensions using their own target cwd, agentDir, and settings. No adapter or duplicate MCP configuration is needed. Parent tool instances, connections, and temporary CLI overrides are not copied.
 
 Loading does not unconditionally activate tools. For codemode without MCP, set `"defaultTools": ["+codemode"]` in Pi settings. Enabled MCP servers can activate codemode or tool search according to SDK configuration. MCP configuration is read from `<agentDir>/mcp.json` and trusted project `.pi/mcp.json`.
 
@@ -156,21 +156,23 @@ Default native discovery, picker, and continue do not select these new histories
 
 ## Background lifecycle
 
+Local preparation, including `running`, is persisted before calling the SDK. Here `running` means this package has assumed background-task responsibility, not that the SDK is streaming. A preparation failure does not call the SDK; after submission, failures retain identity/history and use background cleanup. Handled ordinary input remains submitted, without inventing a started run or reusing an old answer. Cancelling the originating tool does not retract submitted background work.
+
 - Final responses are reported automatically to the direct parent as Pi custom messages (`customType: "subagent-report"`). Older histories may contain `bykwp-subagent-report` messages; the extension does not rewrite them.
 - Tool results list the caller's direct subagents as running, done, or interrupted, alongside current shared live usage. `SUBAGENT_BUSY` and `LIVE_AGENT_LIMIT` results include the same snapshot. Lists include every direct subagent and its saved creation-time role (`agentType`); names are shortened when long. Role-file changes do not change existing subagents' displayed roles.
 - Automatic reports include the validated absolute JSONL path on a `Complete conversation: ...` line before the result, without a separate `Full session` heading. Missing, unsafe, malformed, or identity-mismatched history is explicitly marked unavailable; reports do not expand the file contents. This is persisted conversation history, not a complete system-prompt/tool-definition snapshot.
 - Automatic reports show the direct parent's subagent statuses (including the reporting agent as done) and remind the direct parent that it can use `ask_subagent` with any idle subagent listed above for related follow-up work. While relevant reports are pending, the caller is instructed to provide only a brief progress update and defer its final answer.
 - An idle parent waiting for children remains loaded; it is not cold-released.
 - Stopping only the root model response does not stop accepted background work.
-- Quitting, replacing, forking, or reloading the root session aborts active descendants, cancels proxied UI, and disposes child SDK sessions.
+- Quitting, replacing, forking, or reloading the root session uses public `abort()` for active descendants, cancels proxied UI, and disposes child SDK sessions before releasing the writer lock. Non-cooperative input hooks can delay cleanup and lock release.
 - Completed logical identities and histories remain available when the exact persistent root session is resumed.
 - Interrupted work is not automatically replayed.
 
 Cross-restart recovery requires the exact file-backed root identity (Pi ID plus normalized absolute file path). A new, forked, cloned, or imported root cannot take ownership of another root's children. Recovery loads identities and saved roles, marks unfinished accepted work interrupted, and clears prepared opening state to idle; it does not mount children, replay tasks, or redeliver old reports. Completed results that were not delivered before shutdown remain available only in child history. Deleting a project's directory does not delete global metadata/history, but missing or moved cwd values cause follow-up asks to fail rather than relocate automatically.
 
-Ordinary asks derive cwd, model selection, thinking, and conversation from the child's validated Pi history; current parent settings never replace the historical selection. Header-only history, missing historical selection/thinking, unavailable model/authentication, and SDK fallback produce explicit errors. Target tools/resources/configuration are rebuilt, while the saved role remains unchanged. Reports carry persisted conversation paths, not complete system-prompt or tool-definition snapshots.
+Ordinary asks validate the child's history identity and cwd, then let the SDK restore model selection, thinking, and conversation without parent/settings overrides. Missing historical selections or unavailable models/authentication follow SDK defaults, fallback, and thinking clamp. Public fallback diagnostics are shown when available; preserving the original model or successful fallback is not guaranteed. No available model or later execution failures still fail normally. Target tools/resources/configuration are rebuilt, while the saved role remains unchanged. Reports carry persisted conversation paths, not complete system-prompt or tool-definition snapshots.
 
-**BREAKING upgrade:** `ask_subagent.id` and public agent/run IDs are removed. Existing agents in the old project-local store or legacy agentDir store are not loaded, migrated, or used as a fallback; they cannot be asked after this upgrade. Old files are left untouched. Names may be reused in the new empty registry, creating independent histories.
+**Earlier Spec 0002 BREAKING storage change:** `ask_subagent.id` and public agent/run IDs were removed. Agents in the old project-local store or legacy agentDir store are not loaded, migrated, or used as a fallback; they cannot be asked under the Spec 0002 storage layout. Old files remain untouched; names from those legacy stores may be reused to create independent histories. The Pi 1.4 upgrade does not clear current-schema identities or histories and introduces no new storage migration.
 
 ## UI support
 
@@ -200,6 +202,8 @@ Global subagent metadata and Pi JSONL histories contain potentially sensitive pr
 Children run in the same Node.js process. This package keeps its own state session-scoped, but cannot isolate third-party extensions that use process-global singletons, mutate environment variables, or terminate the process.
 
 ## Development
+
+The development baseline is Pi SDK 1.4.0. See [ADR-0004](docs/adr/0004-official-sdk-lifecycle.md) for the submitted, steering, restoration, and cleanup decisions.
 
 ```bash
 pnpm install

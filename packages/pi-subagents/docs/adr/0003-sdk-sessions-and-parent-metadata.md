@@ -5,6 +5,8 @@
 - 替代：[ADR-0001](0001-project-local-subagent-storage.md) 的 D1/D2/D4/D5 中运行数据位置、项目 runtime 初始化、完整树单文件 scope 与相对 history 路径决定。保留其背景、理由与历史实现记录，不覆盖旧理由。
 - 不改变：ADR-0001 D3 的 caller-local 项目配置、root-only limits、trust 及单一事实来源原则；[ADR-0002](0002-native-widget-for-background-progress.md) 的原生进度 widget。
 
+后续决定：[ADR-0004](0004-official-sdk-lifecycle.md) 替代本 ADR §3 的 preflight 接受及旧严格模型恢复约定；以下保留当时理由与验收，非 Pi 1.4.0 升级验证记录。
+
 ## 背景
 
 ADR-0001 为项目生命周期一致而把整树 metadata、runs、reports 和 JSONL 放入 root 项目。该选择带来项目写入/Git ignore 约束，也维护了一套 Pi 历史已有信息的副本。新需求选择 SDK 原生 JSONL、name 接口和最小恢复信息，接受 BREAKING 与较小恢复承诺；新 history 不应成为普通 discovery/picker/continue 候选，但没有批准禁止独立打开或迁移存量文件。
@@ -55,4 +57,4 @@ preflight 普通请求仅 `started` 接受；steering 仅 `queued` 接受。`han
 
 ## 实施与验证
 
-当前工作区已实施本 ADR 与 Spec 0002 的 runtime 重写及私有 history 目录，不再使用旧 ID/project-local store。最新 typecheck、21 个文件 / 245 项测试、build 与 pack 成功，普通/显式 discovery、存量 exact-path 恢复和权限边界由隔离的真实 SDK API 测试覆盖。此前 runtime 独立最终复审确认 5 项问题已解决，不以旧复审冒充最新目录修订已复审；该独立审查由主代理记录。实际交互 TUI/print 手动验收未运行，用户接受延期并关闭 Spec 0002，不等于全部规格/真实 CLI 验收完成。当前契约以 Spec 0002 为准，旧 V1 章节仅为历史资料。测试使用临时 `PI_CODING_AGENT_DIR`；model/thinking 恢复、preflight disposition、SDK prompt 取消、报告拒绝和处理顺序已纳入自动验证/复审；discovery 与 UI 等实际交互验收仍需手测。root 无 processing receipt、已 queued 不可撤回、不合作 hook 保留关闭锁、路径检查非 sandbox 的边界按 Spec 0002 保留。[Spec 0003](../specs/0003-terminal-exit-reporting.md) 的异常退出通知扩展未开始，不在本次实施声明中。
+当前工作区已实施本 ADR 与 Spec 0002 的 runtime 重写及私有 history 目录，不再使用旧 ID/project-local store。最新 typecheck、21 个文件 / 245 项测试、build 与 pack 成功，普通/显式 discovery、存量 exact-path 恢复和权限边界由隔离的真实 SDK API 测试覆盖。此前 runtime 独立最终复审确认 5 项问题已解决，不以旧复审冒充最新目录修订已复审；该独立审查由主代理记录。实际交互 TUI/print 手动验收未运行，用户接受延期并关闭 Spec 0002，不等于全部规格/真实 CLI 验收完成。当前契约以 Spec 0002 为准，旧 V1 章节仅为历史资料。测试使用临时 `PI_CODING_AGENT_DIR`；model/thinking 恢复、preflight disposition、SDK prompt 取消、报告拒绝和处理顺序已纳入自动验证/复审；discovery 与 UI 等实际交互验收仍需手测。root 无 processing receipt、已 queued 不可撤回、不合作 hook 保留关闭锁、路径检查非 sandbox 的边界按 Spec 0002 保留。[Spec 0003](https://github.com/Yesifan/pi-packages/blob/main/packages/pi-subagents/docs/specs/0003-terminal-exit-reporting.md) 的异常退出通知扩展未开始，不在本次实施声明中。

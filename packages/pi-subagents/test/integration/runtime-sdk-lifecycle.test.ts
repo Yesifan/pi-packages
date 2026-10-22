@@ -1,4 +1,4 @@
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
@@ -77,7 +77,9 @@ export default function(pi) {
       return stream;
     }
   });
+  pi.registerCommand("fixture-command", { description: "fixture", handler: async () => {} });
   pi.on("input", async (event) => {
+    if (event.text === "consume") return { action: "handled" };
     const pause = globalThis[${JSON.stringify(KEY)}].inputPause;
     if (pause && event.text === "late steer") { pause.reached.resolve(); await pause.resume.promise; }
     return { action: "continue" };
@@ -145,50 +147,158 @@ export default function(pi) {
 }
 
 describe("actual SDK runtime lifecycle and report processing", () => {
-  it("throws out of stale preflight after preaccept cancellation, preventing an SDK provider call", async () => {
+  it("uses public steering expansion, handled and command rejection without another execution", async () => {
+    const h = await realHarness();
+    const prompts = path.join(h.cwd, ".pi", "prompts");
+    const skills = path.join(h.cwd, ".pi", "skills", "fixture");
+    await mkdir(prompts, { recursive: true });
+    await mkdir(skills, { recursive: true });
+    await writeFile(path.join(prompts, "focus.md"), "Expanded focus: $1");
+    await writeFile(
+      path.join(skills, "SKILL.md"),
+      "---\nname: fixture\ndescription: fixture skill\n---\nSkill instructions",
+    );
+    await h.runtime.createSubagent(h.caller, { name: "worker", prompt: "start" }, h.ctx);
+    const first = await h.waitCall(0);
+    const execution = h.agent("worker").currentExecution!;
+    const session = execution.session!;
+    await expect(
+      h.runtime.askSubagent(h.caller, { name: "worker", prompt: "consume", isSteer: true }, h.ctx),
+    ).rejects.toMatchObject({ code: "PROMPT_HANDLED" });
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      h.runtime.askSubagent(
+        h.caller,
+        { name: "worker", prompt: "canceled", isSteer: true },
+        h.ctx,
+        controller.signal,
+      ),
+    ).rejects.toBeDefined();
+    await expect(
+      h.runtime.askSubagent(
+        h.caller,
+        { name: "worker", prompt: "/fixture-command", isSteer: true },
+        h.ctx,
+      ),
+    ).rejects.toThrow();
+    expect(session.getSteeringMessages()).toEqual([]);
+    await h.runtime.askSubagent(
+      h.caller,
+      { name: "worker", prompt: "/focus auth", isSteer: true },
+      h.ctx,
+    );
+    await h.runtime.askSubagent(
+      h.caller,
+      { name: "worker", prompt: "/skill:fixture details", isSteer: true },
+      h.ctx,
+    );
+    expect(session.getSteeringMessages()[0]).toBe("Expanded focus: auth");
+    expect(session.getSteeringMessages()[1]).toContain("Skill instructions");
+    expect(h.agent("worker").currentExecution).toBe(execution);
+    first.finish("preliminary");
+    (await h.waitCall(1)).finish("template response");
+    (await h.waitCall(2)).finish("steered final");
+    await h.waitReport(0);
+    expect(h.reports).toHaveLength(1);
+  });
+
+  it("holds the writer lock and mount until a steering hook exits during shutdown", async () => {
+    const h = await realHarness();
+    await h.runtime.createSubagent(h.caller, { name: "worker", prompt: "start" }, h.ctx);
+    await h.waitCall(0);
+    const pause = { reached: deferred(), resume: deferred() };
+    h.control.inputPause = pause;
+    const steering = h.runtime.askSubagent(
+      h.caller,
+      { name: "worker", prompt: "late steer", isSteer: true },
+      h.ctx,
+    );
+    await pause.reached.promise;
+    let stopped = false;
+    const shutdown = h.runtime.shutdown().then(() => {
+      stopped = true;
+    });
+    await h.control.prompts[0];
+    expect(stopped).toBe(false);
+    expect(h.agent("worker").currentExecution?.session).toBeDefined();
+    const contender = new PersistentSubagentStore(h.agentDir, h.scope.identity);
+    try {
+      await expect(contender.open()).rejects.toMatchObject({ code: "ROOT_SCOPE_IN_USE" });
+    } finally {
+      await contender.close();
+      pause.resume.resolve();
+    }
+    await expect(steering).resolves.toMatchObject({ status: "steered" });
+    await shutdown;
+    expect(h.scope.executions.size).toBe(0);
+    expect(h.reports).toHaveLength(0);
+    const next = new PersistentSubagentStore(h.agentDir, h.scope.identity);
+    await next.open();
+    await next.close();
+  });
+
+  it("aborts a submitted startup and joins its hook before releasing the writer lock", async () => {
+    const h = await realHarness();
+    const pause = { reached: deferred(), resume: deferred() };
+    h.control.pause = pause;
+    await h.runtime.createSubagent(h.caller, { name: "worker", prompt: "start" }, h.ctx);
+    await pause.reached.promise;
+    let stopped = false;
+    const shutdown = h.runtime.shutdown().then(() => {
+      stopped = true;
+    });
+    const contender = new PersistentSubagentStore(h.agentDir, h.scope.identity);
+    try {
+      await expect(contender.open()).rejects.toMatchObject({ code: "ROOT_SCOPE_IN_USE" });
+      expect(stopped).toBe(false);
+    } finally {
+      await contender.close();
+      pause.resume.resolve();
+    }
+    await shutdown;
+    expect(h.control.calls).toHaveLength(0);
+    expect(h.agent("worker").state).toBe("interrupted");
+    expect(h.agent("worker").currentExecution).toBeUndefined();
+  });
+
+  it("does not retract a submitted task when its tool is canceled during startup", async () => {
     const h = await realHarness();
     const pause = { reached: deferred(), resume: deferred() };
     h.control.pause = pause;
     const controller = new AbortController();
-    const pending = h.runtime.createSubagent(
+    const result = await h.runtime.createSubagent(
       h.caller,
       { name: "prepared", prompt: "task" },
       h.ctx,
       controller.signal,
     );
-    const outcome = expect(pending).rejects.toMatchObject({ code: "ABORTED" });
+    expect(result.status).toBe("submitted");
     await pause.reached.promise;
     controller.abort();
-    await outcome;
     pause.resume.resolve();
     h.control.pause = undefined;
-    await Promise.allSettled(h.control.prompts);
-    expect(h.control.calls).toHaveLength(0);
-    expect(h.scope.children.has("prepared")).toBe(false);
-    expect(h.scope.executions.size).toBe(0);
-    expect(h.reports).toHaveLength(0);
+    (await h.waitCall(0)).finish("submitted result");
+    await h.waitReport(0);
+    expect(h.reports[0]?.report.result).toBe("submitted result");
   });
 
-  it("stops SDK start on failed durable acceptance, retaining identity and reporting failure", async () => {
+  it("rejects failed durable preparation before calling the SDK and releases reservations", async () => {
     const h = await realHarness();
-    vi.spyOn(h.store, "setChildSync").mockImplementation(() => {
-      throw new SubagentError("STORE_ERROR", "acceptance write failed");
+    const save = h.store.setChild.bind(h.store);
+    vi.spyOn(h.store, "setChild").mockImplementation((...args) => {
+      if (args[3].state === "running")
+        return Promise.reject(new SubagentError("STORE_ERROR", "preparation write failed"));
+      return save(...args);
     });
     await expect(
       h.runtime.createSubagent(h.caller, { name: "worker", prompt: "must not start" }, h.ctx),
     ).rejects.toMatchObject({ code: "STORE_ERROR" });
-    await h.waitReport(0);
+    expect(h.control.prompts).toHaveLength(0);
     expect(h.control.calls).toHaveLength(0);
-    expect(h.agent("worker").identity).toBeDefined();
-    expect(h.agent("worker").state).toBe("idle");
-    expect(h.reports[0]?.report).toMatchObject({
-      outcome: "failed",
-      result: "",
-      error: { code: "STORE_ERROR" },
-    });
-    expect(await readFile(h.agent("worker").identity!.sessionFile, "utf8")).not.toContain(
-      "must not start",
-    );
+    expect(h.scope.children.has("worker")).toBe(false);
+    expect(h.scope.executions.size).toBe(0);
+    expect(h.reports).toHaveLength(0);
   });
 
   it("keeps the parent alive until a queued report has a persisted Pi receipt and later settled processing", async () => {
@@ -285,11 +395,12 @@ describe("actual SDK runtime lifecycle and report processing", () => {
     expect(h.reports).toHaveLength(1);
   });
 
-  it("throws from a late E1 steering hook without starting the disposed session or touching E2", async () => {
+  it("keeps E1 busy until late steering settles, without starting a second SDK run", async () => {
     const h = await realHarness();
     await h.runtime.createSubagent(h.caller, { name: "worker", prompt: "first" }, h.ctx);
     const first = await h.waitCall(0);
-    const oldAgentPrompt = vi.spyOn(h.agent("worker").currentExecution!.session!.agent, "prompt");
+    const session = h.agent("worker").currentExecution!.session!;
+    const oldAgentPrompt = vi.spyOn(session.agent, "prompt");
     const pause = { reached: deferred(), resume: deferred() };
     h.control.inputPause = pause;
     const steering = h.runtime.askSubagent(
@@ -297,24 +408,23 @@ describe("actual SDK runtime lifecycle and report processing", () => {
       { name: "worker", prompt: "late steer", isSteer: true },
       h.ctx,
     );
-    const outcome = expect(steering).rejects.toMatchObject({ code: "ROOT_CLOSING" });
     await pause.reached.promise;
     first.finish("first result");
+    await h.control.prompts[0];
+    await expect(
+      h.runtime.askSubagent(h.caller, { name: "worker", prompt: "second" }, h.ctx),
+    ).rejects.toMatchObject({ code: "SUBAGENT_BUSY" });
+    expect(h.reports).toHaveLength(0);
+    pause.resume.resolve();
+    await expect(steering).resolves.toMatchObject({ status: "steered" });
     await h.waitReport(0);
+    expect(oldAgentPrompt).not.toHaveBeenCalled();
+    expect(h.control.calls).toHaveLength(1);
     await h.runtime.askSubagent(h.caller, { name: "worker", prompt: "second" }, h.ctx);
     const second = await h.waitCall(1);
-    const execution = h.agent("worker").currentExecution;
-    pause.resume.resolve();
-    await outcome;
-    await Promise.resolve();
-    for (const rogue of h.control.calls.slice(2)) rogue.finish("unexpected stale run");
-    expect(oldAgentPrompt).not.toHaveBeenCalled();
-    expect(h.control.calls).toHaveLength(2);
-    expect(h.agent("worker").currentExecution).toBe(execution);
-    expect(execution?.session?.isStreaming).toBe(true);
+    expect(h.agent("worker").currentExecution!.session!.getSteeringMessages()).toEqual([]);
     second.finish("second result");
     await h.waitReport(1);
-    expect(h.reports[1]?.report.result).toBe("second result");
   });
 
   it.each([false, true])(
@@ -343,9 +453,7 @@ describe("actual SDK runtime lifecycle and report processing", () => {
         h.ctx,
         controller.signal,
       );
-      const outcome = streaming
-        ? expect(steering).resolves.toMatchObject({ status: "steered" })
-        : expect(steering).rejects.toMatchObject({ code: "ABORTED" });
+      const outcome = expect(steering).resolves.toMatchObject({ status: "steered" });
       await pause.reached.promise;
       if (!streaming) {
         parentCall.finish("preliminary");
@@ -354,15 +462,14 @@ describe("actual SDK runtime lifecycle and report processing", () => {
       controller.abort();
       pause.resume.resolve();
       await outcome;
-      await h.control.prompts.at(-1)?.catch(() => undefined);
       expect(h.control.calls).toHaveLength(2);
       expect(h.agent("parent").currentExecution).toBe(execution);
       expect(execution.failure).toBeUndefined();
-      expect(execution.session!.getSteeringMessages()).toEqual(streaming ? ["late steer"] : []);
+      expect(execution.session!.getSteeringMessages()).toEqual(["late steer"]);
     },
   );
 
-  it("stops unexpected started steering before launching another SDK run", async () => {
+  it("queues late steering without launching another SDK run", async () => {
     const h = await realHarness();
     await h.runtime.createSubagent(
       h.caller,
@@ -383,18 +490,17 @@ describe("actual SDK runtime lifecycle and report processing", () => {
       { name: "parent", prompt: "late steer", isSteer: true },
       h.ctx,
     );
-    const outcome = expect(steering).rejects.toMatchObject({ code: "UNEXPECTED_PREFLIGHT" });
+    const outcome = expect(steering).resolves.toMatchObject({ status: "steered" });
     await pause.reached.promise;
     parentCall.finish("preliminary");
     await h.control.prompts[0];
     pause.resume.resolve();
     await outcome;
-    await h.waitReport(0);
     expect(h.control.calls).toHaveLength(2);
-    expect(h.reports[0]?.report).toMatchObject({
-      outcome: "failed",
-      error: { code: "UNEXPECTED_PREFLIGHT" },
-    });
+    expect(h.reports).toHaveLength(0);
+    expect(h.agent("parent").currentExecution!.session!.getSteeringMessages()).toEqual([
+      "late steer",
+    ]);
   });
 
   it("joins a suspended opening before releasing the root writer lock on shutdown", async () => {

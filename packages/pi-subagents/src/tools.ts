@@ -56,7 +56,7 @@ const askParameters = Type.Object(
       Type.Boolean({
         default: false,
         description:
-          "When true, steer the currently executing run instead of creating a new run. The target must be actively streaming.",
+          "When true, steer the currently executing run instead of creating a new run. The target must be actively streaming. Pi expands skills/templates and rejects extension commands; queued does not guarantee consumption.",
       }),
     ),
   },
@@ -118,7 +118,7 @@ export function createDelegationExtension(
               content: [
                 {
                   type: "text",
-                  text: `Started background subagent ${result.name} (role: ${result.agent_type}).`,
+                  text: `Submitted task to background subagent ${result.name} (role: ${result.agent_type}).`,
                 },
                 { type: "text", text: completionGuidance() },
                 ...statusContent(result.delegation_status),
@@ -150,7 +150,7 @@ export function createDelegationExtension(
                   text:
                     result.status === "steered"
                       ? `Steered background subagent ${result.name} (role: ${result.agent_type}).`
-                      : `Started background subagent ${result.name} (role: ${result.agent_type}).`,
+                      : `Submitted task to background subagent ${result.name} (role: ${result.agent_type}).`,
                 },
                 { type: "text", text: completionGuidance() },
                 ...statusContent(result.delegation_status),

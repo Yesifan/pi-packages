@@ -19,11 +19,15 @@
 
 ## 待实施的异常退出通知
 
-- [Spec 0003：异常退出也向主代理报告](specs/0003-terminal-exit-reporting.md) — 未开始实现；包含[现场证据](specs/evidence/0003-terminal-exit-2026-10-09.md)。不因本轮目录修订声称异常退出通知或诊断完善已完成。
+- [Spec 0003：异常退出也向主代理报告](https://github.com/Yesifan/pi-packages/blob/main/packages/pi-subagents/docs/specs/0003-terminal-exit-reporting.md) — 未开始实现；包含[现场证据](https://github.com/Yesifan/pi-packages/blob/main/packages/pi-subagents/docs/specs/evidence/0003-terminal-exit-2026-10-09.md)。不因本轮目录修订声称异常退出通知或诊断完善已完成。
 
 ## 原生 Codemode 与 MCP
 
 - [Spec 0004](specs/0004-sdk-builtin-tools-and-mcp.md) — 按 target session 配置加载 SDK built-in extensions，保留禁用/替换、MCP exposure 与角色工具策略；实施与验证状态见规格。
+
+## Pi 1.4.0 升级
+
+- [全仓升级规格](https://github.com/Yesifan/pi-packages/blob/main/docs/specs/pi-1.4-upgrade.md) — completed（2026-10-22）；[ADR-0004](adr/0004-official-sdk-lifecycle.md) 记录 submitted、官方 services/恢复 fallback/steering 与串行清理决定，替代旧 preflight/严格恢复要求。历史规格和验收保留，本轮离线回归、构建、pack 与独立审查已完成，交互 TUI/print 手测未执行；详见全仓规格验收摘要。
 
 ## 历史实现设计
 

@@ -49,7 +49,7 @@ function fixture() {
     agent,
     parent: scope,
     phase: "executing",
-    session: { isStreaming: true, prompt } as unknown as AgentSession,
+    session: { isStreaming: true, steer: prompt } as unknown as AgentSession,
     pendingChildren: new Set(),
     pendingReports: new Set(),
     finalizing: false,
@@ -85,15 +85,9 @@ describe("steering rejection diagnostics", () => {
       "acceptedResult",
       vi.fn(() => result),
     );
-    value.prompt.mockImplementation((_prompt, options) => {
-      options.preflightResult("queued");
-      return Promise.resolve();
-    });
+    value.prompt.mockResolvedValue("queued");
     await expect(value.steer()).resolves.toBe(result);
-    expect(value.prompt).toHaveBeenCalledWith(
-      "Focus",
-      expect.objectContaining({ streamingBehavior: "steer", expandPromptTemplates: false }),
-    );
+    expect(value.prompt).toHaveBeenCalledWith("Focus");
     expect(value.agent.currentExecution).toBe(value.execution);
     expect(value.execution.pendingChildren.size).toBe(1);
   });

@@ -76,6 +76,7 @@ export class FakeChild {
   readonly completion = deferred();
   readonly disposed = deferred();
   readonly customMessages: Custom[] = [];
+  readonly steerCalls: string[] = [];
   readonly promptCalls: Array<{ text: string; options: PromptOptions }> = [];
   private readonly customWaiters = new Map<number, ReturnType<typeof deferred<Custom>>>();
   listener?: (event: AgentSessionEvent) => void;
@@ -126,15 +127,17 @@ export class FakeChild {
           child.streaming = true;
           child.idle = false;
         }
-        try {
-          options.preflightResult?.(disposition);
-          child.afterPreflight?.();
-        } catch (error) {
-          // SDK prompt is async: a thrown preflight rejects its completion promise.
-          return Promise.reject(error);
-        }
+        child.afterPreflight?.();
         if (options.streamingBehavior || disposition === "handled") return Promise.resolve();
         return child.completion.promise;
+      },
+      steer: async (text: string) => {
+        child.steerCalls.push(text);
+        if (child.promptError) throw child.promptError;
+        const disposition = child.nextDisposition ?? "queued";
+        child.nextDisposition = undefined;
+        child.afterPreflight?.();
+        return disposition;
       },
       subscribe: (listener: (event: AgentSessionEvent) => void) => {
         child.listener = listener;
