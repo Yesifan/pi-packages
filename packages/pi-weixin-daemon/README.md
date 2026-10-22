@@ -29,9 +29,10 @@
 - **一个 account 只属于一个 project**：`account → project` 单向映射；一账号绑第二个 project 会报错。未绑定 / disabled 的账号消息直接丢弃，不进入 Pi。
 - **busy / abort 是 Project 作用域**：foo 忙、foo 被 abort、foo 出错都不影响 bar（严格故障隔离）。
 - **多微信账号**：一次扫码登录一个账号，可重复添加；每个账号独立 monitor，多个账号可绑定到同一 project。
-- **会话级回复广播**：活动 Pi 会话中每个完成的 Agent 回合（包括扩展触发的独立回合）的成功最终文本，发送给项目绑定账号的微信用户；无最终文本不发送。微信发起的失败、warning、文件、UI 询问及进度仍只发给来源账号的微信用户。
-- **会话空闲自动关闭**：项目会话 10 分钟无消息自动关闭（广播"本次会话已关闭"），下一条消息自动新建会话。
-- **每次启动新建会话**：项目启动（含 daemon 重启）总是新建会话，**不跨重启恢复**上一个会话。
+- **按回合来源投递**：微信发起及扩展触发的独立回合，成功最终文本广播给项目微信用户；CLI 回合按 `--reply` 投递，不重复广播。无最终文本不发送。
+- **共享默认 / 活动会话**：每项目保存一个 default，至多加载一个 active 和一个 runtime。微信继续 active；CLI 未指定会话时使用 default。首个成功激活的会话自动成为 default，后续新建/切换不覆盖它。
+- **闲置释放、默认恢复**：10 分钟闲置后释放 runtime，保留历史及 default；重启或闲置后按需恢复 default，不恢复临时 active 或进行中的任务。默认历史丢失时明确失败，不静默新建。
+- **切换通知**：切换成功向全部项目微信用户通知，与 CLI reply 无关。同会话不重复；无 active 时显式新建/恢复也通知，仅无 active 时按需恢复 default 免通知；已有不同 active 时，普通 CLI prompt 切回 default 也通知。
 - **发送者标记**：入站消息交给 agent 的文本末尾追加 `-- from weixin <账号name>`。
 - **同项目互通**：某账号收到消息时，通知同项目**其他账号的微信用户** "`<账号name>`: 消息文本"。
 - **统一微信用户与投递**：项目用户来自绑定账号的 `account.userId`，所有微信出口使用收件用户及精确对应 `(accountId, userId)` 的 `context_token`。缺少用户、token 或可用 transport 时跳过并记录原因；某个目标失败不影响其他目标。**重启后不需要重新发言，已有精确缓存 token 即可投递**，但不保证服务端接受。入站仍按账号路由，不新增 sender 身份过滤，也不假定 sender 必然等于登录用户。
@@ -141,7 +142,39 @@ CLI 等待处理完成，详细成功、跳过和失败记录通过 `pi-wx logs`
 
 不自动重试；长文本可能已部分送达，CLI 断开也不代表 daemon 停止发送，再次执行可能重复通知。不提供跨 daemon 重启补发保证。
 
-### 5. systemd（用户级）
+### 5. 从 CLI 使用项目共享会话
+
+```bash
+pi-wx prompt "继续工作" --project foo
+pi-wx prompt "检查历史任务" --project foo --session <session-id>
+pi-wx prompt "开始新任务" --project foo --new-session --reply caller --reply user:all
+pi-wx prompt "生成摘要" --project foo --reply user:<user-id>
+```
+
+`--session` 与 `--new-session` 互斥；省略时使用 default，即使当前 active 是另一个会话也会切回 default。切换是全项目共享的，下一条微信消息也进入新的 active。首个成功激活会话自动设为 default；已有 default 时新建只改变 active。默认历史损坏或丢失可显式新建后用微信 `/default` 修复。
+
+`--reply` 可重复，默认 `caller`；支持 `caller`、`user:all` 和 `user:<id>` 组合，微信目标去重。ID 是绑定账号的 `account.userId`（可通过 `pi-wx accounts` 查看），非账号 ID；未知或跨项目用户在会话变更前拒绝。未选择 caller 不返回成功正文，但仍返回 session ID、执行状态、错误和可用投递结果；模型执行失败与微信投递失败分别报告。
+
+CLI 向 stdout 输出单个 JSON 结果（非流式）：
+
+| 字段 | 含义 |
+| --- | --- |
+| `sessionId` | 会话 ID，可用时返回 |
+| `status` | `success`、`error`、`aborted` 或 `waiting` |
+| `text` | 成功最终正文，仅选择 caller 时返回 |
+| `error` | 执行失败或中止原因，可选 |
+| `messages` | 本次响应累积的询问、通知、进度及 warning，可为空数组；不是最终正文 |
+| `delivery` | 成功最终文本的微信投递计数 `{ succeeded, skipped, failed }`，可选；不统计文件工具或切换通知 |
+
+`waiting` 表示需要回答，不是任务完成。`error`/`aborted` 或 delivery 有失败/跳过时退出码为 `1`，其余为 `0`。参数校验、busy 或 RPC 等请求失败向 stderr 输出 `error: ...` 并退出 `1`，不保证返回 JSON。
+
+CLI 回合的 `ctx.ui.notify` 和 `weixin_send_progress` 写入 `messages`，随等待/完成响应返回，不实时推送微信；即使未选择 caller 也保留这些辅助消息。
+
+CLI 等待完成或返回文字询问；需要确认、选择、输入时，再运行同项目 `pi-wx prompt "回答" --project foo`。**同 project 的所有本地 CLI 调用视为同一可信来源，可互相回答**，不是每个终端独占询问。回答沿用原任务 session/reply，不因省略 session 切回 default；显式切到其他 session 或新建不能消费询问。微信不能代答 CLI 询问，CLI 也不能代答微信询问。超时/取消不自动批准。
+
+每个项目仍只有一个任务，不排队；忙时拒绝新任务及会话切换，其他项目不受影响。daemon 未运行、项目不存在/停用、空白 prompt 或非法目标明确失败。不自动重试；客户端断开不保证取消，再次提交可能重复执行或投递。
+
+### 6. systemd（用户级）
 
 ```bash
 pi-wx service install   # 写入 ~/.config/systemd/user/pi-weixin-daemon.service（解析 CLI 绝对路径，不 sudo）
@@ -185,25 +218,27 @@ daemon 通过 Pi SDK 运行模型，需要对应 provider 的凭据。若运行�
 | 命令               | 说明                                     | 忙时可用 |
 | ------------------ | ---------------------------------------- | -------- |
 | `/help [command]`  | 显示全部或指定命令帮助                   | ✓        |
-| `/status`          | 项目 / session / Agent / 模型 / thinking | ✓        |
+| `/status`          | 项目 / active 与 default / Agent / 模型 / thinking | ✓        |
 | `/abort`           | 中止当前任务                             | ✓        |
-| `/new`             | 新建会话                                 | 仅空闲   |
+| `/new`             | 新建并切换 active，无 active 时也创建；不覆盖已有 default | 仅空闲   |
 | `/compact`         | 压缩会话                                 | 仅空闲   |
 | `/model`           | 分页选择模型，可设为项目默认             | 仅空闲   |
 | `/thinking`        | 选择思考强度，可设为项目默认             | 仅空闲   |
-| `/resume [latest]` | 列出或恢复最近会话                       | 仅空闲   |
+| `/resume [id\|default\|latest]` | 无参数分页选择；按 ID/default 恢复；latest 仅无 active 时恢复最近历史 | 仅空闲 |
+| `/default [id]` | 将当前 active 或指定 ID 设为 default，不强制切换 active | 仅空闲 |
 | `/reload`          | 重载当前 Pi 会话配置和扩展               | 仅空闲   |
 | `/p:<prompt>`      | 显式把文本作为 prompt 发送给 Pi          | 仅空闲   |
 
 模型和会话列表每页 5 项；选择交互支持字母、页码和 `q`，30 秒超时。只有 `/resume`
-选择会暂时阻塞项目，Pi UI ask 始终优先。项目默认值写入 `<cwd>/.pi/settings.json`。
+选择会暂时阻塞项目，Pi UI ask 始终优先。模型/思考强度默认值写入 `<cwd>/.pi/settings.json`；默认会话身份另存于 daemon 项目配置。相同 cwd 的项目可读取同一 Pi 历史，不引入会话所有权登记；不接受其他 cwd 的任意历史路径。
 其它 `/xxx` 一律回复「未知命令」，不会透传给 Pi。
 
 ## Agent 能力
 
-- **`weixin_send_file(path, caption?)`**：daemon 内存注入的工具（不写入项目 `.pi/extensions`，普通 `pi`/PI WEB 会话不可见）。自动发送到当前 Turn 来源账号的微信用户；仅要求文件存在且为普通文件（文件名 sanitize），**不设路径边界**——权限模型 = agent 进程权限，与 bash/read/write 一致（可发 `cwd` 之外 agent 可读的文件）。
+- **`weixin_send_file({ path, caption?, userId? })`**：daemon 内存注入的工具（不写入项目 `.pi/extensions`，普通 `pi`/PI WEB 会话不可见）。微信回合默认发送到来源账号的微信用户；CLI 或无来源独立回合未指定 `userId` 时默认发给项目全部微信用户；显式 `userId` 必须是项目绑定账号的 `account.userId`，未知或跨项目用户拒绝。工具目标独立于最终文本 `--reply`，caller-only 也可发送微信附件。仅要求文件存在且为普通文件（文件名 sanitize），**不设路径边界**——权限模型 = agent 进程权限，与 bash/read/write 一致（可发 `cwd` 之外 agent 可读的文件）。
 - **入站媒体**：图片 → 多模态输入；文件/视频 → 下载到 `<cwd>/.pi-weixin/inbox/<message-id>/` 并在 prompt 中说明路径；语音 → 仅使用微信提供的转录文本，追加 `【以上为用户的语音转录的信息，可能有识别错误】`，不下载或携带音频。空转录回复来源账号的微信用户「未获取到语音转录文本，请重新发送语音或改用文字。」，没有其他有效输入时不调用 Pi。`.pi-weixin/` 会自动加入项目 `.gitignore`。
-- **Extension UI**：项目 extension 调用 `ctx.ui.confirm/select/input` 时，daemon 进入 `WAITING_FOR_UI`，向来源账号的微信用户发送询问，且只接受该账号对应用户的回答（其他账号仍 busy）；`ctx.ui.notify` 直接推送消息。`ctx.ui.custom()` resolve undefined、`ctx.ui.editor()` 降级为输入框、`ctx.ui.theme` 返回真实最小 Theme 对象；其余 TUI 专属原语 no-op 不 throw。全部公开 UI 方法在 Pi SDK 包装后的扩展上下文中仍可调用。
+- **`weixin_send_progress({ update })`**：微信回合仅向来源账号用户发送，CLI 回合进入 JSON `messages`；无活动回合时拒绝，不支持 `userId`，不进入最终正文。
+- **Extension UI**：CLI 回合使用上节的文字询问与下一次 prompt 回答机制；微信回合中，项目 extension 调用 `ctx.ui.confirm/select/input` 时，daemon 进入 `WAITING_FOR_UI`，向来源账号的微信用户发送询问，且只接受该账号对应用户的回答（其他账号仍 busy）；`ctx.ui.notify` 直接推送消息。`ctx.ui.custom()` resolve undefined、`ctx.ui.editor()` 降级为输入框、`ctx.ui.theme` 返回真实最小 Theme 对象；其余 TUI 专属原语 no-op 不 throw。全部公开 UI 方法在 Pi SDK 包装后的扩展上下文中仍可调用。
 - **runner-level settings 不支持（W8）**：`resourceLoader` 层的项目配置正常生效；runner 级 settings（如 `sessionDir`）在 daemon 内不支持。
 
 ## 架构
@@ -225,7 +260,7 @@ Tencent/openclaw-weixin          # 微信协议参考（MIT，见 LICENSE.attrib
 
 ## 配置与存储（XDG）
 
-- 配置：`$XDG_CONFIG_HOME/pi-weixin-daemon/config.json`（project 配置，daemon 唯一 writer，原子写）。
+- 配置：`$XDG_CONFIG_HOME/pi-weixin-daemon/config.json`（project 配置，包含 `defaultSessionId`；daemon 唯一 writer，原子写）。
 - 账号凭据：`$XDG_DATA_HOME/pi-weixin-daemon/accounts/`（凭据 + 索引；旧 `~/.local/state/pi-weixin-daemon/weixin/accounts` 会自动无损迁移）。
 - 状态：`$XDG_STATE_HOME/pi-weixin-daemon/weixin/`（sync-buf / context-token）。
 - UDS：`$XDG_RUNTIME_DIR/pi-weixin-daemon/daemon.sock`（0600）。

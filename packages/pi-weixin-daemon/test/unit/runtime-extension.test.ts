@@ -94,11 +94,13 @@ it("weixin_send_file reads the current turn at execution time and refuses an abs
     const firstTurn = currentTurn;
     expect(await execute("call-1", { path: "report.txt", caption: "first" })).toEqual({
       content: [{ type: "text", text: 'Sent file "report.txt" to the Weixin conversation.' }],
-      details: { basename: "report.txt" },
+      details: { basename: "report.txt", succeeded: 1, failed: 0 },
     });
     currentTurn = { ...makeTurn("acct-b", "user-b"), messageId: "m-2", contextToken: "tok-2" };
     expect((await execute("call-2", { path: "report.txt" })).details).toEqual({
       basename: "report.txt",
+      succeeded: 1,
+      failed: 0,
     });
     expect(transport.sentFiles).toEqual([
       { ctx: firstTurn, path: path.join(project.dir, "report.txt"), caption: "first" },

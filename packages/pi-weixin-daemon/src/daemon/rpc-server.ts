@@ -38,7 +38,20 @@ export class RpcServer {
     }
 
     this.server = net.createServer((socket) => {
-      socket.on("data", (buf: Buffer) => this.handleConnection(socket, buf));
+      let request = "";
+      let handled = false;
+      socket.setEncoding("utf8");
+      socket.on("data", (chunk: string) => {
+        if (handled) return;
+        request += chunk;
+        try {
+          JSON.parse(request);
+        } catch {
+          if (!request.includes("\n")) return;
+        }
+        handled = true;
+        this.handleConnection(socket, Buffer.from(request));
+      });
       socket.on("error", (err) => this.logger.warn({ err }, "rpc socket error"));
     });
     const server = this.server;
@@ -120,6 +133,15 @@ export class RpcServer {
       case "project.disable":
         await this.daemon.setProjectEnabled(params.name as string, false);
         return this.daemon.getProjectStatuses();
+      case "project.prompt":
+        if (typeof params.name !== "string" || !params.name.trim())
+          throw new Error("prompt project name must not be blank");
+        return this.daemon.promptProject(params.name, {
+          text: params.text as string,
+          sessionId: params.sessionId as string | undefined,
+          newSession: params.newSession as boolean | undefined,
+          reply: params.reply as string[] | undefined,
+        });
       case "project.broadcast":
         if (typeof params.name !== "string" || !params.name.trim()) {
           throw new Error("broadcast project name must be a non-empty string");

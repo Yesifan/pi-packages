@@ -38,18 +38,19 @@
 - 把若干 account 聚合到**同一个工作目录**，并共享至多一个活动 Pi 会话。
 - **标识**：`projectId`（项目名，配置记录的 key）。
 - **微信用户集合**：由绑定账号的 `account.userId` 投影得到，不设独立联系人或动态参与者登记。
-- **属性**（存于 `config.json`）：`cwd`、`accounts: accountId[]`、`enabled`。
+- **属性**（存于 `config.json`）：`cwd`、`accounts: accountId[]`、`enabled`、可选 `defaultSessionId`。
 - **运行时**：`ProjectController`（一个项目一个），内含 `SessionController`
   （单一会话状态机：busy / abort / 发言范围 / 命令执行）。项目启动时只启动 controller/host，
-  Pi session 在首条普通消息到达时懒创建。
+  Pi runtime 按需创建或恢复，不在项目启动时加载历史。
 
 ### 1.4 会话（Session）
 
-- 一个项目最多有一个活动 Pi `AgentSession`，使用**一份共享上下文**；inactive 时可以没有 session。
-- 所有账号 / 用户的普通消息都进入这**同一个**活动会话；已有会话时 `/new` 换新会话
-  （旧上下文抛弃），inactive 时 `/new` 不创建空会话。
-- 生命周期：项目启动（inactive）→ 首条普通消息懒创建 → 使用 → 空闲自动关闭 →
-  下条普通消息再创建。daemon 重启后不恢复旧会话。
+- **session** 是持久历史与 ID；**runtime** 是加载并执行历史的实例，释放 runtime 不删除 session。每项目可保留多份历史，但至多一个 active、一个 runtime、一个任务。
+- **default** 是项目持久保存的会话身份，不等于最近修改历史，也不是模型/思考强度默认配置；**active** 是当前加载的临时会话，可与 default 不同。
+- 首个成功激活的会话自动成为 default，包括显式新建/恢复历史。以后 `/new` 或 CLI `--new-session` 只切 active；`/default [id]` 改 default 而不强制切 active。
+- 微信普通消息继续 active，没有 active 时恢复 default；CLI 无 session 参数时选择 default 并使其成为 active。任一入口切换对全项目生效，不维护每用户 active。
+- 闲置 10 分钟释放 runtime 并清除 active；重启后也按需恢复 default，不恢复临时 active 或进行中的回合。默认历史不可读时明确失败，不静默替换。
+- 历史范围沿用项目 cwd；相同 cwd 的项目允许共享历史，不建立会话所有权表，不接受其他 cwd 的任意路径。
 
 ### 1.5 入站消息（InboundMessage）
 
@@ -70,8 +71,10 @@
 ### 1.6 回合上下文（TurnContext）
 
 本轮 agent 的来源记录，保留 `accountId`、实际 `senderId`、`messageId` 和 `contextToken`。
-**文件、UI 询问、错误和不完整输出仍定向到来源账号的 `account.userId`**，不是直接使用原始 sender 作为收件人；UI 允许回答者与该投递对象一致。
-成功文本回复发给项目绑定账号的微信用户（见 [`routing.md`](routing.md) 的"回复 / 广播"）。
+**默认文件目标、UI 询问及错误定向到来源账号的 `account.userId`**，不是直接使用原始 sender 作为收件人；UI 允许回答者与该投递对象一致。
+微信回合成功文本发给项目绑定账号的微信用户（见 [`routing.md`](routing.md) 的"回复 / 广播"）。CLI 请求另有本地调用来源及 reply 目标，不伪造微信 sender/token；CLI 成功文本按 reply 投递，无来源的独立回合仍向项目用户广播。
+
+CLI reply 是**单回合成功最终文本受众**，不是 session 权限或持久订阅：`caller`、`user:all`、`user:<id>` 可组合，微信目标去重，ID 必须属于项目。会话切换通知和微信发送工具不受 reply 控制。同 project 所有本地 CLI 是同一可信交互来源，可互相回答；答复沿用原回合 session/reply。
 
 ### 1.7 组合示例：两个用户 + 一个项目
 
@@ -106,7 +109,8 @@
 | `senderId` | 入站 `from_user_id` | 实际发消息的**真人** | 入站来源及 token 归属，不直接决定出站收件人 |
 | `context_token` | 入站消息 | 会话上下文 token | 按 (account, user) 持久化 |
 | `projectId` | 项目名 | 项目的 key | 一个账号 → 至多一个项目 |
-| `sessionFile/sessionId` | Pi 会话 | 当前共享会话 | 一个项目至多一个活动会话 |
+| `sessionFile/sessionId` | Pi 历史 / 活动实例 | 持久会话身份 / 当前加载的会话 | 一个项目至多一个 active |
+| `defaultSessionId` | 项目配置 | 持久默认会话身份 | 可与 active 不同，闲置/重启不清除 |
 
 > **一句话**：`accountId` 是**机器人**；`userId` 是扫码登录用户，`senderId` 是报文中实际发件人；
 > 本地不以二者相等作为入站条件。`name` 是机器人的**别名**。
@@ -139,7 +143,7 @@
 ```
 
 - 一个项目可绑定多个 account；每个 account 对应一个 bot，记录各自的扫码登录用户。
-- 一个项目只有一个会话，所以多个账号 / 用户**共用**同一份上下文。
+- 一个项目只有一个活动会话，所以微信与 CLI **共用**当前上下文，历史会话只能串行切换。
 
 ---
 
@@ -149,8 +153,8 @@
    - 未找到服务端保证二者恒等的契约；官方与 Hermes adapter 的客户端策略不能替代此保证（见 `ilink-protocol.md` §11）。
    - 本地没有 pairing/allowFrom 鉴权，不增加 sender 白名单；入站仍按账号绑定、项目启用及运行状态路由。
 2. **项目微信用户来自绑定账号的 `account.userId`**。
-   - 成功最终文本、typing、互通及主动通知使用这一用户来源；互通排除来源账号。
-   - 命令、错误、warning、文件、进度和 UI 仍定向到来源账号的微信用户；未绑定或停用提示也使用该账号用户，不要求先有项目。
+   - 微信最终文本、typing、互通及主动通知使用这一用户来源；互通排除来源账号。CLI 最终文本按 reply 选其中的用户或 caller。
+   - 微信命令、错误、warning、默认文件/进度和 UI 定向到来源账号的微信用户；CLI/独立回合的文件工具未指定 `userId` 时使用全项目用户，显式目标也只能来自项目；CLI notify/进度进入响应 `messages`，不广播微信；未绑定或停用提示也使用该账号用户，不要求先有项目。
 3. **`context_token` 按 `(accountId, userId)` 精确关联**。
    - 入站 token 按实际 sender 保存，不改写成登录用户。当前消息 token 仅在 sender 与收件人一致时可直接使用，否则查收件人的精确缓存。
    - 重启后不需要重新发言，已有精确缓存 token 即可投递；缺用户、token 或可用 transport 时跳过并记录，不借用其他用户 token，也不切换收件人。
@@ -177,5 +181,5 @@
 | 微信用户 / 用户 | 微信真人用户；登录用户 `userId` 与入站发送者 `senderId` 分别记录 |
 | 机器人 | Bot 账号（account），标识 `accountId`，别名 `name` |
 | 项目 | 项目（project），`cwd` + 若干账号 + 一个会话 |
-| 会话 | 会话（session），一个项目一个 Pi 会话 |
+| 会话 | session 是持久历史，active 是当前加载的会话，runtime 是运行实例；每项目至多一个 active/runtime |
 | 回复只回发起者 | 成功文本发给绑定账号用户；文件、UI、错误及不完整输出定向到当前 `TurnContext` 来源账号用户 |

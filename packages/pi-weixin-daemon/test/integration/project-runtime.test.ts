@@ -181,7 +181,7 @@ describe("ProjectRuntime: sender marker + project-wide notify/broadcast + idle c
     expect(h.fakes.get("foo")!.prompts).toHaveLength(0);
   });
 
-  it("auto-closes an idle session: notifies + creates a fresh session on next message", async () => {
+  it("auto-closes an idle session: notifies + restores default on next message", async () => {
     const h = setup({ sessionIdleMs: 40 });
     await h.pm.sync(fooConfig as never);
 
@@ -205,10 +205,14 @@ describe("ProjectRuntime: sender marker + project-wide notify/broadcast + idle c
     expect(h.fakes.get("foo")!.stopCalls).toBeGreaterThan(0);
 
     const ensureBefore = h.fakes.get("foo")!.ensureSessionCalls;
+    h.fakes.get("foo")!.sessions = [
+      { id: "fake-session", path: "/fake/session.jsonl", firstMessage: "", modifiedAt: 0 },
+    ];
     const pC = h.pm.dispatch("A", textMsg("A", "u-a", "m3", "after idle"));
     await tick();
-    // A fresh session is created before the message is processed.
-    expect(h.fakes.get("foo")!.ensureSessionCalls).toBe(ensureBefore + 1);
+    // Releasing the runtime preserves the explicit default identity.
+    expect(h.fakes.get("foo")!.ensureSessionCalls).toBe(ensureBefore);
+    expect(h.fakes.get("foo")!.resumeCalls).toEqual(["/fake/session.jsonl"]);
 
     h.fakes.get("foo")!.complete("replied");
     await pC;

@@ -1,16 +1,19 @@
 import type { InteractionPort } from "../pi/ports.js";
+import { isCliTurn, type TurnOrigin } from "../sessions/turn-context.js";
 import type { Logger } from "../util/logger.js";
-import type { TurnContext, WeixinTransport } from "./types.js";
+import type { WeixinTransport } from "./types.js";
 
 interface UiWaiter {
-  accountId: string;
+  origin: TurnOrigin;
   resolve: (text: string) => void;
   reject: (err: Error) => void;
 }
 
 export interface WeixinInteractionControllerDeps {
   /** Current turn origin (owned by the session controller). */
-  getCurrentTurn: () => TurnContext | undefined;
+  getCurrentTurn: () => TurnOrigin | undefined;
+  onCliText?: (text: string) => void;
+  onCliWaiting?: () => void;
   transport: WeixinTransport;
   logger: Logger;
 }
@@ -27,7 +30,7 @@ export class WeixinInteractionController implements InteractionPort {
 
   constructor(private readonly deps: WeixinInteractionControllerDeps) {}
 
-  getCurrentTurn(): TurnContext | undefined {
+  getCurrentTurn(): TurnOrigin | undefined {
     return this.deps.getCurrentTurn();
   }
 
@@ -41,20 +44,24 @@ export class WeixinInteractionController implements InteractionPort {
     return this.uiWaiters.length > 0;
   }
 
-  tryResolveUi(turn: TurnContext, text: string): boolean {
-    const waiter = this.uiWaiters.find((w) => w.accountId === turn.accountId);
+  tryResolveUi(turn: TurnOrigin, text: string): boolean {
+    const waiter = this.uiWaiters.find((w) =>
+      isCliTurn(turn)
+        ? isCliTurn(w.origin)
+        : !isCliTurn(w.origin) && w.origin.accountId === turn.accountId,
+    );
     if (!waiter) return false;
     waiter.resolve(text);
     return true;
   }
 
   waitForResponse(
-    turn: TurnContext,
+    turn: TurnOrigin,
     opts?: { timeoutMs?: number; signal?: AbortSignal },
   ): Promise<string> {
     return new Promise<string>((resolve, reject) => {
       const waiter: UiWaiter = {
-        accountId: turn.accountId,
+        origin: turn,
         resolve: (text: string) => {
           cleanup();
           resolve(text);
@@ -79,6 +86,8 @@ export class WeixinInteractionController implements InteractionPort {
         );
       }
       this.uiWaiters.push(waiter);
+      if (isCliTurn(turn)) this.deps.onCliWaiting?.();
+      if (opts?.signal?.aborted) onAbort();
     });
   }
 
@@ -88,7 +97,11 @@ export class WeixinInteractionController implements InteractionPort {
     }
   }
 
-  sendText(turn: TurnContext, text: string): Promise<void> {
+  sendText(turn: TurnOrigin, text: string): Promise<void> {
+    if (isCliTurn(turn)) {
+      this.deps.onCliText?.(text);
+      return Promise.resolve();
+    }
     return this.deps.transport.sendText(turn, text);
   }
 }

@@ -79,7 +79,7 @@ export function createWeixinSendProgressExtension(
           };
         }
 
-        deps.logger.info({ accountId: turn.accountId }, "weixin_send_progress");
+        deps.logger.info({ messageId: turn.messageId }, "weixin_send_progress");
         await deps.interaction.sendText(turn, update);
         return {
           content: [{ type: "text", text: "Progress update sent. Continue the task." }],

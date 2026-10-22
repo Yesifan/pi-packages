@@ -1,3 +1,4 @@
+import { type CliPromptRequest, validateCliPrompt } from "../sessions/cli-prompt.js";
 import type { Logger } from "../util/logger.js";
 import { RecipientUnavailableError, type ResolveRecipientAccount } from "../weixin/recipient.js";
 import type { InboundMessage, WeixinTransport } from "../weixin/types.js";
@@ -7,6 +8,7 @@ import { ProjectTransport } from "./project-transport.js";
 import type { ProjectBroadcastResult, ProjectConfig, ProjectStatus } from "./types.js";
 
 export interface ProjectManagerOptions {
+  saveDefaultSession?: (projectId: string, sessionId: string) => void;
   /** Resolve the per-account transport (owned by AccountManager). */
   getTransport: (accountId: string) => WeixinTransport | undefined;
   /** Login user and exact cached token, shared by all project delivery. */
@@ -56,7 +58,7 @@ export class ProjectManager {
     const nextConfigs = new Map<string, ProjectConfig>();
     const nextAccountProject = new Map<string, string>();
     for (const { name, config } of configs) {
-      nextConfigs.set(name, config);
+      nextConfigs.set(name, { ...config, accounts: [...config.accounts] });
       for (const acc of config.accounts) {
         nextAccountProject.set(acc, name);
       }
@@ -102,6 +104,12 @@ export class ProjectManager {
       };
       const controller = new ProjectController({
         config: snapshot,
+        defaultSessionId: cfg.defaultSessionId,
+        saveDefaultSession: (id) => {
+          this.opts.saveDefaultSession?.(name, id);
+          const config = this.configs.get(name);
+          if (config) config.defaultSessionId = id;
+        },
         transport: this.transport,
         resolveRecipientUserId: (id) => this.opts.resolveBroadcastAccount(id)?.userId,
         logger: this.opts.logger,
@@ -155,8 +163,43 @@ export class ProjectManager {
     await controller.handleMessage(msg);
   }
 
+  async prompt(projectId: string, input: CliPromptRequest) {
+    validateCliPrompt(input);
+    const config = this.configs.get(projectId);
+    if (!config) throw new Error(`project "${projectId}" does not exist`);
+    if (!config.enabled) throw new Error(`project "${projectId}" is disabled`);
+    const targets = input.reply ?? ["caller"];
+    const users = new Map<string, string>();
+    for (const account of config.accounts) {
+      const user = this.opts.resolveBroadcastAccount(account)?.userId;
+      if (user && !users.has(user)) users.set(user, account);
+    }
+    const accounts = new Set<string>();
+    for (const target of targets) {
+      if (target === "caller") continue;
+      if (target === "user:all") {
+        // Missing user records still count as skipped, rather than silently succeeding.
+        for (const account of config.accounts) {
+          const user = this.opts.resolveBroadcastAccount(account)?.userId;
+          if (!user || users.get(user) === account) accounts.add(account);
+        }
+      } else {
+        const account = users.get(target.slice(5));
+        if (!account) throw new Error(`unknown project reply target: ${target}`);
+        accounts.add(account);
+      }
+    }
+    const controller = this.controllers.get(projectId);
+    if (!controller) throw new Error(`project "${projectId}" is not running`);
+    return controller.prompt(input, (text) => this.broadcast(projectId, text, [...accounts]));
+  }
+
   /** Explicit project notification, independent of Pi session state. */
-  async broadcast(projectId: string, text: string): Promise<ProjectBroadcastResult> {
+  async broadcast(
+    projectId: string,
+    text: string,
+    selectedAccounts?: string[],
+  ): Promise<ProjectBroadcastResult> {
     const config = this.configs.get(projectId);
     if (!config) throw new Error(`project "${projectId}" does not exist`);
     if (!config.enabled) throw new Error(`project "${projectId}" is disabled`);
@@ -164,7 +207,7 @@ export class ProjectManager {
 
     const result: ProjectBroadcastResult = { succeeded: 0, skipped: 0, failed: 0 };
     // Snapshot bound accounts; all exits share the same recipient/token resolver.
-    for (const accountId of [...config.accounts]) {
+    for (const accountId of selectedAccounts ?? [...config.accounts]) {
       const target = {
         project: projectId,
         account: accountId,
@@ -225,6 +268,7 @@ export class ProjectManager {
         state: st?.state ?? "off",
         sessionFile: st?.sessionFile,
         sessionId: st?.sessionId,
+        defaultSessionId: st?.defaultSessionId ?? cfg.defaultSessionId,
         model: st?.model,
         configuredTrust: st?.configuredTrust,
         activeSessionTrust: st?.activeSessionTrust,
