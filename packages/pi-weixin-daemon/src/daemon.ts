@@ -14,6 +14,7 @@ import type {
 import { ProjectManager } from "./projects/project-manager.js";
 import { ProjectStore } from "./projects/project-store.js";
 import type { ProjectStoreData } from "./projects/types.js";
+import type { CliPromptRequest } from "./sessions/cli-prompt.js";
 import type { Logger } from "./util/logger.js";
 import { VERSION } from "./version.js";
 import {
@@ -59,6 +60,7 @@ async function createProjectPiRuntime(ctx: ProjectHostFactoryContext): Promise<P
       createWeixinSendFileExtension({
         fileSender: new WeixinFileSender(transport),
         getCurrentTurn: () => interaction.getCurrentTurn(),
+        resolveRecipients: ctx.resolveFileRecipients,
         cwd,
         logger,
       }),
@@ -106,6 +108,11 @@ export class Daemon {
     const logger = deps.logger;
     this.accountManager = new AccountManager({ logger });
     this.projectManager = new ProjectManager({
+      saveDefaultSession: (projectId, sessionId) => {
+        this.store.setDefaultSession(projectId, sessionId);
+        const project = this.config.projects[projectId];
+        if (project) project.defaultSessionId = sessionId;
+      },
       getTransport: (id) => this.accountManager.getTransport(id),
       resolveBroadcastAccount: resolveRecipientAccount,
       factory: deps.projectPiFactory ?? defaultProjectPiFactory,
@@ -254,6 +261,10 @@ export class Daemon {
   }
 
   /** Direct notification to bound account users; does not require a healthy Pi runtime. */
+  async promptProject(name: string, input: CliPromptRequest) {
+    return this.projectManager.prompt(name, input);
+  }
+
   async broadcastProject(name: string, text: string) {
     return this.projectManager.broadcast(name, text);
   }

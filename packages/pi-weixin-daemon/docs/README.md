@@ -17,5 +17,7 @@
 
 - 既定方案 / 待办需求：`requirements/`
 - 架构决策记录（ADR）：`adr/`
+- [需求 0010：项目默认会话与 CLI prompt](requirements/0010-project-session-cli-mcp.md) —— 已完成，验证记录见需求文档。
+- [ADR-0008：共享默认会话与 CLI 回合来源](adr/0008-shared-default-session-cli.md) —— 默认/活动/运行实例、切换通知、reply 及同项目 CLI 交互来源。
 
 

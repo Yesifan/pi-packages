@@ -1,4 +1,9 @@
 import type { InteractionPort } from "../pi/ports.js";
+import type {
+  CliPromptRequest,
+  CliPromptResult,
+  PromptDeliveryResult,
+} from "../sessions/cli-prompt.js";
 import type { SessionRuntimePort } from "../sessions/runtime-port.js";
 import { SessionController } from "../sessions/session-controller.js";
 import { CurrentTurn, toTurnContext } from "../sessions/turn-context.js";
@@ -6,7 +11,7 @@ import type { DeliveryReport } from "../sessions/turn-outcome.js";
 import type { Logger } from "../util/logger.js";
 import { formatUserFacingError } from "../util/user-facing-error.js";
 import { WeixinInteractionController } from "../weixin/interaction-controller.js";
-import type { InboundMessage, WeixinTransport } from "../weixin/types.js";
+import type { InboundMessage, TurnContext, WeixinTransport } from "../weixin/types.js";
 import { CommandRouter } from "./command-router.js";
 import type { ProjectRuntimeConfig } from "./project-config.js";
 import { OutboundDeliveryError } from "./project-transport.js";
@@ -17,6 +22,7 @@ export interface ProjectHostFactoryContext {
   projectId: string;
   cwd: string;
   accounts: string[];
+  resolveFileRecipients?: (userId?: string) => TurnContext[];
   transport: WeixinTransport;
   interaction: InteractionPort;
   logger: Logger;
@@ -25,6 +31,8 @@ export type ProjectHostFactory = (ctx: ProjectHostFactoryContext) => Promise<Ses
 
 export interface ProjectControllerOptions {
   config: ProjectRuntimeConfig;
+  defaultSessionId?: string;
+  saveDefaultSession?: (sessionId: string) => void;
   /** Per-project outbound facade; also used by the weixin runtime extension. */
   transport: WeixinTransport;
   logger: Logger;
@@ -43,6 +51,7 @@ export interface ProjectStatusView {
   state: ProjectRuntimeState | "off";
   sessionFile?: string;
   sessionId?: string;
+  defaultSessionId?: string;
   model?: string;
   configuredTrust?: boolean;
   activeSessionTrust?: boolean;
@@ -83,6 +92,8 @@ export class ProjectController {
       const currentTurn = new CurrentTurn();
       const interaction = new WeixinInteractionController({
         getCurrentTurn: () => currentTurn.get(),
+        onCliText: (text) => this.session?.recordCliText(text),
+        onCliWaiting: () => this.session?.cliWaiting(),
         transport: this.opts.transport,
         logger: this.opts.logger,
       });
@@ -90,6 +101,22 @@ export class ProjectController {
         projectId: this.config.projectId,
         cwd: this.config.cwd,
         accounts: this.config.accounts,
+        resolveFileRecipients: (userId) => {
+          const accounts = this.config.accounts.filter(
+            (id) => !userId || this.opts.resolveRecipientUserId(id) === userId,
+          );
+          if (userId && !accounts.length) throw new Error("user does not belong to this project");
+          const seen = new Set<string>();
+          return accounts
+            .filter((id) => {
+              const user = this.opts.resolveRecipientUserId(id);
+              if (!user) return true; // Preserve an explicit skipped/failed delivery for missing recipients.
+              if (seen.has(user)) return false;
+              seen.add(user);
+              return true;
+            })
+            .map((accountId) => ({ accountId, senderId: "", messageId: "file-broadcast" }));
+        },
         transport: this.opts.transport,
         interaction,
         logger: this.opts.logger,
@@ -97,6 +124,11 @@ export class ProjectController {
       this.session = new SessionController({
         projectId: this.config.projectId,
         host,
+        defaultSessionId: this.opts.defaultSessionId,
+        saveDefaultSession: (id) => {
+          this.opts.saveDefaultSession?.(id);
+          this.opts.defaultSessionId = id;
+        },
         interaction,
         transport: this.opts.transport,
         currentTurn,
@@ -213,6 +245,21 @@ export class ProjectController {
     }
   }
 
+  async prompt(
+    input: CliPromptRequest,
+    deliver: (text: string) => Promise<PromptDeliveryResult>,
+  ): Promise<CliPromptResult> {
+    await this.started;
+    if (this.state === "error" || this.state === "off" || this.state === "stopping")
+      throw new Error(this.error ?? "project is not running");
+    const session = this.requireSession();
+    try {
+      return await session.handleCliPrompt(input, deliver);
+    } finally {
+      this.reflectState(session);
+    }
+  }
+
   async stop(): Promise<void> {
     this.state = "stopping";
     await this.session
@@ -243,6 +290,7 @@ export class ProjectController {
       state,
       sessionFile: s?.sessionFile,
       sessionId: s?.sessionId,
+      defaultSessionId: s?.defaultSessionId,
       model: s?.model,
       configuredTrust: s?.configuredTrust,
       activeSessionTrust: s?.activeSessionTrust,

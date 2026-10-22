@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import net from "node:net";
 import { resolveDaemonSocket } from "../config/paths.js";
+import type { CliPromptRequest, CliPromptResult } from "../sessions/cli-prompt.js";
 
 export class DaemonNotRunningError extends Error {
   constructor() {
@@ -44,6 +45,13 @@ export async function rpcBroadcast(
   return callRpc<BroadcastResult>("project.broadcast", params, socketPath, 0);
 }
 
+export async function rpcPrompt(
+  params: CliPromptRequest & { name: string },
+  socketPath = resolveDaemonSocket(),
+): Promise<CliPromptResult> {
+  return callRpc<CliPromptResult>("project.prompt", { ...params }, socketPath, 0);
+}
+
 async function callRpc<T>(
   method: string,
   params: Record<string, unknown>,
@@ -68,13 +76,18 @@ async function callRpc<T>(
       }
     };
     socket.on("connect", () => {
-      socket.write(JSON.stringify({ id, method, params }));
+      socket.write(`${JSON.stringify({ id, method, params })}\n`);
     });
-    socket.on("data", (buf: Buffer) => {
+    let response = "";
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk: string) => {
+      response += chunk;
+    });
+    socket.on("end", () => {
       done(() => {
         let resp: RpcResponse;
         try {
-          resp = JSON.parse(buf.toString("utf-8")) as RpcResponse;
+          resp = JSON.parse(response) as RpcResponse;
         } catch (err) {
           reject(err instanceof Error ? err : new Error(String(err)));
           return;
