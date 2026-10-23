@@ -3,9 +3,13 @@ import os from "node:os";
 import path from "node:path";
 import { pino } from "pino";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { AccountManager } from "../../src/accounts/account-manager.js";
+import { buildProgram } from "../../src/cli/index.js";
 import { rpcCall } from "../../src/cli/rpc-client.js";
+import * as paths from "../../src/config/paths.js";
 import { Daemon, type DaemonDeps } from "../../src/daemon.js";
 import { ProjectStore } from "../../src/projects/project-store.js";
+import type { AccountInfo, AccountStatus } from "../../src/projects/types.js";
 import { createLogger } from "../../src/util/logger.js";
 import {
   listIndexedWeixinAccountIds,
@@ -106,28 +110,107 @@ function makeDaemon(overrides: Partial<DaemonDeps> = {}): Daemon {
 }
 
 describe("daemon UDS RPC", () => {
-  it("reports online logout deletion failure without unregistering credentials", async () => {
+  it.each([".json", ".sync.json", ".context-tokens.json"])(
+    "keeps online logout selectable after %s deletion fails and allows CLI retry",
+    async (suffix) => {
+      configureProject("foo", ["acct-a"], false);
+      const daemon = makeDaemon();
+      await daemon.start();
+      const original = fs.unlinkSync.bind(fs);
+      const unlink = vi.spyOn(fs, "unlinkSync").mockImplementation((file) => {
+        if (file === path.join(dataDir, "accounts", `acct-a${suffix}`)) {
+          throw Object.assign(new Error("unlink denied"), { code: "EACCES" });
+        }
+        original(file);
+      });
+      try {
+        await expect(
+          rpcCall("account.logout", { accountId: "acct-a" }, socketPath),
+        ).rejects.toThrow("unlink denied");
+        expect(listIndexedWeixinAccountIds()).toContain("acct-a");
+        expect(loadWeixinAccount("acct-a")?.token).toBe("t-a");
+        const accounts = await rpcCall<AccountInfo[]>("account.list", {}, socketPath);
+        expect(accounts).toEqual([
+          expect.objectContaining({
+            accountId: "acct-a",
+            name: "personal",
+            status: "stopped",
+            since: loadWeixinAccount("acct-a")?.savedAt,
+          }),
+        ]);
+        expect(accounts[0]?.projectId).toBeUndefined();
+        unlink.mockRestore();
+        const socket = vi.spyOn(paths, "resolveDaemonSocket").mockReturnValue(socketPath);
+        const log = vi.spyOn(console, "log").mockImplementation(() => {});
+        try {
+          await buildProgram().parseAsync(["logout", "personal"], { from: "user" });
+          expect(log).toHaveBeenCalledWith('Logged out account "acct-a".');
+        } finally {
+          socket.mockRestore();
+          log.mockRestore();
+        }
+        expect(await rpcCall("account.list", {}, socketPath)).toEqual([]);
+        expect(listIndexedWeixinAccountIds()).toEqual([]);
+        expect(loadWeixinAccount("acct-a")).toBeNull();
+      } finally {
+        unlink.mockRestore();
+      }
+    },
+  );
+
+  it("lists registered accounts without monitors alongside online accounts", async () => {
+    registerWeixinAccountId("no-token");
+    saveWeixinAccount("no-token", { name: "waiting", userId: "owner" });
+    registerWeixinAccountId("missing-file");
+    configureProject("foo", ["acct-a", "no-token"], false);
     const daemon = makeDaemon();
     await daemon.start();
-    const original = fs.unlinkSync.bind(fs);
-    const unlink = vi.spyOn(fs, "unlinkSync").mockImplementation((file) => {
-      if (file === path.join(dataDir, "accounts", "acct-a.json")) {
-        throw Object.assign(new Error("unlink denied"), { code: "EACCES" });
-      }
-      original(file);
-    });
-    try {
-      await expect(rpcCall("account.logout", { accountId: "acct-a" }, socketPath)).rejects.toThrow(
-        "unlink denied",
-      );
-      expect(listIndexedWeixinAccountIds()).toContain("acct-a");
-      expect(loadWeixinAccount("acct-a")?.token).toBe("t-a");
-      // The stopped account is no longer selectable online until reload/restart (#36).
-      expect(await rpcCall("account.list", {}, socketPath)).toEqual([]);
-    } finally {
-      unlink.mockRestore();
-    }
+    expect(await rpcCall("account.list", {}, socketPath)).toEqual([
+      expect.objectContaining({
+        accountId: "acct-a",
+        name: "personal",
+        status: "online",
+        projectId: "foo",
+        since: loadWeixinAccount("acct-a")?.savedAt,
+      }),
+      {
+        accountId: "no-token",
+        name: "waiting",
+        userId: "owner",
+        status: "stopped",
+        projectId: "foo",
+      },
+      { accountId: "missing-file", status: "stopped" },
+    ]);
   });
+
+  it.each<AccountStatus>(["offline", "connecting", "online", "reauth-required", "error"])(
+    "preserves live %s status and metadata while excluding unregistered monitors",
+    async (status) => {
+      const daemon = makeDaemon();
+      await daemon.start();
+      configureProject("foo", ["acct-a"], false);
+      const live = vi.spyOn(AccountManager.prototype, "listAccounts").mockReturnValue([
+        { accountId: "acct-a", status, userId: "live-user", error: "live-detail" },
+        { accountId: "unregistered", status: "online" },
+      ]);
+      try {
+        expect(await rpcCall("account.list", {}, socketPath)).toEqual([
+          {
+            accountId: "acct-a",
+            name: "personal",
+            status,
+            userId: "live-user",
+            error: "live-detail",
+            projectId: "foo",
+            since: loadWeixinAccount("acct-a")?.savedAt,
+          },
+        ]);
+      } finally {
+        live.mockRestore();
+      }
+    },
+  );
 
   it("rejects legacy fields, malformed IDs and names without mutating projects", async () => {
     const daemon = makeDaemon();

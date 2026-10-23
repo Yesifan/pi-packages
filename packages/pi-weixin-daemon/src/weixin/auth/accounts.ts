@@ -210,10 +210,11 @@ export function resolveWeixinBaseUrl(accountId: string): string {
  */
 export function clearWeixinAccount(accountId: string): void {
   const dir = resolveAccountsDir();
+  // Keep credentials (including the selectable name) until auxiliary cleanup succeeds.
   const accountFiles = [
-    `${accountId}.json`,
     `${accountId}.sync.json`,
     `${accountId}.context-tokens.json`,
+    `${accountId}.json`,
   ];
   for (const file of accountFiles) {
     try {

@@ -98,7 +98,7 @@ CLI 的账号选择参数（`logout`、`project <项目> add/remove`、`doctor -
 
 `logout` 在线时由 daemon 统一解绑、停止 monitor 并清理凭据；仅在 socket 不存在或连接被拒绝时允许离线清理。列表连接失败时按本地 name 唯一解析；列表成功、随后登出连接失败时保留已解析的 ID，不重新解析本地名称。其他 RPC 错误会失败退出，不执行本地清理或自动重试；超时不代表 daemon 未执行登出。
 
-删除凭据遇到权限等错误会失败退出，不注销账号索引，也不报告成功。在线登出此时可能已解绑项目并停止 monitor，因此账号可能不再出现在在线列表；修复文件权限后，可停止 daemon 再按 name 离线登出，或重启 daemon 后重试。清理不是事务，不回滚已完成的解绑或文件删除。
+删除凭据遇到权限等错误会失败退出，不注销账号索引，也不报告成功。`accounts` / `account.list` 列出所有已登记账号；没有 monitor 的账号显示 `stopped`，仍可按 name 选择。清理先删除辅助文件，最后删除保存 name 的凭据文件，因此在线登出文件删除失败后，修复文件权限即可再次 `pi-wx logout <name>`，无需重启 daemon。清理不是事务，不回滚已完成的解绑或文件删除；凭据已删、随后注销索引写入失败的情况不在这一按名重试保证内。
 
 **BREAKING / 升级：CLI 与 daemon 必须使用匹配版本，更新安装后运行 `pi-wx restart` 重启 daemon。** 账号选择类 RPC 只接受 ID：`account.logout` 使用 `accountId`，`project.account.add/remove` 使用 `accountIds: string[]`；旧 `accounts` 字段明确报错。daemon 校验 ID 已注册，不解析名称。内部存储和路由仍使用 ID，无需迁移现有账号数据。
 

@@ -13,7 +13,7 @@ import type {
 } from "./projects/project-controller.js";
 import { ProjectManager } from "./projects/project-manager.js";
 import { ProjectStore } from "./projects/project-store.js";
-import type { ProjectStoreData } from "./projects/types.js";
+import type { AccountInfo, ProjectStoreData } from "./projects/types.js";
 import type { Logger } from "./util/logger.js";
 import { VERSION } from "./version.js";
 import {
@@ -347,16 +347,24 @@ export class Daemon {
     return st;
   }
 
-  getAccountStatuses() {
-    return this.accountManager.listAccounts({
-      userId: (id) => this.accountUser(id),
-      projectId: (id) => this.projectManager.getProjectIdForAccount(id),
-      name: (id) => resolveWeixinAccountName(id),
-      since: (id) => loadWeixinAccount(id)?.savedAt,
+  getAccountStatuses(): AccountInfo[] {
+    const live = new Map(
+      this.accountManager.listAccounts().map((account) => [account.accountId, account]),
+    );
+    // Persisted bindings may already be removed when a logout cleanup fails.
+    const projects = this.store.list();
+    return listIndexedWeixinAccountIds().map((accountId) => {
+      const account = loadWeixinAccount(accountId);
+      const monitor = live.get(accountId);
+      return {
+        accountId,
+        name: account?.name?.trim() || undefined,
+        status: monitor?.status ?? "stopped",
+        userId: monitor?.userId ?? account?.userId,
+        projectId: projects.find(({ config }) => config.accounts.includes(accountId))?.name,
+        since: account?.savedAt,
+        error: monitor?.error,
+      };
     });
-  }
-
-  private accountUser(accountId: string): string | undefined {
-    return loadWeixinAccount(accountId)?.userId;
   }
 }

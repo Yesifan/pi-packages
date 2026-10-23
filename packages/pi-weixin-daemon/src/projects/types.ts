@@ -48,7 +48,13 @@ export interface ProjectBroadcastResult {
 }
 
 /** Account status exposed over RPC / `accounts`. */
-export type AccountStatus = "offline" | "connecting" | "online" | "reauth-required" | "error";
+export type AccountStatus =
+  | "offline"
+  | "connecting"
+  | "online"
+  | "reauth-required"
+  | "error"
+  | "stopped";
 
 export interface AccountInfo {
   /** ilink_bot_id (the routing key). */
