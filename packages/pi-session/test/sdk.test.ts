@@ -10,7 +10,81 @@ import {
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { expect, it, vi } from "vitest";
+import piSession from "../src/index.js";
 import { SessionTasks, type TaskReport } from "../src/tasks.js";
+
+it("binds the real extension in offline SDK RPC mode and shuts down its runtime", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-session-rpc-"));
+  const cwd = join(root, "project");
+  const agentDir = join(root, "agent");
+  let session: AgentSession | undefined;
+  const fetch = vi.fn(() => {
+    throw new Error("Network is forbidden");
+  });
+  vi.stubGlobal("fetch", fetch);
+  vi.stubEnv("PI_CODING_AGENT_DIR", agentDir);
+  vi.stubEnv("PI_CODING_AGENT_SESSION_DIR", "");
+  try {
+    await Promise.all([mkdir(cwd), mkdir(agentDir)]);
+    const target = SessionManager.create(cwd);
+    target.appendMessage({ role: "user", content: "rpc history needle", timestamp: Date.now() });
+    target.appendSessionInfo("RPC notes");
+    const settingsManager = SettingsManager.inMemory({ cacheWarming: "off" });
+    const resourceLoader = new DefaultResourceLoader({
+      cwd,
+      agentDir,
+      settingsManager,
+      noExtensions: true,
+      noSkills: true,
+      noContextFiles: true,
+      noPromptTemplates: true,
+      noThemes: true,
+      extensionFactories: [piSession],
+    });
+    await resourceLoader.reload();
+    ({ session } = await createAgentSession({
+      cwd,
+      agentDir,
+      settingsManager,
+      resourceLoader,
+      sessionManager: SessionManager.inMemory(cwd),
+    }));
+    expect(session.getAllTools().map((tool) => tool.name)).toEqual(
+      expect.arrayContaining(["search-session", "ask-session"]),
+    );
+    const runner = session.extensionRunner;
+    const search = () =>
+      session!
+        .getToolDefinition("search-session")!
+        .execute(
+          "rpc-search",
+          { query: "needle" },
+          undefined,
+          undefined,
+          runner.createToolContext("rpc-search", undefined),
+        );
+    await expect(search()).rejects.toThrow("active caller session");
+    // Real SDK runner and no-op UI, not an RPC subprocess/client protocol test.
+    await session.bindExtensions({ mode: "rpc" });
+    expect(runner.createContext().mode).toBe("rpc");
+    expect((await search()).details).toMatchObject({ sessions: [{ id: target.getSessionId() }] });
+    expect(await runner.emitInput(`@s:${target.getSessionId()}`, undefined, "rpc")).toMatchObject({
+      action: "transform",
+      text: `Read or search RPC notes ${target.getSessionFile()} if more context is needed.`,
+    });
+    expect(
+      await runner.emitInput(`@s:${target.getSessionId()}`, undefined, "extension"),
+    ).toMatchObject({ action: "continue" });
+    await runner.emit({ type: "session_shutdown", reason: "quit" });
+    await expect(search()).rejects.toThrow("active caller session");
+    expect(fetch).not.toHaveBeenCalled();
+  } finally {
+    session?.dispose();
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 // Use the locked SDK's own stream helper without adding a production/test dependency.
 const aiUrl = new URL(
