@@ -522,7 +522,19 @@ export class RootRuntime implements DelegationRuntimeApi {
     execution.opened = opened;
     execution.session = opened.session;
     execution.startLeafId = manager.getLeafId();
-    execution.unsubscribe = opened.session.subscribe((event) => this.onEvent(execution, event));
+    execution.unsubscribe = opened.session.subscribe((event) => {
+      if (
+        execution.scope.closing &&
+        execution.session === opened.session &&
+        event.type === "agent_start"
+      ) {
+        // An input hook can outlive shutdown's first abort while the SDK is still idle.
+        // Abort this captured mount again when it starts; never await idle in its listener.
+        void opened.session.abort().catch((error) => this.notify(error));
+        return;
+      }
+      this.onEvent(execution, event);
+    });
   }
   private async start(
     execution: Execution,

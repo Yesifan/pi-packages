@@ -16,6 +16,7 @@ interface Call {
 interface Control {
   calls: Call[];
   prompts: Promise<void>[];
+  finishUnexpectedCalls?: boolean;
   disposed: Map<string, ReturnType<typeof deferred<void>>>;
   waiters: Map<number, ReturnType<typeof deferred<void>>>;
   pause?: { reached: ReturnType<typeof deferred<void>>; resume: ReturnType<typeof deferred<void>> };
@@ -74,6 +75,8 @@ export default function(pi) {
       options?.signal?.addEventListener("abort", abort, { once: true });
       const index = state.calls.push({ finish }) - 1;
       state.waiters.get(index)?.resolve();
+      // Regression tests must fail on provider count, not hang waiting for a rogue run.
+      if (state.finishUnexpectedCalls) finish("unexpected provider call");
       return stream;
     }
   });
@@ -81,7 +84,7 @@ export default function(pi) {
   pi.on("input", async (event) => {
     if (event.text === "consume") return { action: "handled" };
     const pause = globalThis[${JSON.stringify(KEY)}].inputPause;
-    if (pause && event.text === "late steer") { pause.reached.resolve(); await pause.resume.promise; }
+    if (pause && (event.text === "late steer" || event.text === "late input")) { pause.reached.resolve(); await pause.resume.promise; }
     return { action: "continue" };
   });
   pi.on("before_agent_start", async () => {
@@ -236,6 +239,51 @@ describe("actual SDK runtime lifecycle and report processing", () => {
     const next = new PersistentSubagentStore(h.agentDir, h.scope.identity);
     await next.open();
     await next.close();
+  });
+
+  it("aborts a run that starts after shutdown while ordinary input was suspended", async () => {
+    const h = await realHarness();
+    const pause = { reached: deferred(), resume: deferred() };
+    h.control.inputPause = pause;
+    h.control.finishUnexpectedCalls = true;
+    const result = await h.runtime.createSubagent(
+      h.caller,
+      { name: "worker", prompt: "late input" },
+      h.ctx,
+    );
+    expect(result.status).toBe("submitted");
+    await pause.reached.promise;
+    const execution = h.agent("worker").currentExecution!;
+    const session = execution.session!;
+    const abort = vi.spyOn(session, "abort");
+    let stopped = false;
+    const shutdown = h.runtime.shutdown().then(() => {
+      stopped = true;
+    });
+    const contender = new PersistentSubagentStore(h.agentDir, h.scope.identity);
+    try {
+      // The first abort completes while input is suspended: it cannot stop a future run.
+      expect(abort).toHaveBeenCalledTimes(1);
+      await abort.mock.results[0]!.value;
+      expect(stopped).toBe(false);
+      expect(execution.session).toBe(session);
+      await expect(contender.open()).rejects.toMatchObject({ code: "ROOT_SCOPE_IN_USE" });
+    } finally {
+      await contender.close();
+      pause.resume.resolve();
+      await shutdown;
+    }
+    expect(h.scope.executions.size).toBe(0);
+    expect(h.agent("worker").state).toBe("interrupted");
+    expect(execution.session).toBeUndefined();
+    expect(h.reports).toHaveLength(0);
+    const next = new PersistentSubagentStore(h.agentDir, h.scope.identity);
+    try {
+      await next.open();
+    } finally {
+      await next.close();
+    }
+    expect(h.control.calls).toHaveLength(0);
   });
 
   it("aborts a submitted startup and joins its hook before releasing the writer lock", async () => {

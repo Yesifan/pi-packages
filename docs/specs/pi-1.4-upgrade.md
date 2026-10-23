@@ -189,6 +189,14 @@ related_documents:
 - 初次安装在下载重试后的 prepare 阶段 200 秒超时，后续自动安装亦有超时；未计为通过。直接编译与最终正常 pnpm 全仓检查、构建、冻结安装均通过，未通过延长测试超时规避问题。
 - 未执行建议的交互 TUI/print 手测或真实模型测试；未 push、发布或创建 tag。以上完成状态以规格约定的离线集成、全仓回归、pack 和独立审查为边界，不承诺强制终止不合作第三方 hook。
 
+### PR #28 关闭窗口修复（2026-10-23）
+
+审查发现此前启动取消测试暂停在 `before_agent_start`，未覆盖更早的普通 `input` hook。新增真实 SDK 离线 barrier 用例，先确认旧实现于 shutdown 后仍调用 provider 一次；修复后为零次。
+
+关闭中的 scope 收到捕获 session 的公开 `agent_start` 时再次调用公开 `abort()`，不等待事件监听器内的 idle，不复用首次 abort 缓存，不使用内部通知 veto。原 pending/dispose/writer-lock barrier 保留：hook 暂停时锁不可获取，关闭完成后可重新获取。零 provider 仅指该普通输入启动路径，不保证第三方 hook 自身零副作用。
+
+修复后 subagents 全包 22 文件 / 260 项通过，真实 SDK lifecycle 14/14、源码及测试类型检查通过；独立审查未发现明确缺陷。此前 558 项是 2026-10-22 全仓运行记录，不混同本次包级复验。远端 PR CI 仍停在安装依赖失败，本轮没有重跑或将其记为通过。
+
 ## Further Notes
 
 ### 已确认的收敛决定
