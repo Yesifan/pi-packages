@@ -31,6 +31,7 @@
   - `baseUrl`：有效 API base URL。
   - `userId`：绑定的微信真人用户（= owner）。
   - `savedAt`：登录时间。
+- **选择边界**：CLI 账号参数仅接受 name（trim、区分大小写、唯一匹配，无 ID 回退）；在线以 daemon 列表为准。账号选择类 RPC 只接受 ID，`project.account.add/remove` 的字段为 `accountIds`，旧 `accounts` 字段被拒绝；内部配置与路由仍使用 ID。CLI/daemon 升级须匹配版本并重启 daemon，见 [ADR-0007](adr/0007-account-name-id-boundary.md)。
 - **归属**：一个 account 至多属于一个 project（多绑第二个会报错）。
 
 ### 1.3 项目（Project）

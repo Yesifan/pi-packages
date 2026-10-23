@@ -108,6 +108,16 @@ describe("weixin account store", () => {
     expect(resolveWeixinAccountName("acct-a")).toBe("personal");
   });
 
+  it("rejects ambiguous names rather than selecting the first account", () => {
+    for (const id of ["a", "b"]) {
+      registerWeixinAccountId(id);
+      saveWeixinAccount(id, { name: "personal" });
+    }
+    expect(() => resolveWeixinAccountIdByName(" personal ")).toThrow(/ambiguous account name/);
+    expect(resolveWeixinAccountIdByName("Personal")).toBeUndefined();
+    expect(resolveWeixinAccountIdByName("a")).toBeUndefined();
+  });
+
   it("ignores missing files and still removes later files", () => {
     const dir = path.join(dataDir, "accounts");
     fs.mkdirSync(dir, { recursive: true });

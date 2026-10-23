@@ -71,7 +71,7 @@ export function loginCommand(): Command {
         const existingByName = resolveWeixinAccountIdByName(name);
         if (existingByName && existingByName !== accountId) {
           const existingUser = loadWeixinAccount(existingByName)?.userId;
-          if (result.userId && existingUser && existingUser !== result.userId) {
+          if (!result.userId || !existingUser || existingUser !== result.userId) {
             console.error(`error: --name "${name}" is already used by account ${existingByName}`);
             process.exitCode = 1;
             return;

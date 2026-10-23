@@ -7,7 +7,12 @@ import { rpcCall } from "../../src/cli/rpc-client.js";
 import { Daemon, type DaemonDeps } from "../../src/daemon.js";
 import { ProjectStore } from "../../src/projects/project-store.js";
 import { createLogger } from "../../src/util/logger.js";
-import { registerWeixinAccountId, saveWeixinAccount } from "../../src/weixin/auth/accounts.js";
+import {
+  listIndexedWeixinAccountIds,
+  loadWeixinAccount,
+  registerWeixinAccountId,
+  saveWeixinAccount,
+} from "../../src/weixin/auth/accounts.js";
 import {
   clearContextTokensForAccount,
   getContextToken,
@@ -101,6 +106,67 @@ function makeDaemon(overrides: Partial<DaemonDeps> = {}): Daemon {
 }
 
 describe("daemon UDS RPC", () => {
+  it("reports online logout deletion failure without unregistering credentials", async () => {
+    const daemon = makeDaemon();
+    await daemon.start();
+    const original = fs.unlinkSync.bind(fs);
+    const unlink = vi.spyOn(fs, "unlinkSync").mockImplementation((file) => {
+      if (file === path.join(dataDir, "accounts", "acct-a.json")) {
+        throw Object.assign(new Error("unlink denied"), { code: "EACCES" });
+      }
+      original(file);
+    });
+    try {
+      await expect(rpcCall("account.logout", { accountId: "acct-a" }, socketPath)).rejects.toThrow(
+        "unlink denied",
+      );
+      expect(listIndexedWeixinAccountIds()).toContain("acct-a");
+      expect(loadWeixinAccount("acct-a")?.token).toBe("t-a");
+      // The stopped account is no longer selectable online until reload/restart (#36).
+      expect(await rpcCall("account.list", {}, socketPath)).toEqual([]);
+    } finally {
+      unlink.mockRestore();
+    }
+  });
+
+  it("rejects legacy fields, malformed IDs and names without mutating projects", async () => {
+    const daemon = makeDaemon();
+    await daemon.start();
+    await daemon.createProject("foo", projectDir);
+    for (const method of ["project.account.add", "project.account.remove"]) {
+      for (const params of [
+        {},
+        { accounts: ["personal"] },
+        { accounts: [], accountIds: ["acct-a"] },
+        { accountIds: "acct-a" },
+        { accountIds: [1] },
+        { accountIds: [""] },
+        { accountIds: ["personal"] },
+        { accountIds: ["acct-a", "unknown"] },
+      ]) {
+        await expect(rpcCall(method, { name: "foo", ...params }, socketPath)).rejects.toThrow();
+      }
+    }
+    for (const accountId of ["personal", "unknown", "../outside", 1, null]) {
+      await expect(rpcCall("account.logout", { accountId }, socketPath)).rejects.toThrow();
+    }
+    expect(daemon.getProjectStatuses()[0]!.accounts).toEqual([]);
+  });
+
+  it("treats a project RPC ID as an ID even when another account has that name", async () => {
+    registerWeixinAccountId("acct-b");
+    saveWeixinAccount("acct-b", { token: "t-b", name: "acct-a" });
+    const daemon = makeDaemon();
+    await daemon.start();
+    await daemon.createProject("foo", projectDir);
+    await rpcCall("project.account.add", { name: "foo", accountIds: ["acct-a"] }, socketPath);
+    expect(new ProjectStore(path.join(dataDir, "config.json")).list()[0]!.config.accounts).toEqual([
+      "acct-a",
+    ]);
+    await rpcCall("project.account.remove", { name: "foo", accountIds: ["acct-a"] }, socketPath);
+    expect(daemon.getProjectStatuses()[0]!.accounts).toEqual([]);
+  });
+
   it("project create/add account/enable via RPC round-trip against a running daemon", async () => {
     const daemon = makeDaemon();
     await daemon.start();
@@ -125,8 +191,8 @@ describe("daemon UDS RPC", () => {
     expect(list[0]!.enabled).toBe(false);
     expect(list[0]!.accounts).toEqual([]);
 
-    // Add an account by label.
-    await rpcCall("project.account.add", { name: "foo", accounts: ["personal"] }, socketPath);
+    // Add an account by ID.
+    await rpcCall("project.account.add", { name: "foo", accountIds: ["acct-a"] }, socketPath);
     list = await rpcCall<Array<{ name: string; accounts: string[] }>>(
       "project.list",
       {},
@@ -148,8 +214,8 @@ describe("daemon UDS RPC", () => {
     expect(status.version).toBeTruthy();
     expect(status.projects).toHaveLength(1);
 
-    // Remove account by label.
-    await rpcCall("project.account.remove", { name: "foo", accounts: ["personal"] }, socketPath);
+    // Remove account by ID.
+    await rpcCall("project.account.remove", { name: "foo", accountIds: ["acct-a"] }, socketPath);
     list = await rpcCall<Array<{ name: string; accounts: string[] }>>(
       "project.list",
       {},

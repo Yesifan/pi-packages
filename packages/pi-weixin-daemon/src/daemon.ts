@@ -20,7 +20,6 @@ import {
   clearWeixinAccount,
   listIndexedWeixinAccountIds,
   loadWeixinAccount,
-  resolveWeixinAccountIdByName,
   resolveWeixinAccountName,
   unregisterWeixinAccountId,
 } from "./weixin/auth/accounts.js";
@@ -228,29 +227,22 @@ export class Daemon {
     await this.reload();
   }
 
-  /** Add accounts to a project. `accounts` values are account *labels* (resolved to ilink_bot_id). */
-  async addProjectAccounts(name: string, labels: string[]): Promise<void> {
-    const ids: string[] = [];
-    for (const label of labels) {
-      const id = resolveWeixinAccountIdByName(label);
-      if (!id)
-        throw new Error(
-          `account "${label}" is not registered (run \`pi-wx login --name ${label}\` first)`,
-        );
-      ids.push(id);
+  private requireAccountId(accountId: string): void {
+    if (!listIndexedWeixinAccountIds().includes(accountId)) {
+      throw new Error(`unknown account ID "${accountId}"`);
     }
-    this.store.addAccounts(name, ids);
+  }
+
+  /** Control-plane account selectors are IDs, never names. */
+  async addProjectAccounts(name: string, accountIds: string[]): Promise<void> {
+    for (const id of accountIds) this.requireAccountId(id);
+    this.store.addAccounts(name, accountIds);
     await this.reload();
   }
 
-  /** Remove accounts from a project. `accounts` values are account *labels*. */
-  async removeProjectAccounts(name: string, labels: string[]): Promise<void> {
-    const ids = labels.map((label) => {
-      const id = resolveWeixinAccountIdByName(label);
-      if (!id) throw new Error(`account "${label}" is not registered`);
-      return id;
-    });
-    this.store.removeAccounts(name, ids);
+  async removeProjectAccounts(name: string, accountIds: string[]): Promise<void> {
+    for (const id of accountIds) this.requireAccountId(id);
+    this.store.removeAccounts(name, accountIds);
     await this.reload();
   }
 
@@ -300,6 +292,7 @@ export class Daemon {
 
   /** Log out an account: clear credentials, unbind from projects, stop its monitor. */
   async logoutAccount(accountId: string): Promise<void> {
+    this.requireAccountId(accountId);
     // 1. Remove the account from any project config first (config stays valid).
     for (const { name, config } of this.store.list()) {
       if (config.accounts.includes(accountId)) {

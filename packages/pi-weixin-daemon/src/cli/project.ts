@@ -2,6 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { Command } from "commander";
 import type { ProjectStatus } from "../projects/types.js";
+import { requireAccountIdByName } from "../weixin/auth/accounts.js";
+import { listSelectableAccounts } from "./account-selection.js";
 import { formatProjectRow, rpcCall } from "./rpc-client.js";
 
 /** Resolve cwd (require exists + dir). Returns resolved absolute path. */
@@ -18,7 +20,7 @@ export function projectCommand(): Command {
     .description(
       "Manage projects.\n" +
         "  pi-wx project create <name> --cwd <path>\n" +
-        "  pi-wx project <name> add|remove <label>...\n" +
+        "  pi-wx project <name> add|remove <account-name>... (case-sensitive; no IDs)\n" +
         "  pi-wx project list|show|enable|disable|restart|remove",
     )
     .option("--cwd <path>", "project working directory (for create; fixed after creation)")
@@ -92,7 +94,9 @@ async function dispatch(first: string, rest: string[], opts: { cwd?: string }): 
       const verb = rest[0];
       const labels = rest.slice(1);
       if ((verb === "add" || verb === "remove") && labels.length > 0) {
-        await rpcCall(`project.account.${verb}`, { name: projectName, accounts: labels });
+        const { accounts } = await listSelectableAccounts();
+        const accountIds = labels.map((label) => requireAccountIdByName(accounts, label));
+        await rpcCall(`project.account.${verb}`, { name: projectName, accountIds });
         console.log(
           `${verb === "add" ? "Added" : "Removed"} account(s) ${verb === "add" ? "to" : "from"} project "${projectName}".`,
         );

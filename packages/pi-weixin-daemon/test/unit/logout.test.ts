@@ -37,7 +37,48 @@ afterEach(() => {
 });
 
 describe("logout", () => {
-  it.each(["personal", "acct-a"])("uses RPC for online account %s", async (account) => {
+  it.each(["acct-a", "Personal", "unknown", " "])(
+    "rejects non-name %s online and offline",
+    async (name) => {
+      rpc.mockResolvedValueOnce([{ accountId: "acct-a", name: "personal" }]);
+      await expect(logout(name)).rejects.toThrow(/account name/);
+      rpc.mockRejectedValueOnce(new DaemonNotRunningError());
+      await expect(logout(name)).rejects.toThrow(/account name/);
+      expect(loadWeixinAccount("acct-a")?.token).toBe("test-token");
+    },
+  );
+
+  it("uses only the daemon mapping, including name/ID collisions", async () => {
+    rpc.mockResolvedValueOnce([
+      { accountId: "remote", name: "acct-a" },
+      { accountId: "acct-a", name: "other" },
+    ]);
+    rpc.mockResolvedValueOnce({});
+    await logout("acct-a");
+    expect(rpc).toHaveBeenLastCalledWith("account.logout", { accountId: "remote" });
+  });
+
+  it("does not let local names override daemon names", async () => {
+    rpc.mockResolvedValueOnce([{ accountId: "remote", name: "personal" }]);
+    rpc.mockResolvedValueOnce({});
+    await logout();
+    expect(rpc).toHaveBeenLastCalledWith("account.logout", { accountId: "remote" });
+  });
+
+  it("rejects duplicate names online and offline", async () => {
+    registerWeixinAccountId("acct-b");
+    saveWeixinAccount("acct-b", { name: "personal" });
+    rpc.mockResolvedValueOnce([
+      { accountId: "acct-a", name: "personal" },
+      { accountId: "acct-b", name: "personal" },
+    ]);
+    await expect(logout()).rejects.toThrow(/ambiguous account name/);
+    rpc.mockRejectedValueOnce(new DaemonNotRunningError());
+    await expect(logout()).rejects.toThrow(/ambiguous account name/);
+    expect(loadWeixinAccount("acct-a")?.token).toBe("test-token");
+  });
+
+  it.each(["personal", " personal "])("uses RPC for online account %s", async (account) => {
     rpc.mockResolvedValueOnce([{ accountId: "acct-a", name: "personal" }]);
     rpc.mockResolvedValueOnce({});
     await logout(account);
@@ -47,7 +88,7 @@ describe("logout", () => {
     expect(console.log).toHaveBeenCalledWith('Logged out account "acct-a".');
   });
 
-  it.each(["personal", "acct-a"])("clears offline account %s by ID", async (account) => {
+  it.each(["personal", " personal "])("clears offline account %s by ID", async (account) => {
     rpc.mockRejectedValueOnce(new DaemonNotRunningError());
     await logout(account);
     expect(loadWeixinAccount("acct-a")).toBeNull();

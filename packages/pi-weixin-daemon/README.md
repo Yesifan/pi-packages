@@ -91,10 +91,16 @@ npm 全局 bin 目录为 `$(npm config get prefix)/bin`。从仓库根目录可�
 pi-wx login --name personal    # 终端显示二维码，手机扫码（--name 必填）
 pi-wx login --name work        # 再次执行，添加第二个账号（须为另一个微信用户）
 pi-wx accounts                 # 查看已登录账号（NAME / ID / STATUS / USER / PROJECT / SINCE）
-pi-wx logout <账号id|name>     # 登出：清凭据 + 从项目解绑 + 停 monitor
+pi-wx logout <账号name>        # 登出：清凭据 + 从项目解绑 + 停 monitor
 ```
 
-`logout` 在线时由 daemon 统一解绑、停止 monitor 并清理凭据；仅在 socket 不存在或连接被拒绝时按账号 id/name 离线清理本地凭据。其他 RPC 错误会失败退出，不执行本地清理或自动重试；超时不代表 daemon 未执行登出。
+CLI 的账号选择参数（`logout`、`project <项目> add/remove`、`doctor --account`）只接受 **name**：去除首尾空白、区分大小写；未知或重复 name 明确失败，**不会回退匹配 ID**。即使某个 name 恰好等于另一账号的 ID，也只按 name 选择。在线时以 daemon 的 `account.list` 为准，本地账号名称不能覆盖它。
+
+`logout` 在线时由 daemon 统一解绑、停止 monitor 并清理凭据；仅在 socket 不存在或连接被拒绝时允许离线清理。列表连接失败时按本地 name 唯一解析；列表成功、随后登出连接失败时保留已解析的 ID，不重新解析本地名称。其他 RPC 错误会失败退出，不执行本地清理或自动重试；超时不代表 daemon 未执行登出。
+
+删除凭据遇到权限等错误会失败退出，不注销账号索引，也不报告成功。在线登出此时可能已解绑项目并停止 monitor，因此账号可能不再出现在在线列表；修复文件权限后，可停止 daemon 再按 name 离线登出，或重启 daemon 后重试。清理不是事务，不回滚已完成的解绑或文件删除。
+
+**BREAKING / 升级：CLI 与 daemon 必须使用匹配版本，更新安装后运行 `pi-wx restart` 重启 daemon。** 账号选择类 RPC 只接受 ID：`account.logout` 使用 `accountId`，`project.account.add/remove` 使用 `accountIds: string[]`；旧 `accounts` 字段明确报错。daemon 校验 ID 已注册，不解析名称。内部存储和路由仍使用 ID，无需迁移现有账号数据。
 
 `--name` 是账号标识（全局唯一）；账号 **id 仍为扫码返回的 `ilink_bot_id`**（服务端分配，作为 Project 路由 key）。**同一微信用户只可扫码一次**；再次登录同一用户会替换旧账号（按 `ilink_user_id` 去重）。
 
@@ -103,8 +109,10 @@ pi-wx logout <账号id|name>     # 登出：清凭据 + 从项目解绑 + 停 mo
 ### 2. 诊断
 
 ```bash
-pi-wx doctor --cwd /path/to/project --account <id>
+pi-wx doctor --cwd /path/to/project --account personal
 ```
+
+`--account <name>` 可重复；省略时检查全部账号。在线使用 daemon 列表选择账号，仅在明确离线（socket 不存在或连接被拒绝）时改用本地列表，因此仍可在启动 daemon 前诊断。其他 RPC 错误会报错，不静默回退。
 
 ### 3. 启动 daemon + 注册 Project
 

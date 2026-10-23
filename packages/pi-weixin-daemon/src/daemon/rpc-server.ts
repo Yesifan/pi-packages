@@ -4,6 +4,18 @@ import { resolveDaemonSocket, resolveRuntimeDir } from "../config/paths.js";
 import type { Daemon } from "../daemon.js";
 import type { Logger } from "../util/logger.js";
 
+function accountIdsParam(params: Record<string, unknown>): string[] {
+  if ("accounts" in params)
+    throw new Error(
+      "accounts is no longer supported; use accountIds (CLI and daemon versions must match)",
+    );
+  const ids = params.accountIds;
+  if (!Array.isArray(ids) || !ids.every((id) => typeof id === "string" && id.trim().length > 0)) {
+    throw new Error("accountIds must be an array of non-empty account IDs");
+  }
+  return ids;
+}
+
 interface RpcRequest {
   id: number;
   method: string;
@@ -109,16 +121,10 @@ export class RpcServer {
         await this.daemon.createProject(params.name as string, params.cwd as string);
         return this.daemon.getProjectStatuses();
       case "project.account.add":
-        await this.daemon.addProjectAccounts(
-          params.name as string,
-          (params.accounts ?? []) as string[],
-        );
+        await this.daemon.addProjectAccounts(params.name as string, accountIdsParam(params));
         return this.daemon.getProjectStatuses();
       case "project.account.remove":
-        await this.daemon.removeProjectAccounts(
-          params.name as string,
-          (params.accounts ?? []) as string[],
-        );
+        await this.daemon.removeProjectAccounts(params.name as string, accountIdsParam(params));
         return this.daemon.getProjectStatuses();
       case "project.enable":
         await this.daemon.setProjectEnabled(params.name as string, true);
@@ -146,6 +152,9 @@ export class RpcServer {
         await this.daemon.reloadAccounts();
         return this.daemon.getAccountStatuses();
       case "account.logout":
+        if (typeof params.accountId !== "string" || !params.accountId.trim()) {
+          throw new Error("accountId must be a non-empty account ID");
+        }
         await this.daemon.logoutAccount(params.accountId as string);
         return this.daemon.getAccountStatuses();
       default:

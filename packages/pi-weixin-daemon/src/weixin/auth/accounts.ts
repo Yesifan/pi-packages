@@ -160,14 +160,36 @@ export function saveWeixinAccount(
   }
 }
 
-/** Resolve the account id (ilink_bot_id) for a given account label, if any. */
-export function resolveWeixinAccountIdByName(name: string): string | undefined {
+export interface NamedAccount {
+  accountId: string;
+  name?: string;
+}
+
+/** Match names only, case-sensitively; never silently choose among duplicates. */
+export function findAccountIdByName(accounts: NamedAccount[], name: string): string | undefined {
   const target = name.trim();
   if (!target) return undefined;
-  for (const id of listIndexedWeixinAccountIds()) {
-    if (loadWeixinAccount(id)?.name?.trim() === target) return id;
-  }
-  return undefined;
+  const matches = accounts.filter((account) => account.name?.trim() === target);
+  if (matches.length > 1) throw new Error(`ambiguous account name "${target}"`);
+  return matches[0]?.accountId;
+}
+
+export function requireAccountIdByName(accounts: NamedAccount[], name: string): string {
+  const id = findAccountIdByName(accounts, name);
+  if (!id) throw new Error(`unknown account name "${name.trim()}"`);
+  return id;
+}
+
+export function listLocalNamedAccounts(): NamedAccount[] {
+  return listIndexedWeixinAccountIds().map((accountId) => ({
+    accountId,
+    name: loadWeixinAccount(accountId)?.name,
+  }));
+}
+
+/** Resolve a unique local name, if present (also used for login collision checks). */
+export function resolveWeixinAccountIdByName(name: string): string | undefined {
+  return findAccountIdByName(listLocalNamedAccounts(), name);
 }
 
 /** Resolve the account label for a given account id (ilink_bot_id), if any. */

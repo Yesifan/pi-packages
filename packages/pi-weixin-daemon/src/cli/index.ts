@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { VERSION } from "../version.js";
+import { listSelectableAccounts } from "./account-selection.js";
 import { accountsCommand } from "./accounts.js";
 import { broadcastCommand } from "./broadcast.js";
 import {
@@ -42,18 +43,15 @@ function logoutCommand(): Command {
     .description(
       "Log out a Weixin account (clear credentials, unbind from projects, stop its monitor)",
     )
-    .argument("<account>", "account id or name")
+    .argument("<name>", "account name (case-sensitive; IDs are not accepted)")
     .action(async (account: string) => {
       const { rpcCall, DaemonNotRunningError } = await import("./rpc-client.js");
-      const { resolveWeixinAccountIdByName, unregisterWeixinAccountId, clearWeixinAccount } =
+      const { requireAccountIdByName, unregisterWeixinAccountId, clearWeixinAccount } =
         await import("../weixin/auth/accounts.js");
-      const localAccountId = resolveWeixinAccountIdByName(account);
-      let resolved = localAccountId ?? account;
+      const { accounts, offline } = await listSelectableAccounts(true);
+      const resolved = requireAccountIdByName(accounts, account);
       try {
-        const list = await rpcCall<Array<{ accountId: string; name?: string }>>("account.list");
-        const hit = list.find((a) => a.accountId === account || a.name === account);
-        const accountId = (hit?.accountId ?? account) as string;
-        resolved = localAccountId ?? accountId;
+        if (offline) throw new DaemonNotRunningError();
         await rpcCall("account.logout", { accountId: resolved });
         console.log(`Logged out account "${resolved}".`);
       } catch (err) {
