@@ -83,6 +83,35 @@ function makeRawMessage(overrides: Partial<WeixinMessage> = {}): WeixinMessage {
 }
 
 describe("ILinkWeixinTransport (mocked api)", () => {
+  it("ignores an old inbound download after cancellation", async () => {
+    const downloads = await import("../../src/weixin/media/media-download.js");
+    let finish!: (value: { attachments: []; failures: [] }) => void;
+    const download = vi.spyOn(downloads, "downloadAttachmentsFromMessage").mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const t = new ILinkWeixinTransport({
+      accountId: "cancelled",
+      token: "fake",
+      baseUrl: "https://example.com",
+      logger,
+    });
+    const controller = new AbortController();
+    await t.receive(controller.signal);
+    const handler = vi.fn(async () => {});
+    t.onMessage(handler);
+    const inbound = capturedOnInbound.current!(makeRawMessage());
+    controller.abort();
+    finish({ attachments: [], failures: [] });
+    await inbound;
+    expect(handler).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(stateDir, "accounts", "cancelled.context-tokens.json"))).toBe(
+      false,
+    );
+    download.mockRestore();
+  });
   it("start() notifies start; stop() aborts monitor and notifies stop", async () => {
     const t = new ILinkWeixinTransport({
       accountId: "acct-a",
@@ -91,6 +120,7 @@ describe("ILinkWeixinTransport (mocked api)", () => {
       logger,
     });
     await t.start();
+    await t.receive(new AbortController().signal);
     expect(apiMocks.notifyStart).toHaveBeenCalledTimes(1);
 
     await t.stop();
@@ -148,6 +178,7 @@ describe("ILinkWeixinTransport (mocked api)", () => {
       logger,
     });
     await t.start();
+    await t.receive(new AbortController().signal);
 
     const handler = vi.fn(async () => undefined);
     t.onMessage(handler);
@@ -167,6 +198,7 @@ describe("ILinkWeixinTransport (mocked api)", () => {
       logger,
     });
     await t.start();
+    await t.receive(new AbortController().signal);
 
     const handler = vi.fn(async () => undefined);
     t.onMessage(handler);
@@ -184,6 +216,7 @@ describe("ILinkWeixinTransport (mocked api)", () => {
       logger,
     });
     await t.start();
+    await t.receive(new AbortController().signal);
 
     const seen: string[] = [];
     t.onMessage(async (msg) => {
@@ -209,6 +242,7 @@ describe("ILinkWeixinTransport (mocked api)", () => {
       logger,
     });
     await t.start();
+    await t.receive(new AbortController().signal);
 
     await capturedOnInbound.current!(makeRawMessage());
 
@@ -229,6 +263,7 @@ describe("ILinkWeixinTransport (mocked api)", () => {
       logger,
     });
     await t.start();
+    await t.receive(new AbortController().signal);
 
     await capturedOnInbound.current!(makeRawMessage());
 

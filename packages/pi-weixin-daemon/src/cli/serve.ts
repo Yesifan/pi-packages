@@ -1,4 +1,6 @@
 import { Command } from "commander";
+import { withControlLock } from "../config/control-lock.js";
+import { migrateLegacyAccounts } from "../config/paths.js";
 import { Daemon } from "../daemon.js";
 import { createLogger } from "../util/logger.js";
 
@@ -39,6 +41,7 @@ export function serveCommand(): Command {
       const daemon = new Daemon({ logger, startRpc: true });
       installSignalHandlers(daemon, logger);
       try {
+        await withControlLock(() => migrateLegacyAccounts());
         await daemon.start();
         await daemon.waitForShutdown();
       } catch (err) {

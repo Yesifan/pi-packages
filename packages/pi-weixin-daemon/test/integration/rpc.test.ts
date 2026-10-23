@@ -4,12 +4,14 @@ import path from "node:path";
 import { pino } from "pino";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AccountManager } from "../../src/accounts/account-manager.js";
+import { ControlStore } from "../../src/cli/control-store.js";
 import { buildProgram } from "../../src/cli/index.js";
 import { rpcCall } from "../../src/cli/rpc-client.js";
+import { withControlLock } from "../../src/config/control-lock.js";
 import * as paths from "../../src/config/paths.js";
 import { Daemon, type DaemonDeps } from "../../src/daemon.js";
 import { ProjectStore } from "../../src/projects/project-store.js";
-import type { AccountInfo, AccountStatus } from "../../src/projects/types.js";
+import type { AccountInfo } from "../../src/projects/types.js";
 import { createLogger } from "../../src/util/logger.js";
 import {
   listIndexedWeixinAccountIds,
@@ -68,7 +70,7 @@ function saveAccount(id: string, userId?: string): void {
 }
 
 function configureProject(name: string, accounts: string[], enabled = true): void {
-  new ProjectStore(path.join(dataDir, "config.json")).upsert(name, {
+  new ProjectStore().upsert(name, {
     cwd: projectDir,
     accounts,
     enabled,
@@ -81,6 +83,11 @@ beforeEach(() => {
   projectDir = fs.mkdtempSync(path.join(process.cwd(), "test/.tmp", "rpc-proj-"));
   socketPath = path.join(dataDir, "daemon.sock");
   process.env.PI_WEIXIN_DATA_DIR = dataDir;
+  vi.stubEnv("XDG_CONFIG_HOME", dataDir);
+  vi.stubEnv("PI_WEIXIN_STATE_DIR", dataDir);
+  vi.spyOn(paths, "resolveDaemonSocket").mockReturnValue(socketPath);
+  vi.spyOn(console, "log").mockImplementation(() => {});
+  vi.spyOn(console, "warn").mockImplementation(() => {});
   registerWeixinAccountId("acct-a");
   saveWeixinAccount("acct-a", { token: "t-a", name: "personal" });
 });
@@ -88,6 +95,8 @@ beforeEach(() => {
 afterEach(async () => {
   for (const daemon of daemons) await daemon.stop();
   for (const id of broadcastAccounts) clearContextTokensForAccount(id);
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   if (OLD_DATA === undefined) delete process.env.PI_WEIXIN_DATA_DIR;
   else process.env.PI_WEIXIN_DATA_DIR = OLD_DATA;
   fs.rmSync(dataDir, { recursive: true, force: true });
@@ -95,7 +104,7 @@ afterEach(async () => {
 });
 
 function makeDaemon(overrides: Partial<DaemonDeps> = {}): Daemon {
-  const store = new ProjectStore(path.join(dataDir, "config.json"));
+  const store = new ProjectStore();
   const daemon = new Daemon({
     logger,
     store,
@@ -110,208 +119,120 @@ function makeDaemon(overrides: Partial<DaemonDeps> = {}): Daemon {
 }
 
 describe("daemon UDS RPC", () => {
-  it.each([".json", ".sync.json", ".context-tokens.json"])(
-    "keeps online logout selectable after %s deletion fails and allows CLI retry",
-    async (suffix) => {
-      configureProject("foo", ["acct-a"], false);
-      const daemon = makeDaemon();
-      await daemon.start();
-      const original = fs.unlinkSync.bind(fs);
-      const unlink = vi.spyOn(fs, "unlinkSync").mockImplementation((file) => {
-        if (file === path.join(dataDir, "accounts", `acct-a${suffix}`)) {
-          throw Object.assign(new Error("unlink denied"), { code: "EACCES" });
-        }
-        original(file);
-      });
-      try {
-        await expect(
-          rpcCall("account.logout", { accountId: "acct-a" }, socketPath),
-        ).rejects.toThrow("unlink denied");
-        expect(listIndexedWeixinAccountIds()).toContain("acct-a");
-        expect(loadWeixinAccount("acct-a")?.token).toBe("t-a");
-        const accounts = await rpcCall<AccountInfo[]>("account.list", {}, socketPath);
-        expect(accounts).toEqual([
-          expect.objectContaining({
-            accountId: "acct-a",
-            name: "personal",
-            status: "stopped",
-            since: loadWeixinAccount("acct-a")?.savedAt,
-          }),
-        ]);
-        expect(accounts[0]?.projectId).toBeUndefined();
-        unlink.mockRestore();
-        const socket = vi.spyOn(paths, "resolveDaemonSocket").mockReturnValue(socketPath);
-        const log = vi.spyOn(console, "log").mockImplementation(() => {});
-        try {
-          await buildProgram().parseAsync(["logout", "personal"], { from: "user" });
-          expect(log).toHaveBeenCalledWith('Logged out account "acct-a".');
-        } finally {
-          socket.mockRestore();
-          log.mockRestore();
-        }
-        expect(await rpcCall("account.list", {}, socketPath)).toEqual([]);
-        expect(listIndexedWeixinAccountIds()).toEqual([]);
-        expect(loadWeixinAccount("acct-a")).toBeNull();
-      } finally {
-        unlink.mockRestore();
-      }
-    },
-  );
+  it("rejects bound logout and replacement; unbind/save/sync/cleanup removes the monitor across restart", async () => {
+    saveWeixinAccount("acct-a", { userId: "owner" });
+    configureProject("foo", ["acct-a"], false);
+    const transport = new FakeWeixinTransport();
+    const stop = vi.spyOn(transport, "stop");
+    const daemon = makeDaemon({ getAccountTransport: async () => transport });
+    await daemon.start();
+    const cli = new ControlStore();
+    await expect(cli.logout("personal")).rejects.toThrow(/foo.*unbind/);
+    await expect(
+      cli.login("replacement", { name: "personal", userId: "owner", token: "fake" }),
+    ).rejects.toThrow(/foo.*unbind/);
+    expect(listIndexedWeixinAccountIds()).toEqual(["acct-a"]);
+    expect(stop).not.toHaveBeenCalled();
+    await cli.project("account.remove", "foo", { names: ["personal"] });
+    await buildProgram().parseAsync(["logout", "personal"], { from: "user" });
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(loadWeixinAccount("acct-a")).toBeNull();
+    expect(listIndexedWeixinAccountIds()).toEqual([]);
+    expect(await rpcCall("account.list", {}, socketPath)).toEqual([]);
+    await daemon.stop();
+    const factory = vi.fn(async () => new FakeWeixinTransport());
+    await makeDaemon({ getAccountTransport: factory }).start();
+    expect(factory).not.toHaveBeenCalled();
+  });
 
-  it("lists registered accounts without monitors alongside online accounts", async () => {
+  it("reports committed configuration but skips cleanup when stopping fails", async () => {
+    const transport = new FakeWeixinTransport();
+    const daemon = makeDaemon({ getAccountTransport: async () => transport });
+    await daemon.start();
+    const stop = vi.spyOn(transport, "stop").mockRejectedValue(new Error("stop failed"));
+    try {
+      await expect(
+        buildProgram().parseAsync(["logout", "personal"], { from: "user" }),
+      ).rejects.toThrow(/saved; application failed/);
+      expect(listIndexedWeixinAccountIds()).toEqual([]);
+      expect(loadWeixinAccount("acct-a")?.token).toBe("t-a");
+      expect(await rpcCall<AccountInfo[]>("account.list", {}, socketPath)).toEqual([
+        expect.objectContaining({ accountId: "acct-a", registered: false, status: "error" }),
+      ]);
+    } finally {
+      stop.mockRestore();
+    }
+  });
+
+  it("reads current state after taking the lock and rebuilds same-ID credentials", async () => {
+    const transports: FakeWeixinTransport[] = [];
+    const factory = vi.fn(async () => {
+      const t = new FakeWeixinTransport();
+      transports.push(t);
+      return t;
+    });
+    const daemon = makeDaemon({ getAccountTransport: factory });
+    await daemon.start();
+    const stop = vi.spyOn(transports[0]!, "stop");
+    await new ControlStore().login("acct-a", { name: "personal", token: "new-fake" });
+    await rpcCall("control.sync", { identity: daemon.identity }, socketPath);
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(factory).toHaveBeenLastCalledWith("acct-a", "new-fake", undefined);
+    // A reconcile queued behind a writer must read after that writer's commit.
+    let reload!: Promise<void>;
+    await withControlLock(async () => {
+      reload = daemon.reload();
+      const { saveWeixinAccountIds } = await import("../../src/weixin/auth/accounts.js");
+      saveWeixinAccountIds([]);
+    });
+    await reload;
+    expect(daemon.getControlStatus().runningAccountIds).toEqual([]);
+    expect(factory).toHaveBeenCalledTimes(2);
+  });
+
+  it("lists registered accounts without monitors and retains unregistered actual receivers", async () => {
     registerWeixinAccountId("no-token");
-    saveWeixinAccount("no-token", { name: "waiting", userId: "owner" });
-    registerWeixinAccountId("missing-file");
-    configureProject("foo", ["acct-a", "no-token"], false);
+    saveWeixinAccount("no-token", { name: "waiting" });
     const daemon = makeDaemon();
     await daemon.start();
     expect(await rpcCall("account.list", {}, socketPath)).toEqual([
-      expect.objectContaining({
-        accountId: "acct-a",
-        name: "personal",
-        status: "online",
-        projectId: "foo",
-        since: loadWeixinAccount("acct-a")?.savedAt,
-      }),
-      {
-        accountId: "no-token",
-        name: "waiting",
-        userId: "owner",
-        status: "stopped",
-        projectId: "foo",
-      },
-      { accountId: "missing-file", status: "stopped" },
+      expect.objectContaining({ accountId: "acct-a", registered: true, status: "online" }),
+      expect.objectContaining({ accountId: "no-token", registered: true, status: "stopped" }),
     ]);
+    const live = vi
+      .spyOn(AccountManager.prototype, "listAccounts")
+      .mockReturnValue([{ accountId: "unregistered", status: "error", error: "stop failed" }]);
+    try {
+      expect(await rpcCall("account.list", {}, socketPath)).toContainEqual(
+        expect.objectContaining({ accountId: "unregistered", registered: false, status: "error" }),
+      );
+    } finally {
+      live.mockRestore();
+    }
   });
 
-  it.each<AccountStatus>(["offline", "connecting", "online", "reauth-required", "error"])(
-    "preserves live %s status and metadata while excluding unregistered monitors",
-    async (status) => {
-      const daemon = makeDaemon();
-      await daemon.start();
-      configureProject("foo", ["acct-a"], false);
-      const live = vi.spyOn(AccountManager.prototype, "listAccounts").mockReturnValue([
-        { accountId: "acct-a", status, userId: "live-user", error: "live-detail" },
-        { accountId: "unregistered", status: "online" },
-      ]);
-      try {
-        expect(await rpcCall("account.list", {}, socketPath)).toEqual([
-          {
-            accountId: "acct-a",
-            name: "personal",
-            status,
-            userId: "live-user",
-            error: "live-detail",
-            projectId: "foo",
-            since: loadWeixinAccount("acct-a")?.savedAt,
-          },
-        ]);
-      } finally {
-        live.mockRestore();
-      }
-    },
-  );
-
-  it("rejects legacy fields, malformed IDs and names without mutating projects", async () => {
+  it("CLI saves project configuration and RPC only applies matching storage identities", async () => {
     const daemon = makeDaemon();
     await daemon.start();
-    await daemon.createProject("foo", projectDir);
-    for (const method of ["project.account.add", "project.account.remove"]) {
-      for (const params of [
-        {},
-        { accounts: ["personal"] },
-        { accounts: [], accountIds: ["acct-a"] },
-        { accountIds: "acct-a" },
-        { accountIds: [1] },
-        { accountIds: [""] },
-        { accountIds: ["personal"] },
-        { accountIds: ["acct-a", "unknown"] },
-      ]) {
-        await expect(rpcCall(method, { name: "foo", ...params }, socketPath)).rejects.toThrow();
-      }
+    const cli = new ControlStore();
+    await cli.project("create", "foo", { cwd: projectDir });
+    await cli.project("account.add", "foo", { names: ["personal"] });
+    await cli.project("enable", "foo");
+    await expect(
+      rpcCall("control.sync", { identity: "other-instance" }, socketPath),
+    ).rejects.toThrow(/identity mismatch/);
+    for (const method of [
+      "project.create",
+      "project.account.add",
+      "project.enable",
+      "account.logout",
+    ]) {
+      await expect(rpcCall(method, {}, socketPath)).rejects.toThrow(/moved to CLI/);
     }
-    for (const accountId of ["personal", "unknown", "../outside", 1, null]) {
-      await expect(rpcCall("account.logout", { accountId }, socketPath)).rejects.toThrow();
-    }
-    expect(daemon.getProjectStatuses()[0]!.accounts).toEqual([]);
-  });
-
-  it("treats a project RPC ID as an ID even when another account has that name", async () => {
-    registerWeixinAccountId("acct-b");
-    saveWeixinAccount("acct-b", { token: "t-b", name: "acct-a" });
-    const daemon = makeDaemon();
-    await daemon.start();
-    await daemon.createProject("foo", projectDir);
-    await rpcCall("project.account.add", { name: "foo", accountIds: ["acct-a"] }, socketPath);
-    expect(new ProjectStore(path.join(dataDir, "config.json")).list()[0]!.config.accounts).toEqual([
-      "acct-a",
+    await rpcCall("control.sync", { identity: daemon.identity }, socketPath);
+    expect(daemon.getProjectStatuses()).toEqual([
+      expect.objectContaining({ name: "foo", accounts: ["personal"], state: "idle" }),
     ]);
-    await rpcCall("project.account.remove", { name: "foo", accountIds: ["acct-a"] }, socketPath);
-    expect(daemon.getProjectStatuses()[0]!.accounts).toEqual([]);
-  });
-
-  it("project create/add account/enable via RPC round-trip against a running daemon", async () => {
-    const daemon = makeDaemon();
-    await daemon.start();
-
-    // Initially empty.
-    let list = await rpcCall<Array<{ name: string; state: string }>>(
-      "project.list",
-      {},
-      socketPath,
-    );
-    expect(list).toEqual([]);
-
-    // Create (disabled by default, accounts=[]).
-    await rpcCall("project.create", { name: "foo", cwd: projectDir }, socketPath);
-    list = await rpcCall<Array<{ name: string; enabled: boolean; accounts: string[] }>>(
-      "project.list",
-      {},
-      socketPath,
-    );
-    expect(list).toHaveLength(1);
-    expect(list[0]!.name).toBe("foo");
-    expect(list[0]!.enabled).toBe(false);
-    expect(list[0]!.accounts).toEqual([]);
-
-    // Add an account by ID.
-    await rpcCall("project.account.add", { name: "foo", accountIds: ["acct-a"] }, socketPath);
-    list = await rpcCall<Array<{ name: string; accounts: string[] }>>(
-      "project.list",
-      {},
-      socketPath,
-    );
-    expect(list[0]!.accounts).toEqual(["personal"]);
-
-    // Enable -> runtime starts.
-    await rpcCall("project.enable", { name: "foo" }, socketPath);
-    const statuses = await rpcCall<Array<{ state: string }>>("project.list", {}, socketPath);
-    expect(statuses[0]!.state).toBe("idle");
-
-    // daemon.status snapshot.
-    const status = await rpcCall<{ version: string; projects: unknown[]; accounts: unknown[] }>(
-      "daemon.status",
-      {},
-      socketPath,
-    );
-    expect(status.version).toBeTruthy();
-    expect(status.projects).toHaveLength(1);
-
-    // Remove account by ID.
-    await rpcCall("project.account.remove", { name: "foo", accountIds: ["acct-a"] }, socketPath);
-    list = await rpcCall<Array<{ name: string; accounts: string[] }>>(
-      "project.list",
-      {},
-      socketPath,
-    );
-    expect(list[0]!.accounts).toEqual([]);
-
-    // Remove.
-    await rpcCall("project.remove", { name: "foo" }, socketPath);
-    list = await rpcCall<Array<{ name: string }>>("project.list", {}, socketPath);
-    expect(list).toEqual([]);
-
-    await daemon.stop();
   });
 
   it("broadcasts original text only to the selected project's owners, including restored tokens after restart", async () => {
@@ -448,7 +369,7 @@ describe("daemon UDS RPC", () => {
     saveAccount("no-context", "owner-no-context");
     setContextToken("acct-a", "owner-a", "private-context-a");
     setContextToken("acct-b", "owner-b", "private-context-b");
-    configureProject("foo", ["acct-a", "no-context", "acct-b"]);
+    configureProject("foo", ["acct-a", "no-context", "acct-b"], false);
     const { logger, entries } = captureLogs();
     const failedTransport = new FakeWeixinTransport();
     const successfulTransport = new FakeWeixinTransport();
@@ -467,6 +388,8 @@ describe("daemon UDS RPC", () => {
       },
     });
     await daemon.start();
+    configureProject("foo", ["acct-a", "no-context", "acct-b"], true);
+    await expect(daemon.reload()).rejects.toThrow("application failed");
     expect(await rpcCall("project.broadcast", { name: "foo", text }, socketPath)).toEqual({
       succeeded: 1,
       skipped: 1,

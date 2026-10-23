@@ -1,12 +1,13 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { atomicWriteFile } from "./atomic-write.js";
 
 /**
  * XDG-resolution for all pi-weixin-daemon paths.
  *
  * Layout (unified, XDG-compliant):
- *   config  : $XDG_CONFIG_HOME/pi-weixin-daemon/config.json  (project config — daemon is sole writer)
+ *   config  : $XDG_CONFIG_HOME/pi-weixin-daemon/config.json  (project config — CLI is sole writer)
  *   data    : $XDG_DATA_HOME/pi-weixin-daemon/accounts/      (account credentials / index)
  *   state   : $XDG_STATE_HOME/pi-weixin-daemon/weixin/       (sync-buf, context-tokens — ephemeral)
  *   runtime : $XDG_RUNTIME_DIR/pi-weixin-daemon/daemon.sock  (UDS)
@@ -93,11 +94,14 @@ export function resolveDaemonSocket(): string {
 export function migrateLegacyAccounts(): void {
   const legacyDir = resolveLegacyAccountsDir();
   const targetDir = resolveAccountsDir();
+  // A committed modern index is authoritative, including an empty one after logout.
+  if (fs.existsSync(path.join(targetDir, "accounts.json"))) return;
   if (!fs.existsSync(legacyDir)) return;
 
   fs.mkdirSync(targetDir, { recursive: true });
   let copied = false;
   for (const name of fs.readdirSync(legacyDir)) {
+    if (name === "accounts.json") continue;
     const src = path.join(legacyDir, name);
     const dest = path.join(targetDir, name);
     try {
@@ -106,15 +110,18 @@ export function migrateLegacyAccounts(): void {
       continue;
     }
     if (fs.existsSync(dest)) continue;
-    fs.copyFileSync(src, dest);
+    atomicWriteFile(dest, fs.readFileSync(src));
     copied = true;
   }
 
   // Migrate the accounts.json index too.
-  const legacyIndex = path.join(resolveWeixinStateDir(), "accounts.json");
+  const nestedIndex = path.join(legacyDir, "accounts.json");
+  const legacyIndex = fs.existsSync(nestedIndex)
+    ? nestedIndex
+    : path.join(resolveWeixinStateDir(), "accounts.json");
   const targetIndex = path.join(targetDir, "accounts.json");
   if (fs.existsSync(legacyIndex) && !fs.existsSync(targetIndex)) {
-    fs.copyFileSync(legacyIndex, targetIndex);
+    atomicWriteFile(targetIndex, fs.readFileSync(legacyIndex));
     copied = true;
   }
 

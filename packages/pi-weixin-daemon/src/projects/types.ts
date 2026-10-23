@@ -57,6 +57,8 @@ export type AccountStatus =
   | "stopped";
 
 export interface AccountInfo {
+  /** False exposes a receiver still present after registry removal. */
+  registered?: boolean;
   /** ilink_bot_id (the routing key). */
   accountId: string;
   /** User-chosen label (globally unique). */

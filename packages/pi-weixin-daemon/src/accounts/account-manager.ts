@@ -1,5 +1,6 @@
 import type { AccountInfo, AccountStatus } from "../projects/types.js";
 import type { Logger } from "../util/logger.js";
+import { restoreContextTokens } from "../weixin/storage/context-token.js";
 import type { InboundMessage, WeixinTransport } from "../weixin/types.js";
 
 export interface ManagedAccount {
@@ -27,6 +28,7 @@ export class AccountManager {
   private accounts = new Map<string, ManagedAccount>();
   private inboundHandlers: Array<(message: InboundMessage) => Promise<void>> = [];
   private unsubscribes = new Map<string, () => void>();
+  private receivers = new Map<string, { controller: AbortController; task?: Promise<void> }>();
 
   constructor(private readonly opts: AccountManagerOptions) {}
 
@@ -35,6 +37,7 @@ export class AccountManager {
     if (this.accounts.has(accountId)) {
       throw new Error(`account already registered: ${accountId}`);
     }
+    restoreContextTokens(accountId, userId);
     await transport.start();
     const unsub = transport.onMessage((msg) => this.forward(msg));
     this.accounts.set(accountId, {
@@ -44,20 +47,44 @@ export class AccountManager {
       userId,
     });
     this.unsubscribes.set(accountId, unsub);
+    const receiver = {
+      controller: new AbortController(),
+      task: undefined as Promise<void> | undefined,
+    };
+    this.receivers.set(accountId, receiver);
+    if (transport.receive) {
+      receiver.task = transport.receive(receiver.controller.signal);
+      void receiver.task.then(
+        () => {
+          if (this.receivers.get(accountId) === receiver) this.setStatus(accountId, "stopped");
+        },
+        () => {
+          if (this.receivers.get(accountId) === receiver)
+            this.setStatus(accountId, "error", "receive task failed");
+          this.opts.logger.error({ account: accountId }, "receive task failed");
+        },
+      );
+    }
     this.opts.logger.info({ account: accountId }, "account registered");
   }
 
   async remove(accountId: string): Promise<void> {
     const mgd = this.accounts.get(accountId);
     if (!mgd) return;
+    const receiver = this.receivers.get(accountId);
+    receiver?.controller.abort();
+    try {
+      await receiver?.task;
+      await mgd.transport.stop();
+    } catch (error) {
+      this.setStatus(accountId, "error", "stop failed");
+      this.opts.logger.error({ account: accountId }, "account stop failed; not confirmed stopped");
+      throw error;
+    }
     this.unsubscribes.get(accountId)?.();
     this.unsubscribes.delete(accountId);
+    this.receivers.delete(accountId);
     this.accounts.delete(accountId);
-    await mgd.transport
-      .stop()
-      .catch((err: unknown) =>
-        this.opts.logger.warn({ err, account: accountId }, "account transport stop error"),
-      );
   }
 
   has(accountId: string): boolean {
@@ -102,7 +129,7 @@ export class AccountManager {
 
   async stopAll(): Promise<void> {
     for (const id of [...this.unsubscribes.keys()]) {
-      await this.remove(id).catch(() => {});
+      await this.remove(id);
     }
   }
 

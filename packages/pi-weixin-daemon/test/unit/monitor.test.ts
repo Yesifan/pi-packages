@@ -41,6 +41,23 @@ function makeMessage(overrides: Partial<WeixinMessage> = {}): WeixinMessage {
 }
 
 describe("monitorWeixinProvider", () => {
+  it("drops a late poll response after cancellation without writing progress", async () => {
+    const control = new AbortController();
+    const onInbound = vi.fn(async () => {});
+    await monitorWeixinProvider({
+      baseUrl: "https://example.com",
+      accountId: "cancelled",
+      logger,
+      abortSignal: control.signal,
+      onInbound,
+      getUpdatesFn: async () => {
+        control.abort();
+        return { ret: 0, msgs: [makeMessage()], get_updates_buf: "late" };
+      },
+    });
+    expect(onInbound).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(stateDir, "accounts", "cancelled.sync.json"))).toBe(false);
+  });
   it("polls, persists get_updates_buf and forwards inbound messages", async () => {
     const control = new AbortController();
     const onInbound = vi.fn(async () => {});

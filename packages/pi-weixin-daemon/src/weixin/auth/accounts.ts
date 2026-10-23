@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
+import { atomicWriteJson } from "../../config/atomic-write.js";
 import { resolveAccountsDir, resolveStateDir } from "../storage/state-dir.js";
 
 export const DEFAULT_BASE_URL = "https://ilinkai.weixin.qq.com";
@@ -36,13 +37,16 @@ function resolveAccountIndexPath(): string {
 export function listIndexedWeixinAccountIds(): string[] {
   const filePath = resolveAccountIndexPath();
   try {
-    if (!fs.existsSync(filePath)) return [];
     const raw = fs.readFileSync(filePath, "utf-8");
-    const parsed = z.array(z.string().min(1)).safeParse(JSON.parse(raw));
-    return parsed.success ? parsed.data : [];
-  } catch {
-    return [];
+    return z.array(z.string().min(1)).parse(JSON.parse(raw));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw new Error(`Cannot read account registry: ${filePath}`);
   }
+}
+
+export function saveWeixinAccountIds(ids: string[]): void {
+  atomicWriteJson(resolveAccountIndexPath(), ids);
 }
 
 /** Add accountId to the persistent index (no-op if already present). */
@@ -54,7 +58,7 @@ export function registerWeixinAccountId(accountId: string): void {
   if (existing.includes(accountId)) return;
 
   const updated = [...existing, accountId];
-  fs.writeFileSync(resolveAccountIndexPath(), JSON.stringify(updated, null, 2), "utf-8");
+  saveWeixinAccountIds(updated);
 }
 
 /** Remove accountId from the persistent index. */
@@ -62,7 +66,7 @@ export function unregisterWeixinAccountId(accountId: string): void {
   const existing = listIndexedWeixinAccountIds();
   const updated = existing.filter((id) => id !== accountId);
   if (updated.length !== existing.length) {
-    fs.writeFileSync(resolveAccountIndexPath(), JSON.stringify(updated, null, 2), "utf-8");
+    saveWeixinAccountIds(updated);
   }
 }
 
@@ -101,16 +105,11 @@ function resolveAccountPath(accountId: string): string {
 
 function readAccountFile(filePath: string): WeixinAccountData | null {
   try {
-    if (fs.existsSync(filePath)) {
-      const parsed = WeixinAccountDataSchema.safeParse(
-        JSON.parse(fs.readFileSync(filePath, "utf-8")),
-      );
-      return parsed.success ? parsed.data : null;
-    }
-  } catch {
-    // ignore
+    return WeixinAccountDataSchema.parse(JSON.parse(fs.readFileSync(filePath, "utf-8")));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw new Error(`Cannot read account credentials: ${filePath}`);
   }
-  return null;
 }
 
 /** Load account data by ID. */
@@ -152,7 +151,7 @@ export function saveWeixinAccount(
   };
 
   const filePath = resolveAccountPath(accountId);
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf-8");
+  atomicWriteJson(filePath, data);
   try {
     fs.chmodSync(filePath, 0o600);
   } catch {

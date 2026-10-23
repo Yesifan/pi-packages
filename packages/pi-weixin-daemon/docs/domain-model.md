@@ -31,14 +31,15 @@
   - `baseUrl`：有效 API base URL。
   - `userId`：绑定的微信真人用户（= owner）。
   - `savedAt`：登录时间。
-- **选择边界**：CLI 账号参数仅接受 name（trim、区分大小写、唯一匹配，无 ID 回退）；在线以 daemon 列表为准。账号选择类 RPC 只接受 ID，`project.account.add/remove` 的字段为 `accountIds`，旧 `accounts` 字段被拒绝；内部配置与路由仍使用 ID。CLI/daemon 升级须匹配版本并重启 daemon，见 [ADR-0007](adr/0007-account-name-id-boundary.md)。
+- **选择边界**：CLI 账号参数仅接受 name（trim、区分大小写、唯一匹配，无 ID 回退）；控制配置变更在共同锁内按最新磁盘登记/凭据解析。内部配置与路由仍使用 accountId，旧账号/项目写入 RPC 不再接受变更。
+- **所有权**：CLI 唯一写入登记和凭据，daemon 只读并管理 monitor。配置已保存与运行已同步分别反馈；清理前必须确认接收任务停止。升级前先停旧 daemon，配套更新后启动，见 [ADR-0010](adr/0010-cli-control-ownership.md)。
 - **归属**：一个 account 至多属于一个 project（多绑第二个会报错）。
 
 ### 1.3 项目（Project）
 
 - 把若干 account 聚合到**同一个工作目录**，并共享至多一个活动 Pi 会话。
 - **标识**：`projectId`（项目名，配置记录的 key）。
-- **属性**（存于 `config.json`）：`cwd`、`accounts: accountId[]`、`enabled`。
+- **属性**（存于 `config.json`）：`cwd`、`accounts: accountId[]`、`enabled`。由 CLI 在共同控制锁内写入，daemon 只读并同步；cwd 创建后固定，同名删除重建导致 cwd 变化时重建运行实例。
 - **运行时**：`ProjectController`（一个项目一个），内含 `SessionController`
   （单一会话状态机：busy / abort / 发言范围 / 命令执行）。项目启动时只启动 controller/host，
   Pi session 在首条普通消息到达时懒创建。

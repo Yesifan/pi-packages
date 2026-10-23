@@ -9,6 +9,12 @@ const originalEnv = {
   PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR,
   PI_CODING_AGENT_SESSION_DIR: process.env.PI_CODING_AGENT_SESSION_DIR,
   PI_OFFLINE: process.env.PI_OFFLINE,
+  XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+  XDG_DATA_HOME: process.env.XDG_DATA_HOME,
+  XDG_STATE_HOME: process.env.XDG_STATE_HOME,
+  XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR,
+  PI_WEIXIN_DATA_DIR: process.env.PI_WEIXIN_DATA_DIR,
+  PI_WEIXIN_STATE_DIR: process.env.PI_WEIXIN_STATE_DIR,
 };
 let agentDir: string;
 
@@ -20,6 +26,16 @@ export function setup(): void {
   process.env.PI_CODING_AGENT_DIR = agentDir;
   process.env.PI_CODING_AGENT_SESSION_DIR = path.join(agentDir, "sessions");
   process.env.PI_OFFLINE = "1";
+  for (const key of [
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+    "XDG_STATE_HOME",
+    "XDG_RUNTIME_DIR",
+    "PI_WEIXIN_DATA_DIR",
+    "PI_WEIXIN_STATE_DIR",
+  ]) {
+    process.env[key] = path.join(agentDir, key);
+  }
   fs.writeFileSync(
     path.join(agentDir, "settings.json"),
     JSON.stringify({ cacheWarming: "off", retry: { enabled: false } }),

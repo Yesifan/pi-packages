@@ -46,7 +46,8 @@ function persistContextTokens(accountId: string): void {
 }
 
 /** Restore persisted context tokens for an account into the in-memory map. */
-export function restoreContextTokens(accountId: string): void {
+export function restoreContextTokens(accountId: string, ownerId?: string): void {
+  clearContextTokensForAccount(accountId, true);
   const filePath = resolveContextTokenFilePath(accountId);
   try {
     if (!fs.existsSync(filePath)) return;
@@ -55,6 +56,8 @@ export function restoreContextTokens(accountId: string): void {
     if (!parsed.success) return;
     let count = 0;
     for (const [userId, token] of Object.entries(parsed.data)) {
+      // A reused bot ID must not restore tokens for a different owner on startup.
+      if (ownerId && userId !== ownerId) continue;
       if (typeof token === "string" && token) {
         contextTokenStore.set(contextTokenKey(accountId, userId), token);
         count++;
@@ -67,13 +70,14 @@ export function restoreContextTokens(accountId: string): void {
 }
 
 /** Remove all context tokens for a given account (memory + disk). */
-export function clearContextTokensForAccount(accountId: string): void {
+export function clearContextTokensForAccount(accountId: string, memoryOnly = false): void {
   const prefix = `${accountId}:`;
   for (const k of [...contextTokenStore.keys()]) {
     if (k.startsWith(prefix)) {
       contextTokenStore.delete(k);
     }
   }
+  if (memoryOnly) return;
   const filePath = resolveContextTokenFilePath(accountId);
   try {
     if (fs.existsSync(filePath)) fs.unlinkSync(filePath);

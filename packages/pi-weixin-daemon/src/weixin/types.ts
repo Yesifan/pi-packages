@@ -52,6 +52,9 @@ export interface InboundMessage {
  * The agent layer must never import Tencent iLink types.
  */
 export interface WeixinTransport {
+  /** Receive until cancelled; AccountManager owns its controller and task. */
+  receive?(signal: AbortSignal): Promise<void>;
+  /** Start/stop notifications only; these do not own a receive task. */
   start(): Promise<void>;
   stop(): Promise<void>;
   sendText(ctx: TurnContext, text: string): Promise<void>;

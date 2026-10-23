@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import path from "node:path";
+import { atomicWriteJson } from "../config/atomic-write.js";
 import { resolveConfigPath } from "../config/paths.js";
 import {
   CONFIG_VERSION,
@@ -9,27 +9,22 @@ import {
 import type { ProjectConfig, ProjectStoreData } from "./types.js";
 
 /**
- * Persistent project config store. The daemon is the sole writer; CLI never
- * mutates config.json directly (it goes through the daemon RPC).
+ * Persistent project config store. Only CLI control operations write; daemon reads.
+ * Callers hold the common control lock across read/validate/write.
  *
  * Writes are atomic: write temp file -> fsync -> close -> rename.
  */
 export class ProjectStore {
-  constructor(private readonly configPath: string = resolveConfigPath()) {}
-
-  private ensureDir(): void {
-    fs.mkdirSync(path.dirname(this.configPath), { recursive: true });
-  }
+  constructor(readonly configPath: string = resolveConfigPath()) {}
 
   /** Read + validate config. Malformed/invalid config throws (never reset). */
   read(): ProjectStoreData {
-    if (!fs.existsSync(this.configPath)) {
-      return { version: CONFIG_VERSION, projects: {} };
-    }
     let raw: unknown;
     try {
       raw = JSON.parse(fs.readFileSync(this.configPath, "utf-8"));
     } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT")
+        return { version: CONFIG_VERSION, projects: {} };
       throw new Error(`config is malformed at ${this.configPath}: ${String(err)}`);
     }
     const result = validateProjectStoreData(raw);
@@ -44,28 +39,7 @@ export class ProjectStore {
 
   /** Atomically persist config. */
   write(data: ProjectStoreData): void {
-    this.ensureDir();
-    const tmp = `${this.configPath}.tmp-${process.pid}-${Date.now()}`;
-    let fd: number | undefined;
-    try {
-      fd = fs.openSync(tmp, "w", 0o600);
-      fs.writeFileSync(fd, JSON.stringify(data, null, 2), "utf-8");
-      fs.fsyncSync(fd);
-    } finally {
-      if (fd !== undefined) fs.closeSync(fd);
-    }
-    fs.renameSync(tmp, this.configPath);
-    // Best-effort directory fsync for rename durability.
-    try {
-      const dirFd = fs.openSync(path.dirname(this.configPath), "r");
-      try {
-        fs.fsyncSync(dirFd);
-      } finally {
-        fs.closeSync(dirFd);
-      }
-    } catch {
-      // best-effort
-    }
+    atomicWriteJson(this.configPath, data);
   }
 
   list(): Array<{ name: string; config: ProjectConfig }> {

@@ -19,7 +19,7 @@ let nextId = 1;
 
 /**
  * Call a daemon RPC method over the UDS. Throws DaemonNotRunningError when the
- * socket is absent / connection refused (daemon down).
+ * socket is absent / connection refused. This alone does not prove receivers stopped.
  */
 export async function rpcCall<T = unknown>(
   method: string,
@@ -120,6 +120,7 @@ export function formatProjectRow(p: {
   name: string;
   state: string;
   enabled: boolean;
+  configured?: boolean;
   accounts: string[];
   cwd: string;
   error?: string;
@@ -128,5 +129,5 @@ export function formatProjectRow(p: {
   const enabled = p.enabled ? "yes" : "no";
   const state = p.state;
   const err = p.error ? `  [${p.error}]` : "";
-  return `${p.name.padEnd(12)}${state.padEnd(10)}${enabled.padEnd(9)}${accounts.padEnd(20)}${p.cwd}${err}`;
+  return `${p.name.padEnd(12)}${(p.configured === false ? "no" : "yes").padEnd(11)}${state.padEnd(10)}${enabled.padEnd(9)}${accounts.padEnd(20)}${p.cwd}${err}`;
 }

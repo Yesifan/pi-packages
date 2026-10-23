@@ -75,7 +75,7 @@ describe("weixin account store", () => {
     const dir = path.join(dataDir, "accounts");
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, "bad.json"), JSON.stringify({ token: 123 }), "utf-8");
-    expect(loadWeixinAccount("bad")).toBeNull();
+    expect(() => loadWeixinAccount("bad")).toThrow("Cannot read account credentials");
   });
 
   it("clears stale accounts sharing the same userId", () => {

@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { doctorCommand } from "../../src/cli/doctor.js";
 import { projectCommand } from "../../src/cli/project.js";
 import { DaemonNotRunningError, rpcCall } from "../../src/cli/rpc-client.js";
+import { storageIdentity } from "../../src/config/control-lock.js";
+import { ProjectStore } from "../../src/projects/project-store.js";
 import { registerWeixinAccountId, saveWeixinAccount } from "../../src/weixin/auth/accounts.js";
 
 vi.mock("../../src/cli/rpc-client.js", async (original) => ({
@@ -23,6 +25,7 @@ beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), "wx-select-"));
   vi.stubEnv("PI_WEIXIN_DATA_DIR", dir);
   vi.stubEnv("XDG_STATE_HOME", dir);
+  vi.stubEnv("XDG_CONFIG_HOME", dir);
   vi.stubEnv("PI_CODING_AGENT_DIR", dir);
   fs.writeFileSync(path.join(dir, "settings.json"), "{}");
   oldExitCode = process.exitCode;
@@ -75,32 +78,35 @@ describe("doctor account names", () => {
 });
 describe("project CLI account names", () => {
   it.each(["add", "remove"])(
-    "resolves %s names once against the daemon and sends accountIds",
+    "resolves %s names against locked local configuration",
     async (verb) => {
-      rpc.mockResolvedValueOnce([{ accountId: "remote", name: "local" }]).mockResolvedValueOnce([]);
-      await projectCommand().parseAsync(["foo", verb, " local "], { from: "user" });
-      expect(rpc).toHaveBeenLastCalledWith(`project.account.${verb}`, {
-        name: "foo",
-        accountIds: ["remote"],
+      new ProjectStore().upsert("foo", {
+        cwd: dir,
+        accounts: verb === "remove" ? ["local"] : [],
+        enabled: false,
       });
+      rpc.mockResolvedValue({ identity: storageIdentity(), runningAccountIds: [] });
+      await projectCommand().parseAsync(["foo", verb, " personal "], { from: "user" });
+      expect(process.exitCode).toBe(0);
+      expect(new ProjectStore().get("foo")?.accounts).toEqual(verb === "add" ? ["local"] : []);
+      expect(rpc).toHaveBeenCalledWith("control.sync", { identity: storageIdentity() });
     },
   );
   it.each(["remote", "Personal", "unknown"])(
     "rejects ID or unknown name %s without mutating",
     async (name) => {
-      rpc.mockResolvedValueOnce([{ accountId: "remote", name: "personal" }]);
+      new ProjectStore().upsert("foo", { cwd: dir, accounts: [], enabled: false });
       await projectCommand().parseAsync(["foo", "add", name], { from: "user" });
       expect(process.exitCode).toBe(1);
-      expect(rpc).toHaveBeenCalledTimes(1);
+      expect(rpc).not.toHaveBeenCalled();
+      expect(new ProjectStore().get("foo")?.accounts).toEqual([]);
     },
   );
-  it("rejects ambiguous names without mutation", async () => {
-    rpc.mockResolvedValueOnce([
-      { accountId: "local", name: "personal" },
-      { accountId: "remote", name: "personal" },
-    ]);
-    await projectCommand().parseAsync(["foo", "remove", "personal"], { from: "user" });
+  it("rejects ambiguous local names without mutation", async () => {
+    new ProjectStore().upsert("foo", { cwd: dir, accounts: [], enabled: false });
+    saveWeixinAccount("remote", { name: "personal" });
+    await projectCommand().parseAsync(["foo", "add", "personal"], { from: "user" });
     expect(console.error).toHaveBeenCalledWith(expect.stringContaining("ambiguous account name"));
-    expect(rpc).toHaveBeenCalledTimes(1);
+    expect(rpc).not.toHaveBeenCalled();
   });
 });

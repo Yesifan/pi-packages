@@ -4,18 +4,6 @@ import { resolveDaemonSocket, resolveRuntimeDir } from "../config/paths.js";
 import type { Daemon } from "../daemon.js";
 import type { Logger } from "../util/logger.js";
 
-function accountIdsParam(params: Record<string, unknown>): string[] {
-  if ("accounts" in params)
-    throw new Error(
-      "accounts is no longer supported; use accountIds (CLI and daemon versions must match)",
-    );
-  const ids = params.accountIds;
-  if (!Array.isArray(ids) || !ids.every((id) => typeof id === "string" && id.trim().length > 0)) {
-    throw new Error("accountIds must be an array of non-empty account IDs");
-  }
-  return ids;
-}
-
 interface RpcRequest {
   id: number;
   method: string;
@@ -35,6 +23,7 @@ export interface StatusResult {
 export class RpcServer {
   private server: net.Server | undefined;
   private socketPath: string;
+  private sockets = new Set<net.Socket>();
 
   constructor(
     private readonly daemon: Daemon,
@@ -49,13 +38,30 @@ export class RpcServer {
     // Remove a stale socket file if present but no daemon listening.
     try {
       if (fs.existsSync(this.socketPath)) {
+        await new Promise<void>((resolve, reject) => {
+          const probe = net.connect(this.socketPath);
+          probe.once("connect", () => {
+            probe.destroy();
+            reject(new Error("Socket already has a listener"));
+          });
+          probe.once("error", (error: NodeJS.ErrnoException) => {
+            if (error.code === "ECONNREFUSED" || error.code === "ENOENT") resolve();
+            else reject(error);
+          });
+        });
         fs.unlinkSync(this.socketPath);
       }
     } catch (err) {
-      this.logger.warn({ err, socket: this.socketPath }, "failed to remove stale socket");
+      this.logger.warn(
+        { err, socket: this.socketPath },
+        "refusing occupied or inaccessible socket",
+      );
+      throw err;
     }
 
     this.server = net.createServer((socket) => {
+      this.sockets.add(socket);
+      socket.on("close", () => this.sockets.delete(socket));
       const chunks: Buffer[] = [];
       let reading = true;
       const finishReading = () => {
@@ -112,6 +118,7 @@ export class RpcServer {
   async stop(): Promise<void> {
     const server = this.server;
     if (!server) return;
+    for (const socket of this.sockets) socket.destroy();
     await new Promise<void>((resolve) => server.close(() => resolve()));
     this.server = undefined;
     try {
@@ -145,6 +152,11 @@ export class RpcServer {
     })();
   }
 
+  private requireIdentity(params: Record<string, unknown>): void {
+    if (params.identity !== this.daemon.identity)
+      throw new Error("Storage identity mismatch; refusing another configuration/data instance");
+  }
+
   private async dispatch(method: string, params: Record<string, unknown>): Promise<unknown> {
     switch (method) {
       case "daemon.status":
@@ -154,20 +166,13 @@ export class RpcServer {
       case "project.get":
         return this.daemon.getProjectStatus(params.name as string);
       case "project.create":
-        await this.daemon.createProject(params.name as string, params.cwd as string);
-        return this.daemon.getProjectStatuses();
       case "project.account.add":
-        await this.daemon.addProjectAccounts(params.name as string, accountIdsParam(params));
-        return this.daemon.getProjectStatuses();
       case "project.account.remove":
-        await this.daemon.removeProjectAccounts(params.name as string, accountIdsParam(params));
-        return this.daemon.getProjectStatuses();
       case "project.enable":
-        await this.daemon.setProjectEnabled(params.name as string, true);
-        return this.daemon.getProjectStatuses();
       case "project.disable":
-        await this.daemon.setProjectEnabled(params.name as string, false);
-        return this.daemon.getProjectStatuses();
+      case "project.remove":
+      case "account.logout":
+        throw new Error("Control writes moved to CLI; upgrade CLI and daemon together");
       case "project.broadcast":
         if (typeof params.name !== "string" || !params.name.trim()) {
           throw new Error("broadcast project name must be a non-empty string");
@@ -177,22 +182,19 @@ export class RpcServer {
         }
         return this.daemon.broadcastProject(params.name, params.text);
       case "project.restart":
+        this.requireIdentity(params);
         await this.daemon.restartProject(params.name as string);
-        return this.daemon.getProjectStatuses();
-      case "project.remove":
-        await this.daemon.removeProject(params.name as string);
         return this.daemon.getProjectStatuses();
       case "account.list":
         return this.daemon.getAccountStatuses();
+      case "control.status":
+        this.requireIdentity(params);
+        return this.daemon.getControlStatus();
       case "account.reload":
-        await this.daemon.reloadAccounts();
-        return this.daemon.getAccountStatuses();
-      case "account.logout":
-        if (typeof params.accountId !== "string" || !params.accountId.trim()) {
-          throw new Error("accountId must be a non-empty account ID");
-        }
-        await this.daemon.logoutAccount(params.accountId as string);
-        return this.daemon.getAccountStatuses();
+      case "control.sync":
+        this.requireIdentity(params);
+        await this.daemon.reload();
+        return this.daemon.getControlStatus();
       default:
         throw new Error(`unknown rpc method: ${method}`);
     }

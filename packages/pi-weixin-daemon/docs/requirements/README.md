@@ -9,7 +9,7 @@
 | [0007：通过 CLI 向项目绑定用户广播通知](0007-project-cli-broadcast.md) | 向启用项目的绑定账号扫码用户直接发送微信通知，不经过 Pi。 | completed | 2026-10-01 / 2026-10-01 |
 | [0008：微信语音仅传递转录文本](0008-voice-transcript-only.md) | 入站语音只传递微信转录及识别错误备注，空转录提示发送者，不再下载或携带音频。 | completed | 2026-10-12 / 2026-10-12 |
 | [0009：澄清 RPC 空闲超时](0009-rpc-idle-timeout-clarification.md) | 更正 0007 的“总超时”措辞，保留普通 RPC 15 秒空闲超时与广播禁用客户端超时的行为。 | completed | 2026-10-23 / 2026-10-23 |
-| [0010：CLI 配置所有权与轻量 daemon 生命周期](0010-account-removal-monitor-lifecycle.md) | CLI 统一写账号及项目控制配置，daemon 只读并协调应用；区分保存、运行同步和文件清理，调整旧 writer 及删除约定。 | in-progress | 2026-10-23 |
+| [0010：CLI 配置所有权与轻量 daemon 生命周期](0010-account-removal-monitor-lifecycle.md) | CLI 统一写账号及项目控制配置，daemon 只读并协调应用；区分保存、运行同步和文件清理，调整旧 writer 及删除约定。 | completed | 2026-10-23 / 2026-10-23 |
 
 ## 维护规则
 
