@@ -69,7 +69,7 @@ async function callRpc<T>(
     };
     socket.on("connect", () => {
       connected = true;
-      socket.write(JSON.stringify({ id, method, params }));
+      socket.write(`${JSON.stringify({ id, method, params })}\n`);
     });
     socket.on("data", (buf: Buffer) => {
       if (!settled) chunks.push(buf);

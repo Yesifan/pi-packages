@@ -74,6 +74,16 @@ describe("RPC client error boundary", () => {
     expect(socket.destroy).toHaveBeenCalledOnce();
   });
 
+  it("terminates requests with exactly one raw newline", async () => {
+    const pending = rpcCall("status", { text: "hello\n世界" });
+    respond({ ok: true });
+    await pending;
+    const wire = socket.write.mock.calls[0]![0];
+    expect(wire.endsWith("\n")).toBe(true);
+    expect(wire.split("\n")).toHaveLength(2);
+    expect(JSON.parse(wire).params.text).toBe("hello\n世界");
+  });
+
   it("keeps broadcast timeout disabled", async () => {
     const pending = rpcBroadcast({ name: "demo", text: "hello" });
     expect(socket.setTimeout).toHaveBeenCalledWith(0);

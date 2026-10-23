@@ -56,7 +56,40 @@ export class RpcServer {
     }
 
     this.server = net.createServer((socket) => {
-      socket.on("data", (buf: Buffer) => this.handleConnection(socket, buf));
+      const chunks: Buffer[] = [];
+      let reading = true;
+      const finishReading = () => {
+        reading = false;
+        chunks.length = 0;
+        socket.setTimeout(0);
+      };
+      // Requests use newline framing; responses still end at EOF. One request per connection.
+      socket.setTimeout(15_000);
+      socket.on("timeout", () => {
+        if (reading) {
+          finishReading();
+          socket.destroy();
+        }
+      });
+      socket.on("data", (buf: Buffer) => {
+        if (!reading) return;
+        const newline = buf.indexOf(0x0a);
+        if (newline === -1) {
+          chunks.push(buf);
+          return;
+        }
+        chunks.push(buf.subarray(0, newline));
+        const request = Buffer.concat(chunks);
+        finishReading(); // Long broadcasts must not inherit the request-read timeout.
+        this.handleConnection(socket, request);
+      });
+      socket.on("end", () => {
+        if (reading) {
+          finishReading();
+          socket.destroy();
+        }
+      });
+      socket.on("close", finishReading);
       socket.on("error", (err) => this.logger.warn({ err }, "rpc socket error"));
     });
     const server = this.server;
@@ -93,6 +126,9 @@ export class RpcServer {
       let data: RpcRequest;
       try {
         data = JSON.parse(buf.toString("utf-8")) as RpcRequest;
+        if (data === null || typeof data !== "object" || Array.isArray(data)) {
+          throw new Error("request must be an object");
+        }
       } catch (err) {
         this.logger.warn({ err }, "rpc: invalid JSON request");
         socket.end(JSON.stringify({ id: 0, ok: false, error: "invalid JSON" }));
@@ -100,11 +136,11 @@ export class RpcServer {
       }
       try {
         const result = await this.dispatch(data.method, data.params ?? {});
-        socket.end(JSON.stringify({ id: data.id, ok: true, result }));
+        if (!socket.destroyed) socket.end(JSON.stringify({ id: data.id, ok: true, result }));
       } catch (err) {
         const error = err instanceof Error ? err.message : String(err);
         this.logger.warn({ method: data.method, error }, "rpc method failed");
-        socket.end(JSON.stringify({ id: data.id, ok: false, error }));
+        if (!socket.destroyed) socket.end(JSON.stringify({ id: data.id, ok: false, error }));
       }
     })();
   }

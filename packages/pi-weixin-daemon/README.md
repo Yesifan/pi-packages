@@ -241,6 +241,8 @@ Tencent/openclaw-weixin          # 微信协议参考（MIT，见 LICENSE.attrib
 - 状态：`$XDG_STATE_HOME/pi-weixin-daemon/weixin/`（sync-buf / context-token）。
 - UDS：`$XDG_RUNTIME_DIR/pi-weixin-daemon/daemon.sock`（0600）。
 
+控制面每个连接只处理一个请求：请求是以换行符 `\n` 结束的单行 JSON，响应是以 EOF 结束的 JSON；两端均缓冲完整消息后再解码，支持 UTF-8 分片。daemon 接收完整请求前使用 15 秒空闲超时，开始执行后关闭该读取超时，避免中断长广播。未带换行的旧客户端请求不会执行，CLI 与 daemon 必须配套升级并重启；不自动重试。
+
 ## 测试
 
 在 monorepo 根目录运行：
