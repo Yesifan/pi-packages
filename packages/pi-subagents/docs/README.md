@@ -29,6 +29,10 @@
 
 - [全仓升级规格](https://github.com/Yesifan/pi-packages/blob/main/docs/specs/pi-1.4-upgrade.md) — completed（2026-10-22）；[ADR-0004](adr/0004-official-sdk-lifecycle.md) 记录 submitted、官方 services/恢复 fallback/steering 与串行清理决定，替代旧 preflight/严格恢复要求。历史规格和验收保留，本轮离线回归、构建、pack 与独立审查已完成，交互 TUI/print 手测未执行；详见全仓规格验收摘要。
 
+## 执行周期整树锁
+
+- [Spec 0005：执行周期整树锁与同 root 多窗口使用](specs/0005-execution-scoped-root-lock.md) — completed（2026-10-23 / 2026-10-23）；[ADR-0005](adr/0005-execution-scoped-root-lock.md) 扩展 Spec 0002 与 ADR-0003/0004 的锁生命周期。允许同 exact root 多窗口打开，执行期间整树互斥，获取后刷新 metadata，全部工作和清理完成后释放；不引入 IPC。测试方案已获用户批准，实际验证记录见规格，不宣称 CLI 手测已运行。
+
 ## 历史实现设计
 
 - [`ADR-0001`](adr/0001-project-local-subagent-storage.md) — 原项目本地单一权威 store 的真实背景、理由与历史记录，原文保留。

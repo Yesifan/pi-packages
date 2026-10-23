@@ -89,6 +89,11 @@ export class RootRuntime implements DelegationRuntimeApi {
   private shutdownPromise?: Promise<void>;
   private initialization?: Promise<void>;
   private initialized = false;
+  // The window scope survives idle handoffs; Agents and store caches do not.
+  private cycleOwned = false;
+  private acquiring?: Promise<void>;
+  private releasing?: Promise<void>;
+  private readonly finalizations = new Set<Promise<void>>();
   private readonly pendingPrompts = new WeakMap<Execution, number>();
   private readonly promptWaiters = new WeakMap<Execution, () => void>();
   private readonly abortTasks = new WeakMap<Execution, Promise<void>>();
@@ -137,7 +142,33 @@ export class RootRuntime implements DelegationRuntimeApi {
       assertScope();
       this.trustDecisions.set(cwd, host.ctx.isProjectTrusted());
       this.trustDecisions.set(config.projectRoot, true);
+      this.initialized = true;
+    } catch (error) {
+      scope.closing = true;
+      this.uiBroker.shutdown();
+      throw error;
+    }
+  }
+  private async acquireCycle(): Promise<void> {
+    const scope = this.ready();
+    const config = this.rootConfig;
+    const cwd = await canonicalizeDirectory(this.host.ctx.cwd, {
+      missing: "CWD_NOT_FOUND",
+      notDirectory: "CWD_NOT_DIRECTORY",
+    });
+    const assertScope = () => {
+      this.ready();
+    };
+    try {
+      assertScope();
       const root = await this.store.open();
+      // Warning Cache Broke: every ownership cycle rebuilds from durable metadata,
+      // never publishing identities or state cached by an idle window.
+      scope.children.clear();
+      scope.agents.clear();
+      this.trustDecisions.clear();
+      this.trustDecisions.set(cwd, this.host.ctx.isProjectTrusted());
+      this.trustDecisions.set(config.projectRoot, true);
       assertScope();
       const seen = new Set([scope.identity.sessionId]);
       const restore = async (
@@ -237,12 +268,67 @@ export class RootRuntime implements DelegationRuntimeApi {
           agentTypes: new Map(),
         });
       assertScope();
-      this.initialized = true;
+      this.cycleOwned = true;
     } catch (error) {
-      scope.closing = true;
-      await this.store.close();
-      this.uiBroker.shutdown();
+      try {
+        await this.store.close();
+      } finally {
+        // close() caches rejection too; a later request must compete with a fresh store.
+        this.store = new PersistentSubagentStore(this.agentDir, scope.identity);
+        scope.children.clear();
+        scope.agents.clear();
+      }
       throw error;
+    }
+  }
+  private async ensureCycle(steer: boolean): Promise<void> {
+    if (this.releasing) await this.releasing;
+    this.ready();
+    if (this.acquiring) await this.acquiring;
+    if (this.cycleOwned) return;
+    if (steer) {
+      // Probe only: report cross-window contention without recovering running state.
+      const probe = new PersistentSubagentStore(this.agentDir, this.ready().identity);
+      try {
+        await probe.open();
+      } finally {
+        await probe.close();
+      }
+      throw new SubagentError(
+        "SUBAGENT_NOT_STEERABLE",
+        "This window has no active execution to steer.",
+      );
+    }
+    this.acquiring = this.acquireCycle();
+    try {
+      await this.acquiring;
+    } finally {
+      this.acquiring = undefined;
+    }
+  }
+  private async releaseIdle(): Promise<void> {
+    const scope = this.scope;
+    if (
+      !scope ||
+      scope.closing ||
+      !this.cycleOwned ||
+      this.acquiring ||
+      scope.openingTasks?.size ||
+      scope.executions.size ||
+      scope.deliveries.size ||
+      this.finalizations.size
+    )
+      return;
+    this.cycleOwned = false;
+    const releasing = this.store.close();
+    this.releasing = releasing;
+    try {
+      await releasing;
+    } finally {
+      // A failed close is terminal for this store, not for the window. Never remove
+      // its lock here: the next fresh store must still acquire the real writer lock.
+      this.store = new PersistentSubagentStore(this.agentDir, scope.identity);
+      if (this.releasing === releasing) this.releasing = undefined;
     }
   }
   getMaxLiveAgents(): number | undefined {
@@ -316,7 +402,10 @@ export class RootRuntime implements DelegationRuntimeApi {
     signal?: AbortSignal,
   ): Promise<AcceptedResult> {
     const scope = this.ready();
-    return this.trackOpening(scope, this.createTask(caller, input, ctx, signal));
+    return this.trackOpening(scope, async () => {
+      if (!this.cycleOwned || this.acquiring || this.releasing) await this.ensureCycle(false);
+      return this.createTask(caller, input, ctx, signal);
+    });
   }
   async askSubagent(
     caller: CallerBinding,
@@ -325,16 +414,22 @@ export class RootRuntime implements DelegationRuntimeApi {
     signal?: AbortSignal,
   ): Promise<AcceptedResult> {
     const scope = this.ready();
-    return this.trackOpening(scope, this.askTask(caller, input, ctx, signal));
+    return this.trackOpening(scope, async () => {
+      if (!this.cycleOwned || this.acquiring || this.releasing)
+        await this.ensureCycle(input.isSteer === true);
+      return this.askTask(caller, input, ctx, signal);
+    });
   }
-  private async trackOpening<T>(scope: RootScope, task: Promise<T>): Promise<T> {
+  private async trackOpening<T>(scope: RootScope, operation: () => Promise<T>): Promise<T> {
     const openingTasks = scope.openingTasks ?? new Set();
     scope.openingTasks = openingTasks;
+    const task = operation();
     openingTasks.add(task);
     try {
       return await task;
     } finally {
       openingTasks.delete(task);
+      await this.releaseIdle();
     }
   }
   private async createTask(
@@ -708,7 +803,15 @@ export class RootRuntime implements DelegationRuntimeApi {
     execution.phase = "closing";
     // Do not dispose inside the SDK's awaited lifecycle callback.
     queueMicrotask(() => {
-      void this.finalize(execution).catch((error) => this.notify(error));
+      const task = this.finalize(execution);
+      this.finalizations.add(task);
+      void task
+        .catch((error) => this.notify(error))
+        .finally(async () => {
+          this.finalizations.delete(task);
+          await this.releaseIdle();
+        })
+        .catch((error) => this.notify(error));
     });
   }
   private result(execution: Execution): SubagentReport {
@@ -837,9 +940,12 @@ export class RootRuntime implements DelegationRuntimeApi {
     delivery.submitted = true;
     const status = this.statusFor(execution.agent.parent);
     if (!("agent" in target)) {
-      this.host.sendReport(report, status);
-      delivery.processed = true;
-      execution.scope.deliveries.delete(delivery);
+      try {
+        this.host.sendReport(report, status);
+        delivery.processed = true;
+      } finally {
+        execution.scope.deliveries.delete(delivery);
+      }
       return;
     }
     if (!delivery.sourceEntryId) {
@@ -1128,8 +1234,11 @@ export class RootRuntime implements DelegationRuntimeApi {
           .filter((execution) => execution.agent.currentExecution === execution)
           .map((execution) => this.interrupt(execution, false)),
       );
+      await Promise.allSettled([...this.finalizations]);
       scope.deliveries.clear();
+      await this.releasing;
       await this.store.close();
+      this.cycleOwned = false;
     })();
     return this.shutdownPromise;
   }
