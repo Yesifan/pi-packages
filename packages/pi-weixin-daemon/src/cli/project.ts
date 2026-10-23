@@ -67,6 +67,7 @@ async function persistentProjects() {
       configured: !!desired,
       enabled: desired?.enabled ?? false,
       state: live?.state ?? "unknown",
+      error: live?.error,
     };
   });
 }

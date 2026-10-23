@@ -77,6 +77,28 @@ describe("doctor account names", () => {
   });
 });
 describe("project CLI account names", () => {
+  it.each(["list", "show"])("preserves runtime error details in project %s", async (verb) => {
+    new ProjectStore().upsert("foo", { cwd: dir, accounts: [], enabled: true });
+    rpc.mockResolvedValueOnce({
+      identity: storageIdentity(),
+      projects: [
+        {
+          name: "foo",
+          cwd: dir,
+          accounts: [],
+          enabled: true,
+          state: "error",
+          error: "project startup failed",
+        },
+      ],
+    });
+    await projectCommand().parseAsync(verb === "show" ? [verb, "foo"] : [verb], {
+      from: "user",
+    });
+    expect(process.exitCode).toBe(0);
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining("project startup failed"));
+  });
+
   it.each(["add", "remove"])(
     "resolves %s names against locked local configuration",
     async (verb) => {
