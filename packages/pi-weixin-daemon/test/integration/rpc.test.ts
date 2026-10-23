@@ -25,7 +25,7 @@ import {
   setContextToken,
 } from "../../src/weixin/storage/context-token.js";
 import { FakeAgentRuntime } from "../helpers/fake-runtime.js";
-import { FakeWeixinTransport } from "../helpers/fake-transport.js";
+import { FakeWeixinTransport, makeInboundMessage } from "../helpers/fake-transport.js";
 
 const logger = createLogger({ level: "silent" });
 const OLD_DATA = process.env.PI_WEIXIN_DATA_DIR;
@@ -189,6 +189,96 @@ describe("daemon UDS RPC", () => {
     expect(daemon.getControlStatus().runningAccountIds).toEqual([]);
     expect(factory).toHaveBeenCalledTimes(2);
   });
+
+  it.each([false, true])(
+    "keeps the project session across owner replacement while another receiver starts (retry=%s)",
+    async (failFirstStart) => {
+      saveWeixinAccount("acct-a", { userId: "old-owner" });
+      setContextToken("acct-a", "old-owner", "old-context");
+      configureProject("foo", ["acct-a"]);
+      const transports = new Map<string, FakeWeixinTransport>();
+      const runtime = new FakeAgentRuntime(projectDir);
+      const projectPiFactory = vi.fn(async () => runtime);
+      let releaseStart!: () => void;
+      const starting = new Promise<void>((resolve) => {
+        releaseStart = resolve;
+      });
+      let startEntered = false;
+      let failStart = failFirstStart;
+      const daemon = makeDaemon({
+        projectPiFactory,
+        getAccountTransport: async (id) => {
+          const transport = new FakeWeixinTransport();
+          if (id === "acct-b") {
+            transport.start = async () => {
+              startEntered = true;
+              await starting;
+              if (failStart) throw new Error("fake receiver start failed");
+            };
+          }
+          transports.set(id, transport);
+          return transport;
+        },
+      });
+      const sync = () => rpcCall("control.sync", { identity: daemon.identity }, socketPath);
+      const round = async (senderId: string, contextToken: string, text: string) => {
+        // Fake emit bypasses the real transport's inbound token cache update.
+        setContextToken("acct-a", senderId, contextToken);
+        const count = runtime.prompts.length;
+        const pending = transports
+          .get("acct-a")!
+          .emit(makeInboundMessage({ accountId: "acct-a", senderId, contextToken, text }));
+        await vi.waitFor(() => expect(runtime.prompts).toHaveLength(count + 1));
+        runtime.complete(`reply: ${text}`);
+        await pending;
+        expect(transports.get("acct-a")!.sentTexts.at(-1)).toMatchObject({
+          ctx: { senderId, contextToken },
+          text: `reply: ${text}`,
+        });
+      };
+      let applying: Promise<unknown> | undefined;
+      try {
+        await daemon.start();
+        await round("old-owner", "old-context", "project history");
+        expect(runtime.activeSession).toBe(true);
+        const oldTransport = transports.get("acct-a");
+        await withControlLock(() => {
+          saveWeixinAccount("acct-a", { userId: "new-owner" });
+          saveAccount("acct-b", "owner-b");
+        });
+        applying = failFirstStart
+          ? expect(sync()).rejects.toThrow("fake receiver start failed")
+          : sync();
+        await vi.waitFor(() => expect(startEntered).toBe(true));
+        expect(transports.get("acct-a")).not.toBe(oldTransport);
+        expect(getContextToken("acct-a", "old-owner")).toBeUndefined();
+        expect(getContextToken("acct-a", "new-owner")).toBeUndefined();
+        await round("new-owner", "new-context", "while receiver B starts");
+        expect(projectPiFactory).toHaveBeenCalledTimes(1);
+        expect(runtime.stopCalls).toBe(0);
+        releaseStart();
+        await applying;
+        if (failFirstStart) {
+          failStart = false;
+          await sync();
+        }
+        expect(projectPiFactory).toHaveBeenCalledTimes(1);
+        expect(runtime.stopCalls).toBe(0);
+        expect(runtime.activeSession).toBe(true);
+        await round("new-owner", "latest-context", "after configuration sync");
+        expect(runtime.prompts).toHaveLength(3);
+        expect(runtime.ensureSessionCalls).toBe(1);
+        expect(getContextToken("acct-a", "old-owner")).toBeUndefined();
+        expect(getContextToken("acct-a", "new-owner")).toBe("latest-context");
+        expect(daemon.getStatus().applicationError).toBeUndefined();
+      } finally {
+        failStart = false;
+        releaseStart();
+        await runtime.abort();
+        await applying;
+      }
+    },
+  );
 
   it("lists registered accounts without monitors and retains unregistered actual receivers", async () => {
     registerWeixinAccountId("no-token");

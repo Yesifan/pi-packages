@@ -116,7 +116,7 @@ CLI 的账号选择参数只接受 **name**：去除首尾空白、区分大小�
 
 **BREAKING / 升级：先停止旧版 daemon，配套更新 CLI 与 daemon，再运行 `pi-wx start`。** 旧版不参与共同锁，不能与新版 CLI 混用。项目创建/绑定/启停/删除和 `account.logout` 写入 RPC 已移除；新 `control.sync` 只请求读取当前配置，`control.status` 只读取实际 receiver 集合，二者以及项目 restart 校验配置/数据/状态目录身份。内部配置和路由仍使用 accountId，不新增账号格式迁移。
 
-`--name` 是全局唯一的账号标识；账号 **id 仍为扫码返回的 `ilink_bot_id`**。同用户登录会替换无绑定的旧账号（按 `ilink_user_id` 去重）；相同 ID 的有效凭据变化也会先停旧 monitor 再启动新实例。旧 owner 的运行缓存不会继承到新 owner；账号登录用户变化时相关项目也重建会话，并按新的绑定账号用户解析收件范围；不维护参与者注册表。
+`--name` 是全局唯一的账号标识；账号 **id 仍为扫码返回的 `ilink_bot_id`**。同用户登录会替换无绑定的旧账号（按 `ilink_user_id` 去重）；相同 ID 的有效凭据变化也会先停旧 monitor 再启动新实例。旧 owner 的微信 token 缓存不会继承到新 owner；收件范围按当前绑定账号用户解析。项目历史和活动会话属于项目，不属于某个账号 owner：仅 owner/凭据变化不会重建项目会话，新 owner 继续使用项目当前会话；项目绑定、cwd 或启停变化仍按原有规则处理。不维护参与者注册表。
 
 账号凭据保存在 `$XDG_DATA_HOME/pi-weixin-daemon/accounts/`（默认 `~/.local/share/pi-weixin-daemon/accounts/`，可用 `PI_WEIXIN_DATA_DIR` 覆盖），不写入项目。
 

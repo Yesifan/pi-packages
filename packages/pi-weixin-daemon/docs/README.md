@@ -27,6 +27,7 @@
 - [ADR-0009：账号登记与 monitor 生命周期分离](adr/0009-registered-account-visibility.md) —— 登记和运行状态区分；后续删除约定见 ADR-0010。
 - [ADR-0010：CLI 配置所有权与接收生命周期](adr/0010-cli-control-ownership.md) —— CLI 写控制配置、daemon 只读及 flock 生命周期协调。
 - [ADR-0011：项目默认会话运行状态独立存储](adr/0011-project-runtime-state.md) —— daemon 专属 `projects.json` 与 CLI 控制配置分离，整合共享 default 和唯一 writer。
+- [ADR-0012：项目会话不随账号 owner 变化重建](adr/0012-project-session-owner-independence.md) —— owner 变化仅更新账号接收器及微信缓存，项目会话保持连续。
 - [需求 0010：项目默认会话与 CLI prompt](requirements/0010-project-session-cli-mcp.md) —— 已完成，验证记录见需求文档。
 - [需求 0011：运行时代码与状态精简](requirements/0011-runtime-simplification.md) —— 已完成，保留 SDK 单入口和现有业务行为。
 - [ADR-0008：Pi 业务单入口与内部适配精简](adr/0008-pi-business-entry-simplification.md) —— 删除冗余门面，保留必要 SDK 内部适配。

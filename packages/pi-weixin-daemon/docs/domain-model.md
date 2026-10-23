@@ -54,6 +54,7 @@
 - 微信普通消息继续 active，没有 active 时恢复 default；CLI 无 session 参数时选择 default 并使其成为 active。任一入口切换对全项目生效，不维护每用户 active。
 - 闲置 10 分钟释放 runtime 并清除 active；重启后也按需恢复 default，不恢复临时 active 或进行中的回合。默认历史不可读时明确失败，不静默替换。
 - 历史范围沿用项目 cwd；相同 cwd 的项目允许共享历史，不建立会话所有权表，不接受其他 cwd 的任意路径。
+- 项目历史不按账号 owner 隔离；已获项目访问权限的用户可使用该项目历史。仅账号 owner/凭据变化不重建项目 runtime 或切换 active/default，只更新接收器和微信 token 缓存，见 [ADR-0012](adr/0012-project-session-owner-independence.md)。
 
 ### 1.5 入站消息（InboundMessage）
 

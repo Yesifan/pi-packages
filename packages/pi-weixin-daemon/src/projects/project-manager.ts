@@ -55,10 +55,7 @@ export class ProjectManager {
   }
 
   /** Reconcile desired-state from the given configs (diff → none | restart). */
-  async sync(
-    configs: Array<{ name: string; config: ProjectConfig }>,
-    changedOwners = new Set<string>(),
-  ): Promise<void> {
+  async sync(configs: Array<{ name: string; config: ProjectConfig }>): Promise<void> {
     const errors: unknown[] = [];
     const nextConfigs = new Map<string, ProjectConfig>();
     const nextAccountProject = new Map<string, string>();
@@ -90,7 +87,6 @@ export class ProjectManager {
         existing &&
         existing.getStatus().state !== "error" &&
         existing.config.cwd === cfg.cwd &&
-        !cfg.accounts.some((id) => changedOwners.has(id)) &&
         runtimeKeyOf(existing.config.accounts) === runtimeKeyOf(cfg.accounts)
       ) {
         continue; // unchanged → none

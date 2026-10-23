@@ -245,12 +245,10 @@ export class Daemon {
     }
     const fingerprint = (data: ReturnType<typeof loadWeixinAccount>) =>
       JSON.stringify([data?.token, data?.baseUrl, data?.userId]);
-    const changedOwners = new Set<string>();
     for (const live of this.accountManager.listAccounts()) {
       const account = desired.get(live.accountId);
       if (!account?.token || this.credentials.get(live.accountId) !== fingerprint(account)) {
         await this.accountManager.remove(live.accountId);
-        if (account && account.userId !== live.userId) changedOwners.add(live.accountId);
         // Removed accounts: disk is CLI cleanup's responsibility. Credential replacement
         // invalidates runtime tokens before restore/start, including their persisted cache.
         clearContextTokensForAccount(live.accountId, !account?.token);
@@ -268,7 +266,7 @@ export class Daemon {
       await this.accountManager.register(id, transport, account.userId);
       this.credentials.set(id, fingerprint(account));
     }
-    await this.projectManager.sync(this.configList(), changedOwners);
+    await this.projectManager.sync(this.configList());
   }
 
   async promptProject(name: string, input: CliPromptRequest) {
