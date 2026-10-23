@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import net from "node:net";
 import { resolveDaemonSocket } from "../config/paths.js";
 
@@ -50,11 +49,11 @@ async function callRpc<T>(
   socketPath: string,
   timeoutMs: number,
 ): Promise<T> {
-  if (!fs.existsSync(socketPath)) throw new DaemonNotRunningError();
   return new Promise<T>((resolve, reject) => {
     const socket = net.connect(socketPath);
     const id = nextId++;
     let settled = false;
+    let connected = false;
     const close = () => {
       if (!socket.destroyed) socket.destroy();
     };
@@ -68,6 +67,7 @@ async function callRpc<T>(
       }
     };
     socket.on("connect", () => {
+      connected = true;
       socket.write(JSON.stringify({ id, method, params }));
     });
     socket.on("data", (buf: Buffer) => {
@@ -75,6 +75,16 @@ async function callRpc<T>(
         let resp: RpcResponse;
         try {
           resp = JSON.parse(buf.toString("utf-8")) as RpcResponse;
+          if (
+            resp === null ||
+            typeof resp !== "object" ||
+            Array.isArray(resp) ||
+            resp.id !== id ||
+            typeof resp.ok !== "boolean" ||
+            (resp.error !== undefined && typeof resp.error !== "string")
+          ) {
+            throw new Error("Invalid RPC response");
+          }
         } catch (err) {
           reject(err instanceof Error ? err : new Error(String(err)));
           return;
@@ -83,7 +93,15 @@ async function callRpc<T>(
         else reject(new Error(resp.error ?? "rpc failed"));
       });
     });
-    socket.on("error", () => done(() => reject(new DaemonNotRunningError())));
+    socket.on("error", (err: NodeJS.ErrnoException) =>
+      done(() =>
+        reject(
+          !connected && (err.code === "ENOENT" || err.code === "ECONNREFUSED")
+            ? new DaemonNotRunningError()
+            : err,
+        ),
+      ),
+    );
     socket.on("timeout", () => done(() => reject(new Error("rpc timeout"))));
     socket.on("close", () => done(() => reject(new Error("rpc connection closed"))));
     socket.setTimeout(timeoutMs);

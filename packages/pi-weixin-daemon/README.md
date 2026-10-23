@@ -94,6 +94,8 @@ pi-wx accounts                 # 查看已登录账号（NAME / ID / STATUS / US
 pi-wx logout <账号id|name>     # 登出：清凭据 + 从项目解绑 + 停 monitor
 ```
 
+`logout` 在线时由 daemon 统一解绑、停止 monitor 并清理凭据；仅在 socket 不存在或连接被拒绝时按账号 id/name 离线清理本地凭据。其他 RPC 错误会失败退出，不执行本地清理或自动重试；超时不代表 daemon 未执行登出。
+
 `--name` 是账号标识（全局唯一）；账号 **id 仍为扫码返回的 `ilink_bot_id`**（服务端分配，作为 Project 路由 key）。**同一微信用户只可扫码一次**；再次登录同一用户会替换旧账号（按 `ilink_user_id` 去重）。
 
 账号凭据保存在 `$XDG_DATA_HOME/pi-weixin-daemon/accounts/`（默认 `~/.local/share/pi-weixin-daemon/accounts/`，可用 `PI_WEIXIN_DATA_DIR` 覆盖），不写入项目。

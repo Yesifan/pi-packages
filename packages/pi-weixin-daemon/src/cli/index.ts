@@ -44,23 +44,24 @@ function logoutCommand(): Command {
     )
     .argument("<account>", "account id or name")
     .action(async (account: string) => {
+      const { rpcCall, DaemonNotRunningError } = await import("./rpc-client.js");
+      const { resolveWeixinAccountIdByName, unregisterWeixinAccountId, clearWeixinAccount } =
+        await import("../weixin/auth/accounts.js");
+      const localAccountId = resolveWeixinAccountIdByName(account);
+      let resolved = localAccountId ?? account;
       try {
-        const { rpcCall } = await import("./rpc-client.js");
         const list = await rpcCall<Array<{ accountId: string; name?: string }>>("account.list");
         const hit = list.find((a) => a.accountId === account || a.name === account);
         const accountId = (hit?.accountId ?? account) as string;
-        const { resolveWeixinAccountIdByName } = await import("../weixin/auth/accounts.js");
-        const resolved = resolveWeixinAccountIdByName(account) ?? accountId;
+        resolved = localAccountId ?? accountId;
         await rpcCall("account.logout", { accountId: resolved });
         console.log(`Logged out account "${resolved}".`);
-      } catch {
-        // daemon not running: fall back to local credential removal.
-        const { unregisterWeixinAccountId, clearWeixinAccount } = await import(
-          "../weixin/auth/accounts.js"
-        );
-        clearWeixinAccount(account);
-        unregisterWeixinAccountId(account);
-        console.log(`Logged out account "${account}" (daemon not running; credentials cleared).`);
+      } catch (err) {
+        if (!(err instanceof DaemonNotRunningError)) throw err;
+        // Only a failed connection permits offline credential removal; never retry an RPC.
+        clearWeixinAccount(resolved);
+        unregisterWeixinAccountId(resolved);
+        console.log(`Logged out account "${resolved}" (daemon not running; credentials cleared).`);
       }
     });
 }
