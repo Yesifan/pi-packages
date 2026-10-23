@@ -47,9 +47,7 @@ describe("runtime steering and acceptance", () => {
     const child = h.child("worker");
     expect(startController.signal.aborted).toBe(true);
     expect(child.aborts).toBe(0);
-    expect((await h.store.readOwner(h.scope.identity, null))!.children.worker?.state).toBe(
-      "running",
-    );
+    expect((await h.readOwner(h.scope.identity, null))!.children.worker?.state).toBe("running");
     child.emit({ type: "turn_start" });
     child.emit({
       type: "tool_execution_start",

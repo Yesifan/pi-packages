@@ -11,8 +11,9 @@
 | [0002 提示与会话存储](0002-prompt-and-session-storage.md) | name/metadata/Execution 与 SDK 私有目录 history；普通 discovery 排除新 child，独立打开/显式目录查询允许，存量 exact-path 恢复不迁移。最新 21 文件 / 245 测试通过；用户接受手测延期并关闭。 | completed | 2026-10-08 / 2026-10-09 |
 | [0003 异常退出通知](0003-terminal-exit-reporting.md) | 扩展 0002 的在线终态报告覆盖，失败/取消/无最终文本也通知有效直接 parent；不补投旧 root，不处理 parent 自身失败导致的 child 中断通知。 | not-started | 2026-10-09 |
 | [0004 原生 Codemode 与 MCP](0004-sdk-builtin-tools-and-mcp.md) | 扩展当前工具契约：target session builtin 加载、禁用/替换、MCP exposure 与取消工具存在性预校验；新增测试限加载/禁用/替换。 | completed | 2026-10-18 / 2026-10-18 |
+| [0005 执行周期整树锁](0005-execution-scoped-root-lock.md) | 扩展 0002 与 ADR-0003/0004 的锁生命周期：同 exact root 多窗口打开，执行期整树互斥、获取后刷新、空闲释放；无 IPC；ADR-0005、24 文件 / 275 项离线测试及真实双进程竞争通过，CLI 手测未运行。 | completed | 2026-10-23 / 2026-10-23 |
 
-V1 与 0001 保留历史格式；其历史标签不代表本轮验收完成。0002 已补充统一 metadata，执行日期沿用首次文档提交日期；0002/0003/0004 以各自文件 metadata 为状态与日期唯一来源。用户于 2026-10-09 接受手动 TUI/print 验收延期并关闭 0002，status 保持 completed，日期为创建日期 / 完成日期。PR #11 尚未合并，本次按用户明确要求把私有目录/discovery 最终选择直接整合进原 0002/ADR-0003，不另立后续规格或替代历史。最新目录修订的 typecheck、21 文件 / 245 测试、build、pack 通过；此前 runtime 复审不冒充该修订已复审。手测未运行，不宣称 §14 全部通过；0003 仍未开始。
+V1 与 0001 保留历史格式；其历史标签不代表本轮验收完成。0002 已补充统一 metadata，执行日期沿用首次文档提交日期；0002/0003/0004/0005 以各自文件 metadata 为状态与日期唯一来源。用户于 2026-10-09 接受手动 TUI/print 验收延期并关闭 0002，status 保持 completed，日期为创建日期 / 完成日期。PR #11 尚未合并，本次按用户明确要求把私有目录/discovery 最终选择直接整合进原 0002/ADR-0003，不另立后续规格或替代历史。最新目录修订的 typecheck、21 文件 / 245 测试、build、pack 通过；此前 runtime 复审不冒充该修订已复审。手测未运行，不宣称 §14 全部通过；0003 仍未开始。
 
 ## 跨包后续规格
 

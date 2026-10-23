@@ -33,6 +33,10 @@ D2 允许 child 独立打开/resume/继续聊天，不增加 owned-child guard �
 
 公开 session.steer() 接受 skill/template 展开与 extension command 拒绝；queued 不保证原 run 存活或消费，调用前取消不提交，hook 期间取消不承诺零入队。迟到 queued 仅留在捕获 session，不另启 run、不生成独立报告或搬运到后续任务。prompt/steer 调用与清理未完成仍 busy；shutdown 使用公开 abort，等待 dispose 后最后释放 writer lock，不合作 hook 不保证强制终止。每 mount 独立使用官方 services factories，保留 trust 前置、loader 配置、own-extension 排除、角色 prompt 顺序及三项 builtins；拒绝 error diagnostics，不手工重接 provider/runtime。
 
+### 当前整树锁生命周期
+
+[Spec 0005](0005-execution-scoped-root-lock.md) 与 [ADR-0005](../adr/0005-execution-scoped-root-lock.md) 扩展 Spec 0002/ADR-0003/0004：同 exact root 多窗口打开不持锁、不修改 metadata。create/普通 ask 获取执行周期整树锁后从最新持久化记录重建树，再检查 name/ownership/busy/live limits。全部 opening、子孙任务、报告依赖、prompt/steer 调用与持久化/dispose 收尾结束才释放；下一次获取必须重新恢复。其他窗口的 create/ask/steer 单次 ROOT_SCOPE_IN_USE，不排队、不永久禁用工具、不 IPC。无活动执行的 steer 不恢复旧轮次、不创建 Execution。报告只回执行窗口捕获的直接 parent；root 仍无 processed receipt。失败初始化/准备在必要清理后释放，后续明确请求可重试；关闭仍最后释放，不合作 hook 不强制解锁。不扩大到 root Pi JSONL 或独立 child 历史写入的协调。
+
 ### 当前工具策略（Pi SDK 1.4.0）
 
 [Spec 0004](0004-sdk-builtin-tools-and-mcp.md) 扩展本节：child mount 通过 SDK named `builtin: true` factories 加载 `codemode`、`tool_search`、`mcp`，遵循 target cwd、agentDir、有效配置、`-builtin:<name>` 禁用和第三方同名替换机制。加载不等于无条件激活；不复制 parent registry、连接或临时 CLI override。MCP 默认 codemode exposure，脚本发现与调用工具；deferred/direct/hidden 保持 SDK 行为。工具排除约束实际调用（含 codemode），trust 和委派边界不变。

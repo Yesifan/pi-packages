@@ -16,7 +16,7 @@ import type {
   OpenedChild,
 } from "../../src/child-session.js";
 import { RootRuntime } from "../../src/runtime.js";
-import type { PersistentSubagentStore } from "../../src/store.js";
+import { PersistentSubagentStore } from "../../src/store.js";
 import type {
   Agent,
   AgentDefinitionSnapshot,
@@ -345,7 +345,7 @@ export async function createHarness(
     },
   };
   const scope = Reflect.get(runtime, "scope") as RootScope;
-  const store = Reflect.get(runtime, "store") as PersistentSubagentStore;
+
   const h = {
     root,
     cwd,
@@ -358,7 +358,20 @@ export async function createHarness(
     ctx,
     caller,
     scope,
-    store,
+    get store() {
+      return Reflect.get(runtime, "store") as PersistentSubagentStore;
+    },
+    readOwner: async (...args: Parameters<PersistentSubagentStore["readOwner"]>) => {
+      if (Reflect.get(runtime, "cycleOwned")) return h.store.readOwner(...args);
+      await Reflect.get(runtime, "releasing");
+      const reader = new PersistentSubagentStore(agentDir, scope.identity);
+      try {
+        await reader.open();
+        return await reader.readOwner(...args);
+      } finally {
+        await reader.close();
+      }
+    },
     factory,
     mounts,
     children,
@@ -395,6 +408,7 @@ export async function createHarness(
       await Promise.resolve();
       await Promise.resolve();
       while (finalizations.size) await Promise.all([...finalizations]);
+      await Reflect.get(runtime, "releasing");
     },
     waitReport: async (index = 0) => {
       if (reports[index]) return;
@@ -407,6 +421,12 @@ export async function createHarness(
       const replacement = new RootRuntime(path.join(root, "extension.js"));
       runtimes.push(replacement);
       await replacement.initialize(host, config);
+      // Recovery is lazy: an explicit request, not opening the window, reads the tree.
+      try {
+        await replacement.createSubagent(caller, { name: "", prompt: "recover" }, ctx);
+      } catch (error) {
+        if ((error as { code?: string }).code !== "INVALID_ARGUMENT") throw error;
+      }
       return replacement;
     },
   };
