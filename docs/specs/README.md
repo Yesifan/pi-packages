@@ -6,6 +6,7 @@
 
 | Spec | Purpose | Status | Execution time |
 | --- | --- | --- | --- |
+| [pi-session 跨模式](pi-session-cross-mode.md) | 扩展已完成 pi-session 规格：四模式工具、source 输入展开、补全容错与异步生命周期提示。 | completed | 2026-10-23 / 2026-10-23 |
 | [Pi 1.4.0 全仓升级](pi-1.4-upgrade.md) | 原版 SDK 升级、官方 services/恢复/steering 替换、submitted 与串行清理合同、daemon UI 类型及四包回归。 | completed | 2026-10-22 / 2026-10-22 |
 | [pi-session](pi-session.md) | Session 名称引用补全、授权 cwd 正文搜索及通过完整 ID 继续原会话的轻量后台对话。 | completed | 2026-10-08 / 2026-10-21 |
 
