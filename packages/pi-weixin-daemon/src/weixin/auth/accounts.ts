@@ -196,8 +196,8 @@ export function clearWeixinAccount(accountId: string): void {
   for (const file of accountFiles) {
     try {
       fs.unlinkSync(path.join(dir, file));
-    } catch {
-      // ignore if not found
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
   }
 }

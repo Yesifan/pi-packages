@@ -58,6 +58,22 @@ describe("logout", () => {
     );
   });
 
+  it.each(["EACCES", "EPERM", "EIO"])(
+    "does not unregister or report success when offline deletion fails: %s",
+    async (code) => {
+      rpc.mockRejectedValueOnce(new DaemonNotRunningError());
+      const error = Object.assign(new Error("unlink failed"), { code });
+      vi.spyOn(fs, "unlinkSync").mockImplementation(() => {
+        throw error;
+      });
+      await expect(logout()).rejects.toBe(error);
+      expect(loadWeixinAccount("acct-a")?.token).toBe("test-token");
+      expect(listIndexedWeixinAccountIds()).toEqual(["acct-a"]);
+      expect(console.log).not.toHaveBeenCalled();
+      expect(rpc).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it("uses the daemon alias mapping when local metadata has no name", async () => {
     saveWeixinAccount("acct-a", { name: "" });
     rpc.mockResolvedValueOnce([{ accountId: "acct-a", name: "personal" }]);
