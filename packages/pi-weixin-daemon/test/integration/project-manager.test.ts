@@ -160,7 +160,7 @@ describe("ProjectManager: account routing + project isolation (fake)", () => {
         contextToken: `cached-${id}`,
       }),
     });
-    await pm.sync(twoProjects as never);
+    await expect(pm.sync(twoProjects as never)).rejects.toThrow("application failed");
 
     expect(pm.getRuntime("foo")!.getStatus().state).toBe("error");
     expect(pm.getRuntime("bar")!.getStatus().state).toBe("idle");
@@ -187,6 +187,34 @@ describe("ProjectManager: account routing + project isolation (fake)", () => {
 });
 
 describe("ProjectManager: desired → diff → restart (W2/W10)", () => {
+  it("rebuilds a same-name project when a later snapshot has a different cwd", async () => {
+    const h = setup(twoProjects as never);
+    await start(h);
+    const oldFoo = h.fakes.get("foo")!;
+    const oldBar = h.fakes.get("bar")!;
+
+    try {
+      // CLI delete/recreate may be coalesced before daemon sees the next snapshot.
+      const next = [
+        { name: "foo", config: { cwd: "/fake/new-foo", accounts: ["A", "B"], enabled: true } },
+        { name: "bar", config: { cwd: "/fake/bar", accounts: ["C"], enabled: true } },
+      ];
+      await h.pm.sync(next);
+
+      const newFoo = h.fakes.get("foo")!;
+      expect(newFoo).not.toBe(oldFoo);
+      expect(oldFoo.stopCalls).toBeGreaterThan(0);
+      expect(newFoo.cwd).toBe("/fake/new-foo");
+      expect(h.pm.listStatuses().find((status) => status.name === "foo")?.cwd).toBe(newFoo.cwd);
+      expect(h.fakes.get("bar")).toBe(oldBar);
+
+      await h.pm.sync(next);
+      expect(h.fakes.get("foo")).toBe(newFoo);
+    } finally {
+      await h.pm.stopAll();
+    }
+  });
+
   it("accounts change → old runtime stopped and a fresh one built", async () => {
     const h = setup(twoProjects as never);
     await start(h);

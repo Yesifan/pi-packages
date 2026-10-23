@@ -4,11 +4,13 @@ import os from "node:os";
 import path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ControlStore } from "../../src/cli/control-store.js";
 import { rpcBroadcast, rpcCall, rpcPrompt } from "../../src/cli/rpc-client.js";
 import { Daemon } from "../../src/daemon.js";
 import { createWeixinSendFileExtension } from "../../src/pi/extensions/weixin-send-file.js";
 import { WeixinUIContext } from "../../src/pi/ui-context.js";
 import type { ProjectHostFactoryContext } from "../../src/projects/project-controller.js";
+import { ProjectStateStore } from "../../src/projects/project-state-store.js";
 import { ProjectStore } from "../../src/projects/project-store.js";
 import { createLogger } from "../../src/util/logger.js";
 import { registerWeixinAccountId, saveWeixinAccount } from "../../src/weixin/auth/accounts.js";
@@ -22,6 +24,7 @@ import { HistoryRuntime } from "../helpers/history-runtime.js";
 
 const logger = createLogger({ level: "silent" });
 const originalData = process.env.PI_WEIXIN_DATA_DIR;
+const originalState = process.env.PI_WEIXIN_STATE_DIR;
 let root: string;
 let socket: string;
 let store: ProjectStore;
@@ -53,6 +56,7 @@ function buildDaemon() {
 beforeEach(async () => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-wx-prompt-"));
   process.env.PI_WEIXIN_DATA_DIR = root;
+  process.env.PI_WEIXIN_STATE_DIR = path.join(root, "state");
   socket = path.join(root, "daemon.sock");
   runtimes = new Map();
   transports = new Map();
@@ -80,6 +84,8 @@ afterEach(async () => {
   for (const id of ["A", "B", "C"]) clearContextTokensForAccount(id);
   if (originalData === undefined) delete process.env.PI_WEIXIN_DATA_DIR;
   else process.env.PI_WEIXIN_DATA_DIR = originalData;
+  if (originalState === undefined) delete process.env.PI_WEIXIN_STATE_DIR;
+  else process.env.PI_WEIXIN_STATE_DIR = originalState;
   fs.rmSync(root, { recursive: true, force: true });
 });
 
@@ -108,7 +114,7 @@ describe("CLI prompt over real local UDS", () => {
     const result = await first;
     expect(result).toMatchObject({ status: "success", text: "caller only" });
     const defaultId = result.sessionId!;
-    expect(store.get("foo")?.defaultSessionId).toBe(defaultId);
+    expect(daemon.getProjectStatus("foo").defaultSessionId).toBe(defaultId);
     expect(sent("A")).toEqual(["notice"]);
     await expect(
       rpcPrompt({ name: "foo", text: "bad", newSession: true, sessionId: defaultId }, socket),
@@ -124,7 +130,7 @@ describe("CLI prompt over real local UDS", () => {
     await complete("second answer", 2);
     const temporary = (await second).sessionId!;
     expect(temporary).not.toBe(defaultId);
-    expect(store.get("foo")?.defaultSessionId).toBe(defaultId);
+    expect(daemon.getProjectStatus("foo").defaultSessionId).toBe(defaultId);
     expect(sent("A").filter((text) => text.includes("当前会话已切换"))).toHaveLength(1);
     const wx = inbound("B", "uses active");
     await vi.waitFor(() => expect(runtimes.get("foo")!.prompts).toHaveLength(3));
@@ -184,9 +190,11 @@ describe("CLI prompt over real local UDS", () => {
       { name: "foo", text: "x", reply: ["bad"] },
     ])
       await expect(rpcPrompt(request, socket)).rejects.toThrow();
-    await daemon.setProjectEnabled("bar", false);
+    await new ControlStore(store).project("disable", "bar");
+    await daemon.reload();
     await expect(rpcPrompt({ name: "bar", text: "x" }, socket)).rejects.toThrow("disabled");
-    await daemon.setProjectEnabled("bar", true);
+    await new ControlStore(store).project("enable", "bar");
+    await daemon.reload();
     const busy = rpcPrompt({ name: "foo", text: "busy" }, socket);
     await vi.waitFor(() => expect(runtimes.get("foo")!.prompts).toHaveLength(1));
     await expect(
@@ -201,7 +209,7 @@ describe("CLI prompt over real local UDS", () => {
 
   it("returns CLI questions, accepts another local CLI answer, and keeps original reply/session", async () => {
     await inbound("A", "/new");
-    const defaultId = store.get("foo")!.defaultSessionId;
+    const defaultId = daemon.getProjectStatus("foo").defaultSessionId;
     const pending = rpcPrompt({ name: "foo", text: "question", newSession: true }, socket);
     await vi.waitFor(() => expect(runtimes.get("foo")!.prompts).toHaveLength(1));
     const ui = new WeixinUIContext({ interaction: contexts.get("foo")!.interaction, logger });
@@ -252,9 +260,10 @@ describe("CLI prompt over real local UDS", () => {
     await vi.waitFor(() => expect(daemon.getProjectStatus("foo").state).toBe("idle"));
   });
 
-  it("persists empty SDK sessions in real project config and resumes default in a new daemon", async () => {
+  it("persists empty SDK sessions in daemon state without writing config and resumes after restart", async () => {
+    const originalConfig = fs.readFileSync(store.configPath, "utf8");
     await inbound("A", "/new");
-    const id = store.get("foo")!.defaultSessionId!;
+    const id = daemon.getProjectStatus("foo").defaultSessionId!;
     expect((await runtimes.get("foo")!.listSessions()).map((item) => item.id)).toContain(id);
     await inbound("A", "/new");
     expect(daemon.getProjectStatus("foo").sessionId).not.toBe(id);
@@ -266,6 +275,49 @@ describe("CLI prompt over real local UDS", () => {
     await complete("resumed", 1);
     expect((await pending).sessionId).toBe(id);
     expect(sent("A")).toEqual([]);
+    expect(fs.readFileSync(store.configPath, "utf8")).toBe(originalConfig);
+    expect(new ProjectStateStore().getDefaultSession("foo", store.get("foo")!.cwd)).toBe(id);
+  });
+
+  it("forgets observed project deletion and never reuses a different cwd's default", async () => {
+    await inbound("A", "/new");
+    const oldCwd = store.get("foo")!.cwd;
+    const config = store.get("foo")!;
+    const cwd = path.join(root, "recreated");
+    fs.mkdirSync(cwd);
+    store.remove("foo");
+    store.upsert("foo", { ...config, cwd });
+    await daemon.reload();
+    expect(daemon.getProjectStatus("foo").defaultSessionId).toBeUndefined();
+    expect(new ProjectStateStore().getDefaultSession("foo", oldCwd)).toBeUndefined();
+    await inbound("A", "/new");
+    expect(new ProjectStateStore().getDefaultSession("foo", cwd)).toBeDefined();
+    await new ControlStore(store).project("remove", "foo");
+    await daemon.reload();
+    expect(new ProjectStateStore().read().projects.foo).toBeUndefined();
+  });
+
+  it("reads legacy config defaults as fallback, with same-cwd daemon state taking precedence", async () => {
+    await inbound("A", "/new");
+    const id = daemon.getProjectStatus("foo").defaultSessionId!;
+    await daemon.stop();
+    fs.unlinkSync(new ProjectStateStore().statePath);
+    store.upsert("foo", { ...store.get("foo")!, defaultSessionId: id });
+    const config = fs.readFileSync(store.configPath, "utf8");
+    daemon = buildDaemon();
+    await daemon.start();
+    const pending = rpcPrompt({ name: "foo", text: "legacy" }, socket);
+    await complete("resumed", 1);
+    expect((await pending).sessionId).toBe(id);
+    await inbound("A", "/new");
+    await inbound("A", "/default");
+    const replacement = daemon.getProjectStatus("foo").defaultSessionId!;
+    expect(replacement).not.toBe(id);
+    await daemon.stop();
+    daemon = buildDaemon();
+    await daemon.start();
+    expect(daemon.getProjectStatus("foo").defaultSessionId).toBe(replacement);
+    expect(fs.readFileSync(store.configPath, "utf8")).toBe(config);
   });
 
   it("caller-only CLI can send project files to all or one user with exact tokens", async () => {
@@ -329,7 +381,7 @@ describe("CLI prompt over real local UDS", () => {
 
   it("rejects missing default after restart until explicitly creating and setting a replacement", async () => {
     await inbound("A", "/new");
-    const missing = store.get("foo")!.defaultSessionId!;
+    const missing = daemon.getProjectStatus("foo").defaultSessionId!;
     fs.unlinkSync(runtimes.get("foo")!.getStatus().sessionFile!);
     await daemon.stop();
     daemon = buildDaemon();
@@ -339,9 +391,9 @@ describe("CLI prompt over real local UDS", () => {
     const replacement = rpcPrompt({ name: "foo", text: "repair", newSession: true }, socket);
     await complete("new", 1);
     const id = (await replacement).sessionId!;
-    expect(store.get("foo")!.defaultSessionId).toBe(missing);
+    expect(daemon.getProjectStatus("foo").defaultSessionId).toBe(missing);
     await inbound("A", "/default");
-    expect(store.get("foo")!.defaultSessionId).toBe(id);
+    expect(daemon.getProjectStatus("foo").defaultSessionId).toBe(id);
     await expect(rpcCall("project.sessions", { name: "foo" }, socket)).rejects.toThrow(
       "unknown rpc",
     );
@@ -369,11 +421,11 @@ describe("CLI prompt over real local UDS", () => {
     const connection = net.connect(socket);
     await new Promise<void>((resolve) => connection.once("connect", resolve));
     connection.write(
-      JSON.stringify({
+      `${JSON.stringify({
         id: 1,
         method: "project.prompt",
         params: { name: "foo", text: "disconnected" },
-      }),
+      })}\n`,
     );
     await vi.waitFor(() => expect(runtimes.get("foo")!.prompts).toHaveLength(1));
     connection.destroy();

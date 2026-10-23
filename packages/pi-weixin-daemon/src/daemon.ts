@@ -1,7 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { AccountManager } from "./accounts/account-manager.js";
-import { migrateLegacyAccounts } from "./config/paths.js";
+import {
+  acquireInstanceLock,
+  SerialOperations,
+  storageIdentity,
+  withControlLock,
+} from "./config/control-lock.js";
 import { RpcServer } from "./daemon/rpc-server.js";
 import { createWeixinSendFileExtension } from "./pi/extensions/weixin-send-file.js";
 import { createWeixinSendProgressExtension } from "./pi/extensions/weixin-send-progress.js";
@@ -12,22 +17,21 @@ import type {
   ProjectHostFactoryContext,
 } from "./projects/project-controller.js";
 import { ProjectManager } from "./projects/project-manager.js";
+import { ProjectStateStore } from "./projects/project-state-store.js";
 import { ProjectStore } from "./projects/project-store.js";
-import type { ProjectStoreData } from "./projects/types.js";
+import type { AccountInfo, ProjectStoreData } from "./projects/types.js";
 import type { CliPromptRequest } from "./sessions/cli-prompt.js";
 import type { Logger } from "./util/logger.js";
 import { VERSION } from "./version.js";
+import { clearSessionPause } from "./weixin/api/session-guard.js";
 import {
-  clearWeixinAccount,
   listIndexedWeixinAccountIds,
   loadWeixinAccount,
-  resolveWeixinAccountIdByName,
   resolveWeixinAccountName,
-  unregisterWeixinAccountId,
 } from "./weixin/auth/accounts.js";
 import { WeixinFileSender } from "./weixin/file-sender.js";
 import { resolveRecipientAccount } from "./weixin/recipient.js";
-import { restoreContextTokens } from "./weixin/storage/context-token.js";
+import { clearContextTokensForAccount } from "./weixin/storage/context-token.js";
 import { ILinkWeixinTransport } from "./weixin/transport.js";
 import type { WeixinTransport } from "./weixin/types.js";
 
@@ -82,12 +86,17 @@ function envDuration(name: string): number | undefined {
 /**
  * pi-weixin-daemon composition root (one long-running daemon, many projects).
  *
- * Owns: config (ProjectStore) -> AccountManager (per-account transports) ->
+ * Reads CLI-owned config (ProjectStore) -> AccountManager (per-account transports) ->
  * ProjectManager (ProjectController per project) -> account->project dispatch.
- * Graceful shutdown stops projects first, then account monitors.
+ * Graceful shutdown cancels receivers before stopping project runtimes.
  */
 export class Daemon {
   private stopped = false;
+  private readonly lifecycle = new SerialOperations();
+  private releaseInstance: (() => void) | undefined;
+  private credentials = new Map<string, string>();
+  private applicationError: string | undefined;
+  readonly identity: string;
   private keepAlive: NodeJS.Timeout | undefined;
   private readonly shutdownPromise: Promise<void>;
   private resolveShutdown!: () => void;
@@ -95,6 +104,7 @@ export class Daemon {
   private readonly accountManager: AccountManager;
   private readonly projectManager: ProjectManager;
   private readonly store: ProjectStore;
+  private readonly sessionState = new ProjectStateStore();
   private accountTransport: (
     accountId: string,
     token?: string,
@@ -105,13 +115,16 @@ export class Daemon {
 
   constructor(private readonly deps: DaemonDeps) {
     this.store = deps.store ?? new ProjectStore();
+    this.identity = storageIdentity(this.store.configPath);
     const logger = deps.logger;
     this.accountManager = new AccountManager({ logger });
     this.projectManager = new ProjectManager({
       saveDefaultSession: (projectId, sessionId) => {
-        this.store.setDefaultSession(projectId, sessionId);
         const project = this.config.projects[projectId];
-        if (project) project.defaultSessionId = sessionId;
+        const cwd = this.projectManager.getRuntime(projectId)?.config.cwd;
+        if (!project || cwd !== project.cwd) throw new Error("Project configuration changed");
+        this.sessionState.setDefaultSession(projectId, cwd, sessionId);
+        project.defaultSessionId = sessionId;
       },
       getTransport: (id) => this.accountManager.getTransport(id),
       resolveBroadcastAccount: resolveRecipientAccount,
@@ -147,115 +160,115 @@ export class Daemon {
   }
 
   async start(): Promise<void> {
-    const { logger } = this.deps;
-    migrateLegacyAccounts();
-    this.config = this.store.read();
-    logger.info({ projects: Object.keys(this.config.projects).length }, "daemon starting");
-
-    // Keep the event loop alive until stop().
-    this.keepAlive = setInterval(() => {}, 1 << 30);
-
-    // --- Account monitors: one per registered account, independent of project ---
-    for (const accountId of listIndexedWeixinAccountIds()) {
-      if (!(await this.startAccount(accountId))) {
-        logger.warn({ account: accountId }, "account has no token, skipping monitor");
+    return this.lifecycle.run(async () => {
+      if (this.stopped || this.releaseInstance)
+        throw new Error("daemon already started or stopped");
+      this.releaseInstance = await acquireInstanceLock();
+      if (!this.releaseInstance) throw new Error("A daemon already owns this data instance");
+      this.keepAlive = setInterval(() => {}, 1 << 30);
+      this.accountManager.onInbound((msg) => this.projectManager.dispatch(msg.accountId, msg));
+      try {
+        await withControlLock(() => this.reconcile());
+      } catch (error) {
+        // Keep management access and healthy projects when another project fails.
+        // Reconcile failed (and status says so); starting the daemon is not an apply ack.
+        if (!(error instanceof AggregateError)) throw error;
+        this.deps.logger.error(
+          { err: error },
+          "daemon started with configuration application errors",
+        );
       }
-    }
-
-    // --- Project runtimes: reconcile desired state (enabled) from config ---
-    await this.projectManager.sync(this.configList());
-
-    // --- Inbound dispatch: account -> project -> runtime ---
-    this.accountManager.onInbound((msg) => this.projectManager.dispatch(msg.accountId, msg));
-
-    // --- UDS RPC (control plane) ---
-    if (this.deps.startRpc) {
-      this.rpcServer = new RpcServer(this, logger, this.deps.rpcSocketPath);
-      await this.rpcServer.start();
-    }
-
-    logger.info(
-      {
-        accounts: this.accountManager.listAccounts().length,
-        projects: this.getProjectStatuses().length,
-      },
-      "daemon started",
-    );
+      if (this.deps.startRpc) {
+        this.rpcServer = new RpcServer(this, this.deps.logger, this.deps.rpcSocketPath);
+        await this.rpcServer.start();
+      }
+      this.deps.logger.info("daemon started");
+    });
   }
 
   async stop(): Promise<void> {
-    if (this.stopped) return;
-    this.stopped = true;
-    const { logger } = this.deps;
-    logger.info("daemon stopping");
-
-    await this.projectManager
-      .stopAll()
-      .catch((err: unknown) => logger.warn({ err }, "projectManager stop error"));
-    await this.accountManager
-      .stopAll()
-      .catch((err: unknown) => logger.warn({ err }, "accountManager stop error"));
-
-    await this.rpcServer
-      ?.stop()
-      .catch((err: unknown) => logger.warn({ err }, "rpc server stop error"));
-    this.rpcServer = undefined;
-
-    if (this.keepAlive) clearInterval(this.keepAlive);
-    logger.info("daemon stopped");
-    this.resolveShutdown();
+    return this.lifecycle.run(async () => {
+      if (this.stopped) return;
+      await withControlLock(async () => {
+        await this.accountManager.stopAll();
+        await this.projectManager.stopAll();
+      });
+      await this.rpcServer?.stop();
+      this.rpcServer = undefined;
+      if (this.keepAlive) clearInterval(this.keepAlive);
+      this.releaseInstance?.();
+      this.releaseInstance = undefined;
+      this.stopped = true;
+      this.resolveShutdown();
+    });
   }
 
   waitForShutdown(): Promise<void> {
     return this.shutdownPromise;
   }
 
-  /** Reconcile projects + rebuild the account inbox routing after config change. */
+  /** Read fresh desired state under the shared lock, then apply before releasing. */
   async reload(): Promise<void> {
-    this.config = this.store.read();
+    return this.lifecycle.run(() =>
+      withControlLock(async () => {
+        if (this.stopped || !this.releaseInstance) throw new Error("daemon is not running");
+        await this.reconcile();
+      }),
+    );
+  }
+
+  async reloadAccounts(): Promise<void> {
+    await this.reload();
+  }
+
+  private async reconcile(): Promise<void> {
+    try {
+      await this.applySnapshot();
+      this.applicationError = undefined;
+    } catch (error) {
+      this.applicationError =
+        error instanceof Error ? error.message : "Configuration application failed";
+      throw error;
+    }
+  }
+
+  private async applySnapshot(): Promise<void> {
+    // Finish every control read/validation before touching the current runtime.
+    const config = this.store.read();
+    this.sessionState.read();
+    const desired = new Map(listIndexedWeixinAccountIds().map((id) => [id, loadWeixinAccount(id)]));
+    if (!this.config) {
+      for (const [accountId, account] of desired) {
+        if (!account?.token)
+          this.deps.logger.warn({ account: accountId }, "account has no token, skipping monitor");
+      }
+    }
+    const fingerprint = (data: ReturnType<typeof loadWeixinAccount>) =>
+      JSON.stringify([data?.token, data?.baseUrl, data?.userId]);
+    for (const live of this.accountManager.listAccounts()) {
+      const account = desired.get(live.accountId);
+      if (!account?.token || this.credentials.get(live.accountId) !== fingerprint(account)) {
+        await this.accountManager.remove(live.accountId);
+        // Removed accounts: disk is CLI cleanup's responsibility. Credential replacement
+        // invalidates runtime tokens before restore/start, including their persisted cache.
+        clearContextTokensForAccount(live.accountId, !account?.token);
+        clearSessionPause(live.accountId);
+        this.credentials.delete(live.accountId);
+      }
+    }
+    // Receivers above may finish an in-flight activation while stopping. Clean after
+    // that wait, then publish the new snapshot without an intervening async gap.
+    this.sessionState.reconcile(config.projects);
+    this.config = config;
+    for (const [id, account] of desired) {
+      if (!account?.token || this.accountManager.has(id)) continue;
+      const transport = await this.accountTransport(id, account.token, account.baseUrl);
+      await this.accountManager.register(id, transport, account.userId);
+      this.credentials.set(id, fingerprint(account));
+    }
     await this.projectManager.sync(this.configList());
   }
 
-  // --- RPC mutation entry points (daemon is the sole config writer) ---
-
-  /** Create a project (accounts=[], enabled=false). `cwd` is fixed after creation. */
-  async createProject(name: string, cwd: string): Promise<void> {
-    this.store.upsert(name, { cwd, accounts: [], enabled: false });
-    await this.reload();
-  }
-
-  /** Add accounts to a project. `accounts` values are account *labels* (resolved to ilink_bot_id). */
-  async addProjectAccounts(name: string, labels: string[]): Promise<void> {
-    const ids: string[] = [];
-    for (const label of labels) {
-      const id = resolveWeixinAccountIdByName(label);
-      if (!id)
-        throw new Error(
-          `account "${label}" is not registered (run \`pi-wx login --name ${label}\` first)`,
-        );
-      ids.push(id);
-    }
-    this.store.addAccounts(name, ids);
-    await this.reload();
-  }
-
-  /** Remove accounts from a project. `accounts` values are account *labels*. */
-  async removeProjectAccounts(name: string, labels: string[]): Promise<void> {
-    const ids = labels.map((label) => {
-      const id = resolveWeixinAccountIdByName(label);
-      if (!id) throw new Error(`account "${label}" is not registered`);
-      return id;
-    });
-    this.store.removeAccounts(name, ids);
-    await this.reload();
-  }
-
-  async setProjectEnabled(name: string, enabled: boolean): Promise<void> {
-    this.store.setEnabled(name, enabled);
-    await this.reload();
-  }
-
-  /** Direct notification to bound account users; does not require a healthy Pi runtime. */
   async promptProject(name: string, input: CliPromptRequest) {
     return this.projectManager.prompt(name, input);
   }
@@ -265,83 +278,43 @@ export class Daemon {
   }
 
   async restartProject(name: string): Promise<void> {
-    await this.projectManager.restart(name);
+    return this.lifecycle.run(() =>
+      withControlLock(async () => {
+        if (this.stopped || !this.releaseInstance) throw new Error("daemon is not running");
+        await this.reconcile();
+        await this.projectManager.restart(name);
+      }),
+    );
   }
 
-  async removeProject(name: string): Promise<void> {
-    this.store.remove(name);
-    await this.reload();
-  }
-
-  /** Re-read the account index and register any newly logged-in accounts. */
-  async reloadAccounts(): Promise<void> {
-    // Reconcile: stop transports for accounts no longer registered.
-    const index = new Set(listIndexedWeixinAccountIds());
-    for (const info of this.accountManager.listAccounts()) {
-      if (!index.has(info.accountId)) {
-        await this.accountManager
-          .remove(info.accountId)
-          .catch((err: unknown) =>
-            this.deps.logger.warn({ err, account: info.accountId }, "account stop error"),
-          );
-        this.deps.logger.info({ account: info.accountId }, "account monitor stopped (logged out)");
-      }
-    }
-    // Start monitors for newly-logged-in accounts.
-    for (const accountId of index) {
-      if (this.accountManager.has(accountId)) continue;
-      await this.startAccount(accountId);
-    }
-  }
-
-  /** Returns false when the indexed account has no usable credentials. */
-  private async startAccount(accountId: string): Promise<boolean> {
-    restoreContextTokens(accountId);
-    const account = loadWeixinAccount(accountId);
-    if (!account?.token) return false;
-    const transport = await this.accountTransport(accountId, account.token, account.baseUrl);
-    await this.accountManager.register(accountId, transport, account.userId);
-    return true;
-  }
-
-  /** Log out an account: clear credentials, unbind from projects, stop its monitor. */
-  async logoutAccount(accountId: string): Promise<void> {
-    // 1. Remove the account from any project config first (config stays valid).
-    for (const { name, config } of this.store.list()) {
-      if (config.accounts.includes(accountId)) {
-        this.store.removeAccounts(name, [accountId]);
-        this.deps.logger.info(
-          { project: name, account: accountId },
-          "removed account from project",
-        );
-      }
-    }
-    // 2. Stop its monitor first so it can't rewrite the sync/context-token files.
-    if (this.accountManager.has(accountId)) {
-      await this.accountManager
-        .remove(accountId)
-        .catch((err: unknown) =>
-          this.deps.logger.warn({ err, account: accountId }, "account stop error"),
-        );
-    }
-    // 3. Clear credentials + index.
-    clearWeixinAccount(accountId);
-    unregisterWeixinAccountId(accountId);
-    // 4. Reconcile projects + routes.
-    await this.reload();
+  /** Read-only identity + actual receivers; also usable while a CLI holds the control lock. */
+  getControlStatus() {
+    return {
+      identity: this.identity,
+      runningAccountIds: this.accountManager.listAccounts().map((a) => a.accountId),
+    };
   }
 
   /** Full status snapshot for `daemon.status` / diagnostics. */
   getStatus() {
     return {
       version: VERSION,
+      ...this.getControlStatus(),
+      applicationError: this.applicationError,
       projects: this.getProjectStatuses(),
       accounts: this.getAccountStatuses(),
     };
   }
 
   private configList() {
-    return Object.entries(this.config.projects).map(([name, config]) => ({ name, config }));
+    return Object.entries(this.config.projects).map(([name, config]) => ({
+      name,
+      config: {
+        ...config,
+        defaultSessionId:
+          this.sessionState.getDefaultSession(name, config.cwd) ?? config.defaultSessionId,
+      },
+    }));
   }
 
   /** Gate + inbox resolution for an account: its project's inbox (and gate reason). */
@@ -360,16 +333,26 @@ export class Daemon {
     return st;
   }
 
-  getAccountStatuses() {
-    return this.accountManager.listAccounts({
-      userId: (id) => this.accountUser(id),
-      projectId: (id) => this.projectManager.getProjectIdForAccount(id),
-      name: (id) => resolveWeixinAccountName(id),
-      since: (id) => loadWeixinAccount(id)?.savedAt,
+  getAccountStatuses(): AccountInfo[] {
+    const live = new Map(
+      this.accountManager.listAccounts().map((account) => [account.accountId, account]),
+    );
+    // Show desired registration separately, retaining receivers whose stop failed.
+    const projects = this.store.list();
+    const registered = new Set(listIndexedWeixinAccountIds());
+    return [...new Set([...registered, ...live.keys()])].map((accountId) => {
+      const account = loadWeixinAccount(accountId);
+      const monitor = live.get(accountId);
+      return {
+        accountId,
+        registered: registered.has(accountId),
+        name: account?.name?.trim() || undefined,
+        status: monitor?.status ?? "stopped",
+        userId: monitor?.userId ?? account?.userId,
+        projectId: projects.find(({ config }) => config.accounts.includes(accountId))?.name,
+        since: account?.savedAt,
+        error: monitor?.error,
+      };
     });
-  }
-
-  private accountUser(accountId: string): string | undefined {
-    return loadWeixinAccount(accountId)?.userId;
   }
 }

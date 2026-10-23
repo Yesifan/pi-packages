@@ -51,6 +51,10 @@ export function assertSessionActive(accountId: string): void {
   }
 }
 
+export function clearSessionPause(accountId: string): void {
+  pauseUntilMap.delete(accountId);
+}
+
 /** Reset internal state — only for tests. @internal */
 export function _resetForTest(): void {
   pauseUntilMap.clear();

@@ -17,6 +17,7 @@ interface RpcRequest {
 export class RpcServer {
   private server: net.Server | undefined;
   private socketPath: string;
+  private sockets = new Set<net.Socket>();
 
   constructor(
     private readonly daemon: Daemon,
@@ -31,27 +32,64 @@ export class RpcServer {
     // Remove a stale socket file if present but no daemon listening.
     try {
       if (fs.existsSync(this.socketPath)) {
+        await new Promise<void>((resolve, reject) => {
+          const probe = net.connect(this.socketPath);
+          probe.once("connect", () => {
+            probe.destroy();
+            reject(new Error("Socket already has a listener"));
+          });
+          probe.once("error", (error: NodeJS.ErrnoException) => {
+            if (error.code === "ECONNREFUSED" || error.code === "ENOENT") resolve();
+            else reject(error);
+          });
+        });
         fs.unlinkSync(this.socketPath);
       }
     } catch (err) {
-      this.logger.warn({ err, socket: this.socketPath }, "failed to remove stale socket");
+      this.logger.warn(
+        { err, socket: this.socketPath },
+        "refusing occupied or inaccessible socket",
+      );
+      throw err;
     }
 
     this.server = net.createServer((socket) => {
-      let request = "";
-      let handled = false;
-      socket.setEncoding("utf8");
-      socket.on("data", (chunk: string) => {
-        if (handled) return;
-        request += chunk;
-        try {
-          JSON.parse(request);
-        } catch {
-          if (!request.includes("\n")) return;
+      this.sockets.add(socket);
+      socket.on("close", () => this.sockets.delete(socket));
+      const chunks: Buffer[] = [];
+      let reading = true;
+      const finishReading = () => {
+        reading = false;
+        chunks.length = 0;
+        socket.setTimeout(0);
+      };
+      // Requests use newline framing; responses still end at EOF. One request per connection.
+      socket.setTimeout(15_000);
+      socket.on("timeout", () => {
+        if (reading) {
+          finishReading();
+          socket.destroy();
         }
-        handled = true;
-        this.handleConnection(socket, Buffer.from(request));
       });
+      socket.on("data", (buf: Buffer) => {
+        if (!reading) return;
+        const newline = buf.indexOf(0x0a);
+        if (newline === -1) {
+          chunks.push(buf);
+          return;
+        }
+        chunks.push(buf.subarray(0, newline));
+        const request = Buffer.concat(chunks);
+        finishReading(); // Long broadcasts must not inherit the request-read timeout.
+        this.handleConnection(socket, request);
+      });
+      socket.on("end", () => {
+        if (reading) {
+          finishReading();
+          socket.destroy();
+        }
+      });
+      socket.on("close", finishReading);
       socket.on("error", (err) => this.logger.warn({ err }, "rpc socket error"));
     });
     const server = this.server;
@@ -74,6 +112,7 @@ export class RpcServer {
   async stop(): Promise<void> {
     const server = this.server;
     if (!server) return;
+    for (const socket of this.sockets) socket.destroy();
     await new Promise<void>((resolve) => server.close(() => resolve()));
     this.server = undefined;
     try {
@@ -88,6 +127,9 @@ export class RpcServer {
       let data: RpcRequest;
       try {
         data = JSON.parse(buf.toString("utf-8")) as RpcRequest;
+        if (data === null || typeof data !== "object" || Array.isArray(data)) {
+          throw new Error("request must be an object");
+        }
       } catch (err) {
         this.logger.warn({ err }, "rpc: invalid JSON request");
         socket.end(JSON.stringify({ id: 0, ok: false, error: "invalid JSON" }));
@@ -95,13 +137,18 @@ export class RpcServer {
       }
       try {
         const result = await this.dispatch(data.method, data.params ?? {});
-        socket.end(JSON.stringify({ id: data.id, ok: true, result }));
+        if (!socket.destroyed) socket.end(JSON.stringify({ id: data.id, ok: true, result }));
       } catch (err) {
         const error = err instanceof Error ? err.message : String(err);
         this.logger.warn({ method: data.method, error }, "rpc method failed");
-        socket.end(JSON.stringify({ id: data.id, ok: false, error }));
+        if (!socket.destroyed) socket.end(JSON.stringify({ id: data.id, ok: false, error }));
       }
     })();
+  }
+
+  private requireIdentity(params: Record<string, unknown>): void {
+    if (params.identity !== this.daemon.identity)
+      throw new Error("Storage identity mismatch; refusing another configuration/data instance");
   }
 
   private async dispatch(method: string, params: Record<string, unknown>): Promise<unknown> {
@@ -113,26 +160,13 @@ export class RpcServer {
       case "project.get":
         return this.daemon.getProjectStatus(params.name as string);
       case "project.create":
-        await this.daemon.createProject(params.name as string, params.cwd as string);
-        return this.daemon.getProjectStatuses();
       case "project.account.add":
-        await this.daemon.addProjectAccounts(
-          params.name as string,
-          (params.accounts ?? []) as string[],
-        );
-        return this.daemon.getProjectStatuses();
       case "project.account.remove":
-        await this.daemon.removeProjectAccounts(
-          params.name as string,
-          (params.accounts ?? []) as string[],
-        );
-        return this.daemon.getProjectStatuses();
       case "project.enable":
-        await this.daemon.setProjectEnabled(params.name as string, true);
-        return this.daemon.getProjectStatuses();
       case "project.disable":
-        await this.daemon.setProjectEnabled(params.name as string, false);
-        return this.daemon.getProjectStatuses();
+      case "project.remove":
+      case "account.logout":
+        throw new Error("Control writes moved to CLI; upgrade CLI and daemon together");
       case "project.prompt":
         if (typeof params.name !== "string" || !params.name.trim())
           throw new Error("prompt project name must not be blank");
@@ -151,19 +185,19 @@ export class RpcServer {
         }
         return this.daemon.broadcastProject(params.name, params.text);
       case "project.restart":
+        this.requireIdentity(params);
         await this.daemon.restartProject(params.name as string);
-        return this.daemon.getProjectStatuses();
-      case "project.remove":
-        await this.daemon.removeProject(params.name as string);
         return this.daemon.getProjectStatuses();
       case "account.list":
         return this.daemon.getAccountStatuses();
+      case "control.status":
+        this.requireIdentity(params);
+        return this.daemon.getControlStatus();
       case "account.reload":
-        await this.daemon.reloadAccounts();
-        return this.daemon.getAccountStatuses();
-      case "account.logout":
-        await this.daemon.logoutAccount(params.accountId as string);
-        return this.daemon.getAccountStatuses();
+      case "control.sync":
+        this.requireIdentity(params);
+        await this.daemon.reload();
+        return this.daemon.getControlStatus();
       default:
         throw new Error(`unknown rpc method: ${method}`);
     }

@@ -79,6 +79,8 @@ export async function monitorWeixinProvider(opts: MonitorWeixinOpts): Promise<vo
         logger: log,
       });
 
+      if (abortSignal?.aborted) return;
+
       if (resp.longpolling_timeout_ms != null && resp.longpolling_timeout_ms > 0) {
         nextTimeoutMs = resp.longpolling_timeout_ms;
       }
@@ -111,6 +113,7 @@ export async function monitorWeixinProvider(opts: MonitorWeixinOpts): Promise<vo
 
       const list = resp.msgs ?? [];
       for (const full of list) {
+        if (abortSignal?.aborted) return;
         log.info(
           `inbound message: from=${full.from_user_id} types=${full.item_list?.map((i) => i.type).join(",") ?? "none"}`,
         );
@@ -135,11 +138,14 @@ export async function monitorWeixinProvider(opts: MonitorWeixinOpts): Promise<vo
 }
 
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.resolve();
   return new Promise((resolve) => {
-    const t = setTimeout(resolve, ms);
-    signal?.addEventListener("abort", () => {
+    const done = () => {
       clearTimeout(t);
+      signal?.removeEventListener("abort", done);
       resolve();
-    });
+    };
+    const t = setTimeout(done, ms);
+    signal?.addEventListener("abort", done, { once: true });
   });
 }

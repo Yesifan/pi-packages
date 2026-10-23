@@ -45,7 +45,7 @@
 
 ## 安装
 
-要求：Node.js >= 22.19，pnpm **11.x**（本项目已用 `packageManager` 固定为 `pnpm@11.25.0`）。当前开发与内嵌运行时基线为 Pi SDK 1.4.0；微信路由、UI 超时和回复投递行为不变。
+要求：Linux、Node.js >= 22.19、`util-linux` 提供的 `flock` 命令，以及 pnpm **11.x**（本项目已用 `packageManager` 固定为 `pnpm@11.25.0`）。控制协调使用内核文件锁，不需要后台锁服务。当前开发与内嵌运行时基线为 Pi SDK 1.4.0。
 
 > ⚠️ 推荐 11.x：pnpm 12 对 `install -g <本地路径/tarball>` 有回归（会把本地路径误当 registry 包名，报 `@scope` 错）。
 
@@ -90,19 +90,43 @@ npm 全局 bin 目录为 `$(npm config get prefix)/bin`。从仓库根目录可�
 ```bash
 pi-wx login --name personal    # 终端显示二维码，手机扫码（--name 必填）
 pi-wx login --name work        # 再次执行，添加第二个账号（须为另一个微信用户）
-pi-wx accounts                 # 查看已登录账号（NAME / ID / STATUS / USER / PROJECT / SINCE）
-pi-wx logout <账号id|name>     # 登出：清凭据 + 从项目解绑 + 停 monitor
+pi-wx accounts                 # 分开显示登记（REGISTERED）与实际接收状态
+pi-wx project <项目> remove personal  # 删除账号前，先显式解绑
+pi-wx logout personal          # 保存登记删除 → 同步停止 → 安全时清理文件
+pi-wx reload                   # 在线 daemon 重新应用当前磁盘配置（不改配置）
 ```
 
-`--name` 是账号标识（全局唯一）；账号 **id 仍为扫码返回的 `ilink_bot_id`**（服务端分配，作为 Project 路由 key）。**同一微信用户只可扫码一次**；再次登录同一用户会替换旧账号（按 `ilink_user_id` 去重）。
+CLI 的账号选择参数只接受 **name**：去除首尾空白、区分大小写；未知或重复 name 明确失败，**不会回退匹配 ID**。配置修改（logout、project add/remove、login 的冲突检查）在共同控制锁内使用最新磁盘登记与凭据解析，不依赖可能滞后的 daemon 列表。
+
+**CLI 是账号登记、凭据、项目配置的唯一写入角色**。所有 CLI 进程共享一把控制锁；daemon 在同一把锁内读取最新快照并完成运行同步。CLI 保存后先释放锁，再通知 daemon，不把保存配置和停止网络任务描述为一个事务：
+
+| 结果 | 反馈 / 退出状态 |
+| --- | --- |
+| 保存失败 | 非零；不通知 daemon，不清理账号文件 |
+| 保存成功，确认 daemon 离线 | 成功；明确待下次启动应用 |
+| 保存成功，在线同步成功 | 成功；应用的是当前期望配置，并发命令可能已替代中间修改 |
+| 保存成功，同步失败或未知 | 非零；明确已保存、不回滚，可运行 `pi-wx reload` 或重启同步 |
+| 删除已应用，仅文件清理失败 | 成功并警告；列出残留路径供手工删除，不恢复账号 |
+
+`logout` 和登录替换旧账号均检查**所有持久绑定，包括 disabled 项目**；有绑定就拒绝，先用 `project <项目> remove <账号name>` 解绑，不隐式改项目。解绑仍会按既有方式重建项目 controller/会话。扫码本身已经发生时，本地拒绝保存不表示能够撤销远端登录。
+
+删除以从 `accounts.json` 保存移除为提交点，随后等待同步停止。只有确认旧接收任务已停止（或取得单实例锁证明没有 daemon），才重新取得控制锁、再次检查同 ID 未重新登记并核实当前停止状态，然后逐文件尽力清理。socket 不存在/拒绝连接**不等于安全离线**。无法确认停止就保留文件，必须先停止相关运行任务再手工清理；重新登记则跳过清理，不能误删新账号凭据。清理警告不承诺敏感文件已消失；不自动扫描、重试或提供清理命令。
+
+`accounts` 显示持久登记与实际 receiver 状态；登记已删但停止失败的 receiver 仍会列出。无可用凭据的登记账号不会启动 monitor。`project list/show` 分开显示 CONFIGURED、期望 ENABLED 与实际 STATE；daemon 不可用时显示 unknown，不把未知状态说成已停止。启动时某项目失败仍保留管理入口和其他健康项目，日志和 `daemon.status.applicationError` 明确说明配置未全部应用；后续同步仍以失败结果返回，直到问题修复。凭据和索引是分别原子保存的文件，登录先保存凭据再提交登记；中途失败可能留下孤儿凭据，重启只按索引恢复。
+
+**BREAKING / 升级：先停止旧版 daemon，配套更新 CLI 与 daemon，再运行 `pi-wx start`。** 旧版不参与共同锁，不能与新版 CLI 混用。项目创建/绑定/启停/删除和 `account.logout` 写入 RPC 已移除；新 `control.sync` 只请求读取当前配置，`control.status` 只读取实际 receiver 集合，二者以及项目 restart 校验配置/数据/状态目录身份。内部配置和路由仍使用 accountId，不新增账号格式迁移。
+
+`--name` 是全局唯一的账号标识；账号 **id 仍为扫码返回的 `ilink_bot_id`**。同用户登录会替换无绑定的旧账号（按 `ilink_user_id` 去重）；相同 ID 的有效凭据变化也会先停旧 monitor 再启动新实例。旧 owner 的微信 token 缓存不会继承到新 owner；收件范围按当前绑定账号用户解析。项目历史和活动会话属于项目，不属于某个账号 owner：仅 owner/凭据变化不会重建项目会话，新 owner 继续使用项目当前会话；项目绑定、cwd 或启停变化仍按原有规则处理。不维护参与者注册表。
 
 账号凭据保存在 `$XDG_DATA_HOME/pi-weixin-daemon/accounts/`（默认 `~/.local/share/pi-weixin-daemon/accounts/`，可用 `PI_WEIXIN_DATA_DIR` 覆盖），不写入项目。
 
 ### 2. 诊断
 
 ```bash
-pi-wx doctor --cwd /path/to/project --account <id>
+pi-wx doctor --cwd /path/to/project --account personal
 ```
+
+`--account <name>` 可重复；省略时检查全部账号。在线使用 daemon 列表选择账号，仅在明确离线（socket 不存在或连接被拒绝）时改用本地列表，因此仍可在启动 daemon 前诊断。其他 RPC 错误会报错，不静默回退。
 
 ### 3. 启动 daemon + 注册 Project
 
@@ -138,7 +162,7 @@ pi-wx broadcast --project foo --message "部署已完成"
 
 发送需要缓存中精确对应账号和扫码用户的 `context_token`。缺少接收用户、token 或可用 transport 时跳过并记录日志；某个账号失败不阻断其他账号。不检查 token 的本地有效期，微信接口仍可能拒绝发送。此接收范围与 Agent 成功最终回复一致，共用用户解析及投递规则。
 
-CLI 等待处理完成，详细成功、跳过和失败记录通过 `pi-wx logs` 查看。只有非空接收集合全部发送成功时退出码为 `0`；存在跳过、失败、没有绑定账号或请求错误时为 `1`。广播不使用普通 RPC 的 15 秒总超时，底层微信请求仍有超时。
+CLI 等待处理完成，详细成功、跳过和失败记录通过 `pi-wx logs` 查看。只有非空接收集合全部发送成功时退出码为 `0`；存在跳过、失败、没有绑定账号或请求错误时为 `1`。普通 RPC 使用 **15 秒 socket 空闲超时**：连接连续无活动才超时，持续收发数据会重置空闲计时，因此它不是请求总时限。广播禁用这一客户端空闲超时，等待处理完成；底层微信请求仍有各自超时。
 
 不自动重试；长文本可能已部分送达，CLI 断开也不代表 daemon 停止发送，再次执行可能重复通知。不提供跨 daemon 重启补发保证。
 
@@ -230,7 +254,7 @@ daemon 通过 Pi SDK 运行模型，需要对应 provider 的凭据。若运行�
 | `/p:<prompt>`      | 显式把文本作为 prompt 发送给 Pi          | 仅空闲   |
 
 模型和会话列表每页 5 项；选择交互支持字母、页码和 `q`，30 秒超时。只有 `/resume`
-选择会暂时阻塞项目，Pi UI ask 始终优先。模型/思考强度默认值写入 `<cwd>/.pi/settings.json`；默认会话身份另存于 daemon 项目配置。相同 cwd 的项目可读取同一 Pi 历史，不引入会话所有权登记；不接受其他 cwd 的任意历史路径。
+选择会暂时阻塞项目，Pi UI ask 始终优先。模型/思考强度默认值写入 `<cwd>/.pi/settings.json`；默认会话身份由 daemon 写入独立的运行状态 `projects.json`，不写控制配置 `config.json`。相同 cwd 的项目可读取同一 Pi 历史，不引入会话所有权登记；不接受其他 cwd 的任意历史路径。
 其它 `/xxx` 一律回复「未知命令」，不会透传给 Pi。
 
 ## Agent 能力
@@ -260,10 +284,15 @@ Tencent/openclaw-weixin          # 微信协议参考（MIT，见 LICENSE.attrib
 
 ## 配置与存储（XDG）
 
-- 配置：`$XDG_CONFIG_HOME/pi-weixin-daemon/config.json`（project 配置，包含 `defaultSessionId`；daemon 唯一 writer，原子写）。
-- 账号凭据：`$XDG_DATA_HOME/pi-weixin-daemon/accounts/`（凭据 + 索引；旧 `~/.local/state/pi-weixin-daemon/weixin/accounts` 会自动无损迁移）。
-- 状态：`$XDG_STATE_HOME/pi-weixin-daemon/weixin/`（sync-buf / context-token）。
+- 配置：`$XDG_CONFIG_HOME/pi-weixin-daemon/config.json`（project 控制配置，CLI 唯一 writer，原子替换；cwd 创建后固定）。
+- 账号凭据：`$XDG_DATA_HOME/pi-weixin-daemon/accounts/`（CLI 写凭据 + 索引；旧 state 布局仅由 CLI 保存入口或 `serve` 前置步骤在锁内兼容迁移；daemon 本身只读）。
+- 接收进度和 context-token：当前与凭据同处 `accounts/`，由 daemon 运行时维护；旧布局在 state 的 `weixin/`。
+- 项目运行状态：`resolveStateDir()/projects.json`（默认 `~/.local/state/pi-weixin-daemon/projects.json`，可用 `PI_WEIXIN_STATE_DIR` 覆盖），daemon 唯一 writer；按项目保存 `cwd` 和 `defaultSessionId`，与 CLI 控制配置分离。旧 `config.json` 中的 `defaultSessionId` 仅作只读兼容，不再由 daemon 写回。
 - UDS：`$XDG_RUNTIME_DIR/pi-weixin-daemon/daemon.sock`（0600）。
+
+数据目录中的 `.control.lock` 与 `.daemon.lock` 是固定的内核锁锚点，**不要删除锁文件**。控制锁最多等待 30 秒，超时明确失败；单实例锁覆盖 daemon 初始化到停止，不靠 socket 推测运行状态。锁随文件描述符关闭/进程退出释放，无 stale 锁回收器。请让 CLI/daemon 使用相同 XDG/覆盖路径，并使用支持 `flock` 的本地文件系统；不要让不同配置实例交叉共享配置或账号目录。管理操作串行，但各账号长轮询独立异步运行，不占额外长期线程/进程。
+
+控制面每个连接只处理一个请求：请求是以换行符 `\n` 结束的单行 JSON，响应是以 EOF 结束的 JSON；两端均缓冲完整消息后再解码，支持 UTF-8 分片。daemon 接收完整请求前使用 15 秒空闲超时，开始执行后关闭该读取超时，避免中断长广播。未带换行的旧客户端请求不会执行，CLI 与 daemon 必须配套升级并重启；不自动重试。
 
 ## 测试
 

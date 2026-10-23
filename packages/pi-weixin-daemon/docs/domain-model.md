@@ -31,6 +31,8 @@
   - `baseUrl`：有效 API base URL。
   - `userId`：扫码登录结果中的微信用户。
   - `savedAt`：登录时间。
+- **选择边界**：CLI 账号参数仅接受 name（trim、区分大小写、唯一匹配，无 ID 回退）；控制配置变更在共同锁内按最新磁盘登记/凭据解析。内部配置与路由仍使用 accountId，旧账号/项目写入 RPC 不再接受变更。
+- **所有权**：CLI 唯一写入登记和凭据，daemon 只读并管理 monitor。配置已保存与运行已同步分别反馈；清理前必须确认接收任务停止。升级前先停旧 daemon，配套更新后启动，见 [ADR-0010](adr/0010-cli-control-ownership.md)。
 - **归属**：一个 account 至多属于一个 project（多绑第二个会报错）。
 
 ### 1.3 项目（Project）
@@ -38,7 +40,8 @@
 - 把若干 account 聚合到**同一个工作目录**，并共享至多一个活动 Pi 会话。
 - **标识**：`projectId`（项目名，配置记录的 key）。
 - **微信用户集合**：由绑定账号的 `account.userId` 投影得到，不设独立联系人或动态参与者登记。
-- **属性**（存于 `config.json`）：`cwd`、`accounts: accountId[]`、`enabled`、可选 `defaultSessionId`。
+- **控制属性**（存于 `config.json`）：`cwd`、`accounts: accountId[]`、`enabled`。由 CLI 在共同控制锁内写入，daemon 只读并同步；cwd 创建后固定，同名删除重建导致 cwd 变化时重建运行实例。
+- **会话状态**：daemon 独占写入 `resolveStateDir()/projects.json`（默认 `~/.local/state/pi-weixin-daemon/projects.json`），按项目保存 `cwd` 与可选的 `defaultSessionId`，与临时 active/runtime 及 CLI 控制配置区分。旧 `config.json` 的默认会话字段只读兼容，不再写回；见 [ADR-0011：项目默认会话运行状态独立存储](adr/0011-project-runtime-state.md)。
 - **运行时**：`ProjectController`（一个项目一个），内含 `SessionController`
   （单一会话状态机：busy / abort / 发言范围 / 命令执行）。项目启动时只启动 controller/host，
   Pi runtime 按需创建或恢复，不在项目启动时加载历史。
@@ -51,6 +54,7 @@
 - 微信普通消息继续 active，没有 active 时恢复 default；CLI 无 session 参数时选择 default 并使其成为 active。任一入口切换对全项目生效，不维护每用户 active。
 - 闲置 10 分钟释放 runtime 并清除 active；重启后也按需恢复 default，不恢复临时 active 或进行中的回合。默认历史不可读时明确失败，不静默替换。
 - 历史范围沿用项目 cwd；相同 cwd 的项目允许共享历史，不建立会话所有权表，不接受其他 cwd 的任意路径。
+- 项目历史不按账号 owner 隔离；已获项目访问权限的用户可使用该项目历史。仅账号 owner/凭据变化不重建项目 runtime 或切换 active/default，只更新接收器和微信 token 缓存，见 [ADR-0012](adr/0012-project-session-owner-independence.md)。
 
 ### 1.5 入站消息（InboundMessage）
 
@@ -110,7 +114,7 @@ CLI reply 是**单回合成功最终文本受众**，不是 session 权限或持
 | `context_token` | 入站消息 | 会话上下文 token | 按 (account, user) 持久化 |
 | `projectId` | 项目名 | 项目的 key | 一个账号 → 至多一个项目 |
 | `sessionFile/sessionId` | Pi 历史 / 活动实例 | 持久会话身份 / 当前加载的会话 | 一个项目至多一个 active |
-| `defaultSessionId` | 项目配置 | 持久默认会话身份 | 可与 active 不同，闲置/重启不清除 |
+| `defaultSessionId` | daemon 项目运行状态（旧配置只读兼容） | 持久默认会话身份 | 可与 active 不同，闲置/重启不清除 |
 
 > **一句话**：`accountId` 是**机器人**；`userId` 是扫码登录用户，`senderId` 是报文中实际发件人；
 > 本地不以二者相等作为入站条件。`name` 是机器人的**别名**。

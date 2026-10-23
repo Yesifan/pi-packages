@@ -28,7 +28,8 @@ export interface ProjectManagerOptions {
 /**
  * Owns `Map<ProjectId, ProjectController>` and the derived `accountId -> projectId`
  * index. Reconciles desired-state (`enabled`) from config via diff → restart
- * (no hot-update): `cwd` is fixed, so the runtime identity is `sorted(accounts)`.
+ * (no hot-update): reuse requires the same cwd and account set, including when
+ * deletion/recreation of a project is coalesced into one desired-state snapshot.
  */
 export class ProjectManager {
   private controllers = new Map<string, ProjectController>();
@@ -55,6 +56,7 @@ export class ProjectManager {
 
   /** Reconcile desired-state from the given configs (diff → none | restart). */
   async sync(configs: Array<{ name: string; config: ProjectConfig }>): Promise<void> {
+    const errors: unknown[] = [];
     const nextConfigs = new Map<string, ProjectConfig>();
     const nextAccountProject = new Map<string, string>();
     for (const { name, config } of configs) {
@@ -70,30 +72,27 @@ export class ProjectManager {
     for (const [id, controller] of this.controllers) {
       const cfg = nextConfigs.get(id);
       if (!cfg || !cfg.enabled) {
-        await controller
-          .stop()
-          .catch((err: unknown) =>
-            this.opts.logger.warn({ err, project: id }, "stop project error"),
-          );
+        await controller.stop();
         this.controllers.delete(id);
       }
     }
 
-    // Start newly enabled projects; restart when the runtime key (sorted accounts)
-    // changed. `cwd` is fixed (ProjectStore guarantees it), so it never diffs here.
+    // A project keeps its cwd until deleted, but a same-name recreation can change
+    // it without an intervening sync. Compare the live controller's snapshot too.
     for (const [name, cfg] of nextConfigs) {
       if (!cfg.enabled) continue;
 
       const existing = this.controllers.get(name);
-      if (existing && runtimeKeyOf(existing.config.accounts) === runtimeKeyOf(cfg.accounts)) {
+      if (
+        existing &&
+        existing.getStatus().state !== "error" &&
+        existing.config.cwd === cfg.cwd &&
+        runtimeKeyOf(existing.config.accounts) === runtimeKeyOf(cfg.accounts)
+      ) {
         continue; // unchanged → none
       }
       if (existing) {
-        await existing
-          .stop()
-          .catch((err: unknown) =>
-            this.opts.logger.warn({ err, project: name }, "stop project (accounts changed) error"),
-          );
+        await existing.stop();
         this.controllers.delete(name);
       }
 
@@ -124,9 +123,11 @@ export class ProjectManager {
         await controller.start();
       } catch (err) {
         this.opts.logger.error({ err, project: name }, "project start failed");
-        // Keep the controller (error state) so `project show` can report the failure.
+        // Keep error status visible, but do not acknowledge application success.
+        errors.push(err);
       }
     }
+    if (errors.length) throw new AggregateError(errors, "Project configuration application failed");
   }
 
   /** Dispatch an inbound message: account -> project -> controller. Drops unbound/off. */
@@ -255,7 +256,7 @@ export class ProjectManager {
     return result;
   }
 
-  /** Effective status (desired ≡ effective; no config/runtime drift, ADR-0004). */
+  /** Last reconciled project configuration plus actual controller status. */
   listStatuses(): ProjectStatus[] {
     return [...this.configs].map(([name, cfg]) => {
       const controller = this.controllers.get(name);
@@ -286,7 +287,7 @@ export class ProjectManager {
 
   async stopAll(): Promise<void> {
     for (const controller of [...this.controllers.values()]) {
-      await controller.stop().catch(() => {});
+      await controller.stop();
     }
     this.controllers.clear();
   }
