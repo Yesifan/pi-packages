@@ -29,6 +29,7 @@ describe("RPC client error boundary", () => {
     socket.emit("connect");
     const request = JSON.parse(socket.write.mock.calls[0]![0] as string);
     socket.emit("data", Buffer.from(JSON.stringify({ id: request.id, ...Object(value) })));
+    socket.emit("end");
   }
 
   it.each(["ENOENT", "ECONNREFUSED"])("maps pre-connect %s to daemon unavailable", async (code) => {
@@ -91,7 +92,10 @@ describe("RPC client error boundary", () => {
     "rejects invalid response %s without throwing from the event handler",
     async (response) => {
       const pending = rpcCall("status");
-      expect(() => socket.emit("data", Buffer.from(response))).not.toThrow();
+      expect(() => {
+        socket.emit("data", Buffer.from(response));
+        socket.emit("end");
+      }).not.toThrow();
       await expect(pending).rejects.toBeInstanceOf(Error);
       expect(socket.destroy).toHaveBeenCalledOnce();
     },
@@ -108,6 +112,41 @@ describe("RPC client error boundary", () => {
     expect(() => respond({ ok: false, error: { toString: null } })).not.toThrow();
     await expect(pending).rejects.toThrow("Invalid RPC response");
   });
+
+  it("waits for end even after a complete JSON chunk", async () => {
+    const pending = rpcCall("status");
+    socket.emit("connect");
+    const { id } = JSON.parse(socket.write.mock.calls[0]![0]);
+    socket.emit("data", Buffer.from(JSON.stringify({ id, ok: true, result: "done" })));
+    expect(socket.destroy).not.toHaveBeenCalled();
+    socket.emit("end");
+    await expect(pending).resolves.toBe("done");
+    expect(socket.destroy).toHaveBeenCalledOnce();
+  });
+
+  it("rejects an empty EOF response", async () => {
+    const pending = rpcCall("status");
+    socket.emit("end");
+    await expect(pending).rejects.toThrow("Empty RPC response");
+    expect(socket.destroy).toHaveBeenCalledOnce();
+  });
+
+  it.each(["close", "timeout"])(
+    "rejects %s after data without end and never retries",
+    async (event) => {
+      const pending = rpcCall("status");
+      socket.emit("connect");
+      const { id } = JSON.parse(socket.write.mock.calls[0]![0]);
+      socket.emit("data", Buffer.from(JSON.stringify({ id, ok: true })));
+      socket.emit(event);
+      await expect(pending).rejects.toThrow(
+        event === "close" ? "rpc connection closed" : "rpc timeout",
+      );
+      expect(net.connect).toHaveBeenCalledOnce();
+      expect(socket.write).toHaveBeenCalledOnce();
+      expect(socket.destroy).toHaveBeenCalledOnce();
+    },
+  );
 
   it("rejects close before a response", async () => {
     const pending = rpcCall("status");

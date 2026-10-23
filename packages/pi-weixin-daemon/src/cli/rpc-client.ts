@@ -54,6 +54,7 @@ async function callRpc<T>(
     const id = nextId++;
     let settled = false;
     let connected = false;
+    const chunks: Buffer[] = [];
     const close = () => {
       if (!socket.destroyed) socket.destroy();
     };
@@ -71,10 +72,16 @@ async function callRpc<T>(
       socket.write(JSON.stringify({ id, method, params }));
     });
     socket.on("data", (buf: Buffer) => {
+      if (!settled) chunks.push(buf);
+    });
+    // The server ends the socket after its response; data events are not message boundaries.
+    socket.on("end", () => {
       done(() => {
         let resp: RpcResponse;
         try {
-          resp = JSON.parse(buf.toString("utf-8")) as RpcResponse;
+          const response = Buffer.concat(chunks);
+          if (response.length === 0) throw new Error("Empty RPC response");
+          resp = JSON.parse(response.toString("utf-8")) as RpcResponse;
           if (
             resp === null ||
             typeof resp !== "object" ||
