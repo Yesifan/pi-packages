@@ -17,8 +17,10 @@ import type {
   ProjectHostFactoryContext,
 } from "./projects/project-controller.js";
 import { ProjectManager } from "./projects/project-manager.js";
+import { ProjectStateStore } from "./projects/project-state-store.js";
 import { ProjectStore } from "./projects/project-store.js";
 import type { AccountInfo, ProjectStoreData } from "./projects/types.js";
+import type { CliPromptRequest } from "./sessions/cli-prompt.js";
 import type { Logger } from "./util/logger.js";
 import { VERSION } from "./version.js";
 import { clearSessionPause } from "./weixin/api/session-guard.js";
@@ -28,7 +30,8 @@ import {
   resolveWeixinAccountName,
 } from "./weixin/auth/accounts.js";
 import { WeixinFileSender } from "./weixin/file-sender.js";
-import { clearContextTokensForAccount, getContextToken } from "./weixin/storage/context-token.js";
+import { resolveRecipientAccount } from "./weixin/recipient.js";
+import { clearContextTokensForAccount } from "./weixin/storage/context-token.js";
 import { ILinkWeixinTransport } from "./weixin/transport.js";
 import type { WeixinTransport } from "./weixin/types.js";
 
@@ -61,6 +64,7 @@ async function createProjectPiRuntime(ctx: ProjectHostFactoryContext): Promise<P
       createWeixinSendFileExtension({
         fileSender: new WeixinFileSender(transport),
         getCurrentTurn: () => interaction.getCurrentTurn(),
+        resolveRecipients: ctx.resolveFileRecipients,
         cwd,
         logger,
       }),
@@ -100,6 +104,7 @@ export class Daemon {
   private readonly accountManager: AccountManager;
   private readonly projectManager: ProjectManager;
   private readonly store: ProjectStore;
+  private readonly sessionState = new ProjectStateStore();
   private accountTransport: (
     accountId: string,
     token?: string,
@@ -114,15 +119,15 @@ export class Daemon {
     const logger = deps.logger;
     this.accountManager = new AccountManager({ logger });
     this.projectManager = new ProjectManager({
-      getTransport: (id) => this.accountManager.getTransport(id),
-      resolveBroadcastAccount: (id) => {
-        const account = loadWeixinAccount(id);
-        if (!account) return null;
-        return {
-          userId: account.userId,
-          contextToken: account.userId ? getContextToken(id, account.userId) : undefined,
-        };
+      saveDefaultSession: (projectId, sessionId) => {
+        const project = this.config.projects[projectId];
+        const cwd = this.projectManager.getRuntime(projectId)?.config.cwd;
+        if (!project || cwd !== project.cwd) throw new Error("Project configuration changed");
+        this.sessionState.setDefaultSession(projectId, cwd, sessionId);
+        project.defaultSessionId = sessionId;
       },
+      getTransport: (id) => this.accountManager.getTransport(id),
+      resolveBroadcastAccount: resolveRecipientAccount,
       factory: deps.projectPiFactory ?? defaultProjectPiFactory,
       logger,
       resolveSenderName: (id) => resolveWeixinAccountName(id) ?? id,
@@ -230,7 +235,14 @@ export class Daemon {
   private async applySnapshot(): Promise<void> {
     // Finish every control read/validation before touching the current runtime.
     const config = this.store.read();
+    this.sessionState.read();
     const desired = new Map(listIndexedWeixinAccountIds().map((id) => [id, loadWeixinAccount(id)]));
+    if (!this.config) {
+      for (const [accountId, account] of desired) {
+        if (!account?.token)
+          this.deps.logger.warn({ account: accountId }, "account has no token, skipping monitor");
+      }
+    }
     const fingerprint = (data: ReturnType<typeof loadWeixinAccount>) =>
       JSON.stringify([data?.token, data?.baseUrl, data?.userId]);
     const changedOwners = new Set<string>();
@@ -246,6 +258,9 @@ export class Daemon {
         this.credentials.delete(live.accountId);
       }
     }
+    // Receivers above may finish an in-flight activation while stopping. Clean after
+    // that wait, then publish the new snapshot without an intervening async gap.
+    this.sessionState.reconcile(config.projects);
     this.config = config;
     for (const [id, account] of desired) {
       if (!account?.token || this.accountManager.has(id)) continue;
@@ -254,6 +269,10 @@ export class Daemon {
       this.credentials.set(id, fingerprint(account));
     }
     await this.projectManager.sync(this.configList(), changedOwners);
+  }
+
+  async promptProject(name: string, input: CliPromptRequest) {
+    return this.projectManager.prompt(name, input);
   }
 
   async broadcastProject(name: string, text: string) {
@@ -290,7 +309,14 @@ export class Daemon {
   }
 
   private configList() {
-    return Object.entries(this.config.projects).map(([name, config]) => ({ name, config }));
+    return Object.entries(this.config.projects).map(([name, config]) => ({
+      name,
+      config: {
+        ...config,
+        defaultSessionId:
+          this.sessionState.getDefaultSession(name, config.cwd) ?? config.defaultSessionId,
+      },
+    }));
   }
 
   /** Gate + inbox resolution for an account: its project's inbox (and gate reason). */

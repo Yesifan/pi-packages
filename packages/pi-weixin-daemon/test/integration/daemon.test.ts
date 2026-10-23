@@ -4,13 +4,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Daemon } from "../../src/daemon.js";
 import { ProjectStore } from "../../src/projects/project-store.js";
 import { createLogger } from "../../src/util/logger.js";
-import { registerWeixinAccountId, saveWeixinAccount } from "../../src/weixin/auth/accounts.js";
+import {
+  registerWeixinAccountId,
+  saveWeixinAccount,
+  unregisterWeixinAccountId,
+} from "../../src/weixin/auth/accounts.js";
+import {
+  clearContextTokensForAccount,
+  getContextToken,
+} from "../../src/weixin/storage/context-token.js";
 import type { InboundMessage } from "../../src/weixin/types.js";
 import { FakeAgentRuntime } from "../helpers/fake-runtime.js";
 import { FakeWeixinTransport } from "../helpers/fake-transport.js";
 
 const logger = createLogger({ level: "silent" });
 const OLD_DATA = process.env.PI_WEIXIN_DATA_DIR;
+const OLD_STATE = process.env.PI_WEIXIN_STATE_DIR;
 let dataDir: string;
 
 const tick = () => new Promise<void>((r) => setTimeout(r, 1));
@@ -21,6 +30,7 @@ let barDir: string;
 beforeEach(() => {
   dataDir = fs.mkdtempSync(path.join(process.cwd(), "test/.tmp", "daemon-"));
   process.env.PI_WEIXIN_DATA_DIR = dataDir;
+  process.env.PI_WEIXIN_STATE_DIR = dataDir;
   fooDir = fs.mkdtempSync(path.join(process.cwd(), "test/.tmp", "dfoo-"));
   barDir = fs.mkdtempSync(path.join(process.cwd(), "test/.tmp", "dbar-"));
   for (const a of ["A", "B", "C", "D"]) {
@@ -32,6 +42,8 @@ beforeEach(() => {
 afterEach(() => {
   if (OLD_DATA === undefined) delete process.env.PI_WEIXIN_DATA_DIR;
   else process.env.PI_WEIXIN_DATA_DIR = OLD_DATA;
+  if (OLD_STATE === undefined) delete process.env.PI_WEIXIN_STATE_DIR;
+  else process.env.PI_WEIXIN_STATE_DIR = OLD_STATE;
   fs.rmSync(dataDir, { recursive: true, force: true });
   fs.rmSync(fooDir, { recursive: true, force: true });
   fs.rmSync(barDir, { recursive: true, force: true });
@@ -49,6 +61,193 @@ function msg(accountId: string, senderId: string, messageId: string, text: strin
 }
 
 describe("Daemon composition (fake transports + fake runtimes)", () => {
+  it("retains failed receivers until stop succeeds, then unsubscribes once and tolerates repeated removal", async () => {
+    const events: string[] = [];
+    let failStop = true;
+    let releaseStop!: () => void;
+    const stopping = new Promise<void>((resolve) => {
+      releaseStop = resolve;
+    });
+    const daemon = new Daemon({
+      logger,
+      store: new ProjectStore(path.join(dataDir, "config.json")),
+      getAccountTransport: async (id) => {
+        const transport = new FakeWeixinTransport();
+        const subscribe = transport.onMessage.bind(transport);
+        transport.onMessage = (handler) => {
+          const unsubscribe = subscribe(handler);
+          return () => {
+            events.push(`unsubscribe:${id}`);
+            unsubscribe();
+          };
+        };
+        transport.stop = async () => {
+          events.push(`stop:${id}`);
+          if (id === "A") await stopping;
+          if (failStop && (id === "A" || id === "B")) throw new Error("stop failed");
+        };
+        return transport;
+      },
+    });
+    try {
+      await daemon.start();
+      expect(daemon.getAccountStatuses()).toHaveLength(4);
+      for (const account of daemon.getAccountStatuses()) {
+        expect(account).not.toHaveProperty("unsubscribe");
+        expect(account).not.toHaveProperty("transport");
+      }
+      unregisterWeixinAccountId("A");
+      const removal = expect(daemon.reloadAccounts()).rejects.toThrow("stop failed");
+      await vi.waitFor(() => expect(events).toEqual(["stop:A"]));
+      expect(daemon.getControlStatus().runningAccountIds).toContain("A");
+      releaseStop();
+      await removal;
+      expect(
+        daemon.getAccountStatuses().find((account) => account.accountId === "A"),
+      ).toMatchObject({ registered: false, status: "error" });
+      // Failed stop is not acknowledged as removal or hidden by daemon shutdown.
+      await expect(daemon.stop()).rejects.toThrow("stop failed");
+      expect(events).not.toContain("unsubscribe:A");
+      failStop = false;
+      await daemon.reloadAccounts();
+      await daemon.reloadAccounts();
+      expect(events.filter((event) => event === "unsubscribe:A")).toHaveLength(1);
+      expect(daemon.getControlStatus().runningAccountIds).not.toContain("A");
+      await daemon.stop();
+      await daemon.stop();
+      for (const id of ["A", "B", "C", "D"]) {
+        expect(events.filter((event) => event === `unsubscribe:${id}`)).toHaveLength(1);
+      }
+      expect(daemon.getControlStatus().runningAccountIds).toEqual([]);
+    } finally {
+      failStop = false;
+      releaseStop();
+      await daemon.stop();
+    }
+  });
+
+  it("reload starts only new credentialed accounts, restores tokens, and keeps missing-token logging distinct", async () => {
+    registerWeixinAccountId("missing");
+    const testLogger = createLogger({ level: "silent" });
+    const warn = vi.spyOn(testLogger, "warn");
+    const getAccountTransport = vi.fn(
+      async (_id: string, _token?: string, _baseUrl?: string) => new FakeWeixinTransport(),
+    );
+    const daemon = new Daemon({
+      logger: testLogger,
+      store: new ProjectStore(path.join(dataDir, "config.json")),
+      getAccountTransport,
+    });
+    try {
+      await daemon.start();
+      expect(warn).toHaveBeenCalledWith(
+        { account: "missing" },
+        "account has no token, skipping monitor",
+      );
+      expect(getAccountTransport).toHaveBeenCalledTimes(4);
+      warn.mockClear();
+      registerWeixinAccountId("new");
+      saveWeixinAccount("new", {
+        token: "new-token",
+        baseUrl: "https://example.test",
+        userId: "new-user",
+      });
+      fs.writeFileSync(
+        path.join(dataDir, "accounts", "new.context-tokens.json"),
+        JSON.stringify({ "new-user": "new-context" }),
+      );
+      await daemon.reloadAccounts();
+      await daemon.reloadAccounts();
+      expect(getAccountTransport).toHaveBeenCalledTimes(5);
+      expect(getAccountTransport).toHaveBeenLastCalledWith(
+        "new",
+        "new-token",
+        "https://example.test",
+      );
+      expect(getContextToken("new", "new-user")).toBe("new-context");
+      expect(
+        daemon.getAccountStatuses().find((account) => account.accountId === "new"),
+      ).toMatchObject({ status: "online", userId: "new-user" });
+      expect(
+        daemon.getAccountStatuses().find((account) => account.accountId === "missing"),
+      ).toMatchObject({ registered: true, status: "stopped" });
+      expect(daemon.getControlStatus().runningAccountIds).not.toContain("missing");
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      await daemon.stop();
+      clearContextTokensForAccount("new");
+      warn.mockRestore();
+    }
+  });
+
+  it("restores exact tokens and delivers Agent rounds to bound users who have not sent inbound", async () => {
+    for (const id of ["A", "B", "C"]) {
+      clearContextTokensForAccount(id);
+      saveWeixinAccount(id, { userId: `login-${id}` });
+      // Disk-only state from a previous daemon, not this process's inbound messages.
+      fs.writeFileSync(
+        path.join(dataDir, "accounts", `${id}.context-tokens.json`),
+        JSON.stringify({ [`login-${id}`]: `cached-${id}`, "other-sender": "unrelated-token" }),
+      );
+    }
+    const transports = new Map<string, FakeWeixinTransport>();
+    const runtimes = new Map<string, FakeAgentRuntime>();
+    const daemon = new Daemon({
+      logger,
+      store: makeStore(),
+      getAccountTransport: async (id) => {
+        const transport = new FakeWeixinTransport();
+        transports.set(id, transport);
+        return transport;
+      },
+      projectPiFactory: async (ctx) => {
+        const runtime = new FakeAgentRuntime(ctx.cwd);
+        runtimes.set(ctx.projectId, runtime);
+        return runtime;
+      },
+    });
+    try {
+      await daemon.start();
+      const runtime = runtimes.get("foo")!;
+      // Preserve lazy lifecycle: A opens the session; B has never sent a message.
+      const pending = transports.get("A")!.emit(msg("A", "other-sender", "first", "hello"));
+      await vi.waitFor(() => expect(runtime.prompts).toHaveLength(1));
+      runtime.complete("");
+      await pending;
+      for (const id of ["A", "B"]) transports.get(id)!.sentTexts.length = 0;
+      runtime.startIndependentTurn();
+      runtime.completeIndependentTurn("independent answer");
+      await vi.waitFor(() => expect(transports.get("B")!.sentTexts).toHaveLength(1));
+      for (const id of ["A", "B"]) {
+        expect(transports.get(id)!.sentTexts[0]).toMatchObject({
+          ctx: { senderId: `login-${id}`, contextToken: `cached-${id}` },
+          text: "independent answer",
+        });
+        expect(transports.get(id)!.typingEvents.map((event) => event.typing)).toEqual([
+          true,
+          false,
+        ]);
+        for (const event of transports.get(id)!.typingEvents) {
+          expect(event.ctx).toMatchObject({
+            accountId: id,
+            senderId: `login-${id}`,
+            contextToken: `cached-${id}`,
+          });
+        }
+      }
+      expect(transports.get("C")!.sentTexts).toHaveLength(0);
+      expect(runtime.prompts).toHaveLength(1);
+      expect(await daemon.broadcastProject("foo", "notice")).toEqual({
+        succeeded: 2,
+        skipped: 0,
+        failed: 0,
+      });
+    } finally {
+      await daemon.stop();
+      for (const id of ["A", "B", "C"]) clearContextTokensForAccount(id);
+    }
+  });
+
   it("routes account -> project; unbound account is dropped at dispatch", async () => {
     const transports = new Map<string, FakeWeixinTransport>();
     const fakes = new Map<string, FakeAgentRuntime>();

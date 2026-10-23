@@ -13,7 +13,10 @@ import { MultiAccountTransport } from "../helpers/multi-account-transport.js";
 
 const logger = createLogger({ level: "silent" });
 
-function setupUiRouting() {
+function setupUiRouting(
+  resolveRecipientUserId: (id: string) => string | undefined = (id) =>
+    id === "acct-a" ? "user-a" : id === "acct-b" ? "user-b" : undefined,
+) {
   const runtime = new FakeAgentRuntime();
   const transportA = new FakeWeixinTransport();
   const transportB = new FakeWeixinTransport();
@@ -28,6 +31,7 @@ function setupUiRouting() {
   });
   const session = new SessionController({
     projectId: "foo",
+    resolveRecipientUserId,
     host: runtime,
     interaction,
     transport: multi,
@@ -66,6 +70,21 @@ describe("M9 interaction controller UI response routing", () => {
 
     runtime.complete("done");
     await turnPromise;
+  });
+
+  it("does not let the original sender answer when the account has no login user", async () => {
+    const { runtime, interaction, session } = setupUiRouting(() => undefined);
+    const pending = session.handleUserMessage(msg("acct-a", "user-a", "origin", "hello"));
+    await vi.waitFor(() => expect(runtime.prompts).toHaveLength(1));
+    const response = interaction.waitForResponse(makeTurn("acct-a", "user-a"));
+    const rejected = expect(response).rejects.toThrow("test cleanup");
+    await session.handleUserMessage(msg("acct-a", "user-a", "answer", "yes"));
+    expect(interaction.isUiInteractionActive()).toBe(true);
+    interaction.cancelUiWaiters("test cleanup");
+    await rejected;
+    runtime.complete("");
+    await pending;
+    await session.stop();
   });
 
   it("cancelUiWaiters rejects pending dialogs (e.g. /abort)", async () => {

@@ -97,12 +97,3 @@ export function setContextToken(accountId: string, userId: string, token: string
 export function getContextToken(accountId: string, userId: string): string | undefined {
   return contextTokenStore.get(contextTokenKey(accountId, userId));
 }
-
-/**
- * Find all accountIds that have an active contextToken for the given userId.
- * Used to infer the sending bot account from the recipient address when
- * accountId is not explicitly provided.
- */
-export function findAccountIdsByContextToken(accountIds: string[], userId: string): string[] {
-  return accountIds.filter((id) => contextTokenStore.has(contextTokenKey(id, userId)));
-}

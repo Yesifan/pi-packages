@@ -195,47 +195,95 @@ function buildHeaders(opts: { token?: string }): Record<string, string> {
 export function classifyFetchError(err: unknown): {
   type: "dns" | "tcp" | "tls" | "timeout" | "unknown";
   description: string;
-  code?: string;
 } {
-  if (err instanceof Error && err.name === "AbortError") {
-    return { type: "timeout", description: "request timeout" };
-  }
-
+  if (err instanceof ApiRequestError) return classifyFetchErrorType(err.type);
+  if (err instanceof Error && err.name === "AbortError") return classifyFetchErrorType("timeout");
   const cause = (err as NodeJS.ErrnoException)?.cause;
   const causeCode = (cause as { code?: string })?.code ?? "";
   const causeStr = `${String(cause ?? err ?? "")} ${String(causeCode)}`;
-  const matchedCode = causeCode || (typeof cause === "string" ? cause : "");
+  if (/ENOTFOUND|EAI_AGAIN|getaddrinfo/i.test(causeStr)) return classifyFetchErrorType("dns");
+  if (/ECONNREFUSED|UND_ERR_CONNECT_TIMEOUT|ETIMEDOUT|ENETUNREACH|EHOSTUNREACH/i.test(causeStr))
+    return classifyFetchErrorType("tcp");
+  if (/UND_ERR_SOCKET|SSL|TLS|CERT|UNABLE_TO_VERIFY|DEPTH_ZERO/i.test(causeStr))
+    return classifyFetchErrorType("tls");
+  return classifyFetchErrorType("unknown");
+}
 
-  if (/ENOTFOUND|EAI_AGAIN|getaddrinfo/i.test(causeStr)) {
-    return {
-      type: "dns",
-      description: "DNS resolution failed, check DNS configuration",
-      ...(matchedCode ? { code: matchedCode } : {}),
-    };
-  }
-  if (/ECONNREFUSED/i.test(causeStr)) {
-    return {
-      type: "tcp",
-      description: "TCP connection refused",
-      ...(matchedCode ? { code: matchedCode } : {}),
-    };
-  }
-  if (/UND_ERR_CONNECT_TIMEOUT|ETIMEDOUT|ENETUNREACH|EHOSTUNREACH/i.test(causeStr)) {
-    return {
-      type: "tcp",
-      description: "TCP connection timeout or unreachable",
-      ...(matchedCode ? { code: matchedCode } : {}),
-    };
-  }
-  if (/UND_ERR_SOCKET|SSL|TLS|CERT|UNABLE_TO_VERIFY|DEPTH_ZERO/i.test(causeStr)) {
-    return {
-      type: "tls",
-      description: "TLS handshake error",
-      ...(matchedCode ? { code: matchedCode } : {}),
-    };
-  }
+type ApiFailureType =
+  | "dns"
+  | "tcp"
+  | "tls"
+  | "timeout"
+  | "unknown"
+  | "http"
+  | "business"
+  | "invalid-json";
 
-  return { type: "unknown", description: "network request failed" };
+function classifyFetchErrorType(type: ApiFailureType): {
+  type: "dns" | "tcp" | "tls" | "timeout" | "unknown";
+  description: string;
+} {
+  switch (type) {
+    case "dns":
+      return { type, description: "DNS resolution failed, check DNS configuration" };
+    case "tcp":
+      return { type, description: "TCP connection failed" };
+    case "tls":
+      return { type, description: "TLS handshake error" };
+    case "timeout":
+      return { type, description: "request timeout" };
+    default:
+      return { type: "unknown", description: "network request failed" };
+  }
+}
+
+/** Only fixed diagnostics cross the API boundary; never retain upstream causes or bodies. */
+class ApiRequestError extends Error {
+  constructor(
+    readonly type: ApiFailureType,
+    readonly status?: number,
+  ) {
+    super(`Weixin API request failed: ${type}${status === undefined ? "" : ` (HTTP ${status})`}`);
+    this.name = type === "timeout" ? "AbortError" : "WeixinApiError";
+  }
+}
+
+/** JSON.parse errors may quote the response. Keep their raw message out of caller logs. */
+export function parseApiResponse<T>(rawText: string): T {
+  try {
+    return JSON.parse(rawText) as T;
+  } catch {
+    throw new ApiRequestError("invalid-json");
+  }
+}
+
+/** Inspect only for diagnostic suppression; callers retain their business-error handling. */
+function responseFailure(rawText: string): ApiFailureType | undefined {
+  try {
+    const response = parseApiResponse<{ ret?: number; errcode?: number } | null>(rawText);
+    if (
+      response &&
+      ((response.ret !== undefined && response.ret !== 0) ||
+        (response.errcode !== undefined && response.errcode !== 0))
+    )
+      return "business";
+  } catch {
+    return "invalid-json";
+  }
+  return undefined;
+}
+
+function logApiFailure(
+  log: Logger,
+  method: "GET" | "POST",
+  endpoint: string,
+  error: ApiRequestError,
+  timeoutMs?: number,
+): void {
+  log.error(
+    { method, endpoint, status: error.status, timeoutMs, type: error.type },
+    "weixin API request failed",
+  );
 }
 
 /**
@@ -269,18 +317,18 @@ export async function apiGetFetch(params: {
     });
     if (t !== undefined) clearTimeout(t);
     const rawText = await res.text();
-    log.debug(`${params.label} status=${res.status} raw=${redactBody(rawText)}`);
-    if (!res.ok) {
-      throw new Error(`${params.label} ${res.status}: ${rawText}`);
-    }
+    if (!res.ok) throw new ApiRequestError("http", res.status);
+    const failure = responseFailure(rawText);
+    if (failure)
+      logApiFailure(log, "GET", url.pathname, new ApiRequestError(failure, res.status), timeoutMs);
+    else log.debug(`${params.label} status=${res.status} raw=${redactBody(rawText)}`);
     return rawText;
   } catch (err) {
     if (t !== undefined) clearTimeout(t);
-    const classified = classifyFetchError(err);
-    log.error(
-      `${params.label}: GET fetch failed url=${redactUrl(url.toString())} timeoutMs=${timeoutMs ?? "none"} type=${classified.type} description=${classified.description}${classified.code ? ` code=${classified.code}` : ""} error=${String(err)}`,
-    );
-    throw err;
+    const safeError =
+      err instanceof ApiRequestError ? err : new ApiRequestError(classifyFetchError(err).type);
+    logApiFailure(log, "GET", url.pathname, safeError, timeoutMs);
+    throw safeError;
   }
 }
 
@@ -351,33 +399,27 @@ export async function apiPostFetch(params: {
     });
     if (t !== undefined) clearTimeout(t);
     const rawText = await res.text();
-    log.debug(
-      `${params.label} status=${res.status} ${omitPayload ? "response=omitted" : `raw=${redactBody(rawText)}`}`,
-    );
-    if (!res.ok) {
-      throw new Error(`${params.label} ${res.status}: ${rawText}`);
-    }
+    if (!res.ok) throw new ApiRequestError("http", res.status);
+    const failure = responseFailure(rawText);
+    if (failure)
+      logApiFailure(
+        log,
+        "POST",
+        url.pathname,
+        new ApiRequestError(failure, res.status),
+        params.timeoutMs,
+      );
+    else
+      log.debug(
+        `${params.label} status=${res.status} ${omitPayload ? "response=omitted" : `raw=${redactBody(rawText)}`}`,
+      );
     return rawText;
   } catch (err) {
     if (t !== undefined) clearTimeout(t);
-    const classified = classifyFetchError(err);
-    if (omitPayload) {
-      // Only fixed classification fields are safe; exception messages, causes and codes may echo secrets.
-      log.error(
-        {
-          url: redactUrl(url.toString()),
-          timeoutMs: params.timeoutMs,
-          type: classified.type,
-          description: classified.description,
-        },
-        "sendMessage: POST fetch failed",
-      );
-    } else {
-      log.error(
-        `${params.label}: POST fetch failed url=${redactUrl(url.toString())} timeoutMs=${params.timeoutMs ?? "none"} type=${classified.type} description=${classified.description}${classified.code ? ` code=${classified.code}` : ""} error=${String(err)}`,
-      );
-    }
-    throw err;
+    const safeError =
+      err instanceof ApiRequestError ? err : new ApiRequestError(classifyFetchError(err).type);
+    logApiFailure(log, "POST", url.pathname, safeError, params.timeoutMs);
+    throw safeError;
   } finally {
     cleanup();
   }
@@ -413,7 +455,7 @@ export async function getUpdates(
       abortSignal: params.abortSignal,
       logger: log,
     });
-    const resp: GetUpdatesResp = JSON.parse(rawText);
+    const resp = parseApiResponse<GetUpdatesResp>(rawText);
     return resp;
   } catch (err) {
     // Long-poll timeout or external abort are both normal control-flow exits.
@@ -455,7 +497,7 @@ export async function getUploadUrl(
     label: "getUploadUrl",
     logger: params.logger,
   });
-  const resp: GetUploadUrlResp = JSON.parse(rawText);
+  const resp = parseApiResponse<GetUploadUrlResp>(rawText);
   return resp;
 }
 
@@ -472,9 +514,9 @@ export async function sendMessage(
     label: "sendMessage",
     logger: params.logger,
   });
-  const resp: SendMessageResp = JSON.parse(rawText);
+  const resp = parseApiResponse<SendMessageResp>(rawText);
   if (resp.ret && resp.ret !== 0) {
-    throw new Error(`sendMessage ret=${resp.ret} errmsg=${resp.errmsg ?? "(none)"}`);
+    throw new ApiRequestError("business");
   }
 }
 
@@ -495,7 +537,7 @@ export async function getConfig(
     label: "getConfig",
     logger: params.logger,
   });
-  const resp: GetConfigResp = JSON.parse(rawText);
+  const resp = parseApiResponse<GetConfigResp>(rawText);
   return resp;
 }
 
@@ -525,7 +567,7 @@ export async function notifyStop(params: WeixinApiOptions): Promise<NotifyStopRe
     label: "notifyStop",
     logger: params.logger,
   });
-  return JSON.parse(rawText) as NotifyStopResp;
+  return parseApiResponse<NotifyStopResp>(rawText);
 }
 
 /** Notify Weixin that this bot client is starting (daemon startup). */
@@ -539,5 +581,5 @@ export async function notifyStart(params: WeixinApiOptions): Promise<NotifyStart
     label: "notifyStart",
     logger: params.logger,
   });
-  return JSON.parse(rawText) as NotifyStartResp;
+  return parseApiResponse<NotifyStartResp>(rawText);
 }

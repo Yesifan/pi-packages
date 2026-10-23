@@ -1,25 +1,12 @@
 import { randomUUID } from "node:crypto";
 
-import { apiGetFetch, apiPostFetch } from "../api/api.js";
+import { apiGetFetch, apiPostFetch, parseApiResponse } from "../api/api.js";
 import { listIndexedWeixinAccountIds, loadWeixinAccount } from "./accounts.js";
 
 type ActiveLogin = {
-  sessionKey: string;
-  id: string;
   qrcode: string;
   qrcodeUrl: string;
   startedAt: number;
-  botToken?: string;
-  status?:
-    | "wait"
-    | "scaned"
-    | "confirmed"
-    | "expired"
-    | "scaned_but_redirect"
-    | "need_verifycode"
-    | "verify_code_blocked"
-    | "binded_redirect";
-  error?: string;
   /** The current effective polling base URL; may be updated on IDC redirect. */
   currentApiBaseUrl?: string;
   /** 待提交的配对码，用户输入后暂存，下次轮询时携带 */
@@ -100,7 +87,7 @@ async function fetchQRCode(apiBaseUrl: string, botType: string): Promise<QRCodeR
     body: JSON.stringify({ local_token_list: localTokenList }),
     label: "fetchQRCode",
   });
-  return JSON.parse(rawText) as QRCodeResponse;
+  return parseApiResponse<QRCodeResponse>(rawText);
 }
 
 /** 从 stdin 读取一行用户输入（配对码）。 */
@@ -139,7 +126,7 @@ async function pollQRStatus(
       timeoutMs: QR_LONG_POLL_TIMEOUT_MS,
       label: "pollQRStatus",
     });
-    return JSON.parse(rawText) as StatusResponse;
+    return parseApiResponse<StatusResponse>(rawText);
   } catch (err) {
     if (err instanceof Error && err.name === "AbortError") {
       // Long-poll timeout: normal, keep waiting.
@@ -208,8 +195,6 @@ export async function startWeixinLoginWithQr(opts: {
     const botType = opts.botType || DEFAULT_ILINK_BOT_TYPE;
     const qrResponse = await fetchQRCode(FIXED_BASE_URL, botType);
     const login: ActiveLogin = {
-      sessionKey,
-      id: randomUUID(),
       qrcode: qrResponse.qrcode,
       qrcodeUrl: qrResponse.qrcode_img_content,
       startedAt: Date.now(),
@@ -292,7 +277,6 @@ export async function waitForWeixinLogin(opts: {
         activeLogin.qrcode,
         activeLogin.pendingVerifyCode,
       );
-      activeLogin.status = statusResponse.status;
 
       switch (statusResponse.status) {
         case "wait":
@@ -400,7 +384,6 @@ export async function waitForWeixinLogin(opts: {
             };
           }
 
-          activeLogin.botToken = statusResponse.bot_token;
           activeLogins.delete(opts.sessionKey);
 
           return {

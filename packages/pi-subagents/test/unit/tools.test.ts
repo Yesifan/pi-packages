@@ -21,7 +21,7 @@ const caller: CallerBinding = {
   },
 };
 const status = createDelegationStatusSnapshot([{ name: "worker", agentType: "general" }], 1, 8);
-const accepted = (state: "started" | "steered"): AcceptedResult => ({
+const accepted = (state: "submitted" | "steered"): AcceptedResult => ({
   ok: true,
   name: "worker",
   agent_type: "general",
@@ -42,8 +42,10 @@ const context = { tools: [], executeTool: vi.fn() } as unknown as ExtensionToolC
 function runtime(): DelegationRuntimeApi {
   return {
     getMaxLiveAgents: vi.fn(() => 8),
-    createSubagent: vi.fn(async () => accepted("started")),
-    askSubagent: vi.fn(async (_caller, params) => accepted(params.isSteer ? "steered" : "started")),
+    createSubagent: vi.fn(async () => accepted("submitted")),
+    askSubagent: vi.fn(async (_caller, params) =>
+      accepted(params.isSteer ? "steered" : "submitted"),
+    ),
   };
 }
 describe("name delegation tools", () => {
@@ -81,12 +83,12 @@ describe("name delegation tools", () => {
       undefined,
       context,
     );
-    expect(result.details).toEqual(accepted("started"));
+    expect(result.details).toEqual(accepted("submitted"));
     expect(result.details).not.toHaveProperty("id");
     expect(result.details).not.toHaveProperty("run_id");
     expect(result.content).toContainEqual({
       type: "text",
-      text: "Started background subagent worker (role: general).",
+      text: "Submitted task to background subagent worker (role: general).",
     });
     expect(result.content).toContainEqual({ type: "text", text: formatDelegationStatus(status) });
     expect(JSON.stringify(result.content)).toContain("isSteer: true");
@@ -111,7 +113,7 @@ describe("name delegation tools", () => {
         context,
         undefined,
       );
-      expect(result.details).toEqual(accepted(isSteer ? "steered" : "started"));
+      expect(result.details).toEqual(accepted(isSteer ? "steered" : "submitted"));
     },
   );
   it.each(["SUBAGENT_BUSY", "LIVE_AGENT_LIMIT"])(

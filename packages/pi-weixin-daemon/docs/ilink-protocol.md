@@ -16,8 +16,8 @@ iLink 是微信面向 bot 的通道协议。一个账号 = 一个**bot**（`ilin
 
 **关键认知（避免踩坑）：**
 
-1. **bot 是「owner-scoped」的**——QR 扫码的 `bot_type=3` 创建 bot，`ilink_user_id`
-   就是扫码人。私聊是 1:1 的、面向 owner 的。没有「别人随意给你的 bot 发消息」。
+1. **扫码身份与消息发送者是分别取得的数据**：扫码返回 `ilink_user_id`，入站通过
+   `from_user_id` 标识发送者。未核实到服务端保证两者永远相等，不能断言其他用户不可能发送消息。
 2. **官方有「两道门」**：
    - **道 1 · 发送方鉴权（pairing）**：`*-allowFrom.json` 白名单，兜底只信任扫码人
      自己的 `userId`。
@@ -122,6 +122,8 @@ context_token 歧义。
 - `ilink/bot/getconfig`：取该用户的 `typing_ticket`（`context_token` 需回传）。
 - `ilink/bot/getuploadurl`：媒体上传（见 §4）。
 
+本地出站统一解析账号的 `account.userId` 及其 `(accountId, userId)` 精确缓存 token；项目层决定广播或来源账号定向范围。入站 token 仍按实际 sender 保存，只有 sender 与收件人一致时才可直接使用当前 token。缺用户、token 或可用 transport 时跳过并记录，逐目标失败隔离，不借用其他 sender 的 token、不自动重试。已有缓存可跨 daemon 重启使用，不要求重新发言，也不保证 token 仍有效。这是本项目投递策略，不是服务端身份恒等或 token 强绑定保证。
+
 ### 生命周期 notify
 
 - `ilink/bot/msg/notifystart` / `ilink/bot/msg/notifystop`：channel 启动/停止通知
@@ -182,7 +184,8 @@ resolveSenderCommandAuthorizationWithRuntime({
 > **本地当前差异**：本地 `src/` **没有**发送方鉴权（无 `pairing`/`allowFrom`/
 > `authorize`）。transport 只做消息类型 gate：明确的 BOT/非 USER 记录直接丢弃；USER 或缺失
 > `message_type` 的兼容报文继续经过 project gate。通过项目 gate 后，任意 `senderId` 都可能进入 Pi。
-> 若未来要对齐官方，需要增加 `*-allowFrom.json` 配对白名单 + 扫码人兜底。
+> 应用选择不增加该身份过滤，不代表服务端保证身份恒等。上述代码是普通消息授权示意，
+> 不能概括为所有入口都先检查：旧账号例外和插件 slash handler 顺序见 §11。
 
 ### 道 2 · 路由解析（对应方案的 account→project 索引）
 
@@ -218,7 +221,7 @@ if (!route.agentId) {
 4. **媒体处理（参考 Hermes，不混合）**：每条 iLink 消息独立成回合；image → 多模态
    （base64+mime）；file / video → **context note**（类型+保存路径+“自己读/处理”）给 agent；
    voice 仅用 `voice_item.text`（iLink 自带语音转写）当文本，追加识别错误备注，不下载音频；
-   空转写直接提示发送者，没有其他有效输入时不调用 Pi，不等待或处理后续补发转写；
+   空转写直接提示来源账号的微信用户，没有其他有效输入时不调用 Pi，不等待或处理后续补发转写；
    其他媒体下载/解密失败 → 记录为 `mediaFailures`，由 agent 告知用户，不阻塞消息。
 
 ---
@@ -228,6 +231,8 @@ if (!route.agentId) {
 官方有 token redaction。本地 `src/weixin/util/redact.ts`（`redactToken`/`redactBody`/
 `redactUrl`）。**禁止打印**：`bot_token`、`context_token`、AES key、完整
 `Authorization` header。日志字段建议含 `component`/`project`/`account`/`event`/`error`。
+
+iLink GET/POST 失败诊断统一只记录方法、端点路径、HTTP 状态、超时设置及固定错误分类。HTTP 错误正文、网络异常 cause/code、JSON 解析片段及业务错误描述不进入失败日志或向上抛出的错误；业务失败和非法 JSON 也不先打印原始响应 debug。保留调用方原有 ret/errcode 处理、stale-token 暂停、超时/中止和重试语义。本次未扩展审查请求或成功响应的 debug 字段。
 
 ---
 
@@ -277,9 +282,25 @@ if (!route.agentId) {
 - `src/weixin/auth/login-qr.ts`（扫码状态机）
 - `src/weixin/monitor/monitor.ts`（长轮询）
 - `src/weixin/transport.ts`（每账号 ILinkWeixinTransport facade）
-- `src/projects/`（项目路由、参与者注册与广播）
+- `src/projects/`（项目路由、绑定账号用户范围与广播）
 - `src/sessions/`（busy / TurnContext / 命令与会话状态机）
 - `src/pi/`、`src/weixin/interaction-controller.ts`（Pi host 与微信 UI 闭环）
+
+---
+
+## 11. 扫码身份与入站发送者核查（2026-10-21）
+
+本节使用固定上游 commit，区分客户端行为与服务端保证；不是实际账号日志验证。
+本地已按[需求 0009](requirements/0009-project-weixin-user-simplification.md) 移除动态参与者登记，统一向账号登录用户投递，并使用精确 token；不新增普通入站 sender 身份过滤。决策及行为变化见 [ADR-0007](adr/0007-project-weixin-users.md)。
+
+- 腾讯官方 `Tencent/openclaw-weixin`，固定 commit `874637a0dbc24050f72d1385add4fc6170a2d726`：[扫码返回 userId](https://github.com/Tencent/openclaw-weixin/blob/874637a0dbc24050f72d1385add4fc6170a2d726/src/auth/login-qr.ts#L460-L473) 与 [入站授权](https://github.com/Tencent/openclaw-weixin/blob/874637a0dbc24050f72d1385add4fc6170a2d726/src/messaging/process-message.ts#L184-L200) 分开处理；普通消息使用实际 sender，allowFrom 为空时才以登录 userId 作为授权列表兜底。这是客户端策略，不是服务端身份恒等保证；该版本插件 slash handler 在这段授权之前运行，不能概括为所有入口都先校验。
+- 腾讯正常回复以 [入站 from_user_id 和 context_token](https://github.com/Tencent/openclaw-weixin/blob/874637a0dbc24050f72d1385add4fc6170a2d726/src/messaging/inbound.ts#L255-L270) 为上下文，并非一律用扫码 userId。官方 [协议说明](https://github.com/Tencent/openclaw-weixin/blob/874637a0dbc24050f72d1385add4fc6170a2d726/docs/protocol.md#L248) 建议回传入站 token；客户端能发出无 token 请求不等于服务端一定接受。
+- Hermes `NousResearch/hermes-agent`，固定 commit `cb6bcb401e4387459b67d46c0fae55192ad7cb01`：adapter 已迁移到 `plugins/platforms/weixin/adapter.py`。[扫码身份保存为 user_id](https://github.com/NousResearch/hermes-agent/blob/cb6bcb401e4387459b67d46c0fae55192ad7cb01/plugins/platforms/weixin/adapter.py#L645-L654)，[入站](https://github.com/NousResearch/hermes-agent/blob/cb6bcb401e4387459b67d46c0fae55192ad7cb01/plugins/platforms/weixin/adapter.py#L879-L912) 使用 from_user_id 和可配置 DM policy，不强制等于登录 user_id；与 bot account ID 的比较是排除自己，不是扫码用户校验。
+- Hermes [发送](https://github.com/NousResearch/hermes-agent/blob/cb6bcb401e4387459b67d46c0fae55192ad7cb01/plugins/platforms/weixin/adapter.py#L1037-L1060) 使用传入 chat_id，并查找该账号/用户对应 token。它的 tokenless fallback 是实现选择，不能当作腾讯协议保证或本项目新增 fallback 的理由。
+- 结论：两个 adapter 都分别获取扫码身份与 sender，普通私聊回复均使用 sender。未找到 sender 与扫码身份永远相等或 token/recipient 强绑定的服务端契约。保留精确 token 关联是本项目明确规则；统一按 account.userId 出站则是本项目的产品决策，不声称复刻这些 adapter 的回复策略。
+
+
+未取得同账号完整登录响应与入站报文关联日志；现有登录日志的 ID 前缀和长度不足以证明完整相等。
 
 ---
 

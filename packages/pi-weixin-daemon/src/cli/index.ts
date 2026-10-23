@@ -15,6 +15,7 @@ import { ControlStore } from "./control-store.js";
 import { doctorCommand } from "./doctor.js";
 import { loginCommand } from "./login.js";
 import { projectCommand } from "./project.js";
+import { promptCommand } from "./prompt.js";
 import { rpcCall } from "./rpc-client.js";
 import { serveCommand } from "./serve.js";
 import { serviceCommand } from "./service.js";
@@ -44,6 +45,7 @@ export function buildProgram(): Command {
   program.addCommand(accountsCommand());
   program.addCommand(projectCommand());
   program.addCommand(broadcastCommand());
+  program.addCommand(promptCommand());
   program.addCommand(doctorCommand());
   return program;
 }

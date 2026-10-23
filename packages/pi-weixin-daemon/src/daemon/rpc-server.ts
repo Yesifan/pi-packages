@@ -10,12 +10,6 @@ interface RpcRequest {
   params?: Record<string, unknown>;
 }
 
-export interface StatusResult {
-  version: string;
-  projects: unknown[];
-  accounts: unknown[];
-}
-
 /**
  * Unix Domain Socket RPC server (typed JSON). No TCP/HTTP — local control plane only.
  * Socket perms 0600. Stale socket file is removed on start when not in use.
@@ -173,6 +167,15 @@ export class RpcServer {
       case "project.remove":
       case "account.logout":
         throw new Error("Control writes moved to CLI; upgrade CLI and daemon together");
+      case "project.prompt":
+        if (typeof params.name !== "string" || !params.name.trim())
+          throw new Error("prompt project name must not be blank");
+        return this.daemon.promptProject(params.name, {
+          text: params.text as string,
+          sessionId: params.sessionId as string | undefined,
+          newSession: params.newSession as boolean | undefined,
+          reply: params.reply as string[] | undefined,
+        });
       case "project.broadcast":
         if (typeof params.name !== "string" || !params.name.trim()) {
           throw new Error("broadcast project name must be a non-empty string");

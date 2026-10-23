@@ -3,7 +3,8 @@ import type { Logger } from "../util/logger.js";
 import { restoreContextTokens } from "../weixin/storage/context-token.js";
 import type { InboundMessage, WeixinTransport } from "../weixin/types.js";
 
-export interface ManagedAccount {
+interface ManagedAccount {
+  unsubscribe: () => void;
   accountId: string;
   transport: WeixinTransport;
   status: AccountStatus;
@@ -27,7 +28,6 @@ export interface AccountManagerOptions {
 export class AccountManager {
   private accounts = new Map<string, ManagedAccount>();
   private inboundHandlers: Array<(message: InboundMessage) => Promise<void>> = [];
-  private unsubscribes = new Map<string, () => void>();
   private receivers = new Map<string, { controller: AbortController; task?: Promise<void> }>();
 
   constructor(private readonly opts: AccountManagerOptions) {}
@@ -45,8 +45,8 @@ export class AccountManager {
       transport,
       status: "online",
       userId,
+      unsubscribe: unsub,
     });
-    this.unsubscribes.set(accountId, unsub);
     const receiver = {
       controller: new AbortController(),
       task: undefined as Promise<void> | undefined,
@@ -81,8 +81,7 @@ export class AccountManager {
       this.opts.logger.error({ account: accountId }, "account stop failed; not confirmed stopped");
       throw error;
     }
-    this.unsubscribes.get(accountId)?.();
-    this.unsubscribes.delete(accountId);
+    mgd.unsubscribe();
     this.receivers.delete(accountId);
     this.accounts.delete(accountId);
   }
@@ -128,7 +127,7 @@ export class AccountManager {
   }
 
   async stopAll(): Promise<void> {
-    for (const id of [...this.unsubscribes.keys()]) {
+    for (const id of [...this.accounts.keys()]) {
       await this.remove(id);
     }
   }

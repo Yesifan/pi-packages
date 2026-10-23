@@ -14,10 +14,10 @@ async function idle(h: Awaited<ReturnType<typeof createHarness>>, name: string, 
 }
 
 describe("name reservation and direct ownership", () => {
-  it("trims names, matches exact case and reserves duplicates before the first await", async () => {
+  it("trims names, matches exact case and atomically reserves duplicates after acquiring the tree", async () => {
     const h = await createHarness();
     const first = h.runtime.createSubagent(h.caller, { name: " Worker ", prompt: "work" }, h.ctx);
-    expect(h.agent("Worker").currentExecution).toMatchObject({ phase: "opening", accepted: false });
+    // Reservation follows lock acquisition and metadata recovery, before task preparation.
     const duplicate = h.runtime.createSubagent(
       h.caller,
       { name: "Worker", prompt: "duplicate" },
@@ -28,7 +28,7 @@ describe("name reservation and direct ownership", () => {
       message: expect.stringContaining("ask_subagent"),
     });
     const result = await first;
-    expect(result).toMatchObject({ name: "Worker", status: "started", agent_type: "general" });
+    expect(result).toMatchObject({ name: "Worker", status: "submitted", agent_type: "general" });
     expect(result).not.toHaveProperty("id");
     expect(result).not.toHaveProperty("run_id");
     await expect(
@@ -42,7 +42,7 @@ describe("name reservation and direct ownership", () => {
     ).rejects.toMatchObject({ code: "SUBAGENT_NAME_EXISTS" });
     await expect(
       h.runtime.askSubagent(h.caller, { name: " Worker ", prompt: "follow-up" }, h.ctx),
-    ).resolves.toMatchObject({ name: "Worker", status: "started" });
+    ).resolves.toMatchObject({ name: "Worker", status: "submitted" });
   });
 
   it.each(["", "  \n\t"])("rejects empty trimmed name %j", async (name) => {
@@ -57,7 +57,7 @@ describe("name reservation and direct ownership", () => {
     const h = await createHarness();
     const long = `../${"long-name".repeat(40)}\nfull-name`;
     for (const name of ["__proto__", long]) await idle(h, name);
-    const record = await h.store.readOwner(h.scope.identity, null);
+    const record = await h.readOwner(h.scope.identity, null);
     expect(Object.keys(record!.children)).toEqual(["__proto__", long]);
     expect(Object.hasOwn(record!.children, "__proto__")).toBe(true);
     expect(({} as Record<string, unknown>).state).toBeUndefined();
@@ -92,13 +92,9 @@ describe("name reservation and direct ownership", () => {
     await expect(
       h.runtime.askSubagent(h.caller, { name: "worker", prompt: "guess" }, h.ctx),
     ).rejects.toMatchObject({ code: "SUBAGENT_NOT_FOUND" });
-    const rootRecord = await h.store.readOwner(h.scope.identity, null);
+    const rootRecord = await h.readOwner(h.scope.identity, null);
     expect(Object.keys(rootRecord!.children)).toEqual(["parent", "other"]);
-    const nestedRecord = await h.store.readOwner(
-      h.agent("parent").identity!,
-      h.scope.identity,
-      true,
-    );
+    const nestedRecord = await h.readOwner(h.agent("parent").identity!, h.scope.identity, true);
     expect(Object.keys(nestedRecord!.children)).toEqual(["worker"]);
     expect(nestedRecord!.children.worker).not.toHaveProperty("cwd");
   });
@@ -169,8 +165,7 @@ describe("ordinary ask concurrency and history", () => {
       thinkingLevel: "low" as const,
     };
     const first = h.runtime.askSubagent(h.caller, { name: "worker", prompt: "follow-up" }, changed);
-    const execution = agent.currentExecution!;
-    expect(execution).toMatchObject({ phase: "opening", accepted: false });
+    // Both calls join this window's acquisition; only one can reserve the restored agent.
     const second = h.runtime.askSubagent(
       h.caller,
       { name: "worker", prompt: "must not queue" },
@@ -186,10 +181,11 @@ describe("ordinary ask concurrency and history", () => {
     await expect(first).resolves.toMatchObject({
       name: "worker",
       thinking: "high",
-      status: "started",
+      status: "submitted",
     });
-    expect(agent.currentExecution).toBe(execution);
-    expect(agent.identity).toEqual(identity);
+    expect(h.agent("worker").currentExecution).toBeDefined();
+    expect(h.agent("worker")).not.toBe(agent);
+    expect(h.agent("worker").identity).toEqual(identity);
     const mounted = h.child("worker");
     expect(mounted).not.toBe(old);
     expect(mounted.session.model?.id).toBe("original");
@@ -199,7 +195,7 @@ describe("ordinary ask concurrency and history", () => {
     expect(h.mounts.at(-1)).not.toHaveProperty("model");
     expect(h.mounts.at(-1)).not.toHaveProperty("thinking");
     expect(mounted.promptCalls).toHaveLength(1);
-    const saved = (await h.store.readOwner(h.scope.identity, null))!.children.worker!;
+    const saved = (await h.readOwner(h.scope.identity, null))!.children.worker!;
     expect(Object.keys(saved).sort()).toEqual([
       "roleSnapshot",
       "sessionFile",
@@ -216,8 +212,8 @@ describe("ordinary ask concurrency and history", () => {
     await expect(
       h.runtime.askSubagent(h.caller, { name: "external", prompt: "now unauthorized" }, h.ctx),
     ).rejects.toMatchObject({ code: "CWD_NOT_ALLOWED" });
-    expect(agent.currentExecution).toBeUndefined();
-    expect(agent.state).toBe("idle");
+    expect(h.agent("external").currentExecution).toBeUndefined();
+    expect(h.agent("external").state).toBe("idle");
     expect(await readFile(agent.identity!.sessionFile, "utf8")).toBe(before);
     expect(h.mounts).toHaveLength(1);
   });
@@ -227,7 +223,6 @@ describe("ordinary ask concurrency and history", () => {
     await idle(h, "first");
     await idle(h, "second");
     const first = h.runtime.askSubagent(h.caller, { name: "first", prompt: "work" }, h.ctx);
-    expect(h.scope.executions.size).toBe(1);
     await expect(
       h.runtime.askSubagent(h.caller, { name: "second", prompt: "work" }, h.ctx),
     ).rejects.toMatchObject({
@@ -248,49 +243,37 @@ describe("ordinary ask concurrency and history", () => {
     await expect(
       h.runtime.askSubagent(h.caller, { name: "worker", prompt: "fail" }, h.ctx),
     ).rejects.toThrow("open failed");
-    expect(agent.currentExecution).toBeUndefined();
-    expect(agent.state).toBe("idle");
+    expect(h.agent("worker").currentExecution).toBeUndefined();
+    expect(h.agent("worker").state).toBe("idle");
     expect(await readFile(file, "utf8")).toBe(before);
-    expect(Object.keys((await h.store.readOwner(h.scope.identity, null))!.children)).toEqual([
+    expect(Object.keys((await h.readOwner(h.scope.identity, null))!.children)).toEqual([
       "worker",
       "sibling",
     ]);
     await expect(
       h.runtime.askSubagent(h.caller, { name: "worker", prompt: "retry" }, h.ctx),
-    ).resolves.toMatchObject({ name: "worker", status: "started" });
+    ).resolves.toMatchObject({ name: "worker", status: "submitted" });
   });
 
-  it.each(["handled", "reject"] as const)(
-    "rolls back a new child on preaccept %s",
-    async (kind) => {
-      const h = await createHarness();
-      await idle(h, "sibling");
-      const count = h.reports.length;
-      h.configureNext((child) => {
-        if (kind === "handled") child.nextDisposition = "handled";
-        else child.promptError = new Error("preflight rejected");
-      });
-      const pending = h.runtime.createSubagent(
-        h.caller,
-        { name: "prepared", prompt: "work" },
-        h.ctx,
-      );
-      if (kind === "handled")
-        await expect(pending).rejects.toMatchObject({ code: "PROMPT_HANDLED" });
-      else await expect(pending).rejects.toThrow("preflight rejected");
-      expect(h.scope.children.has("prepared")).toBe(false);
-      expect(h.scope.executions.size).toBe(0);
-      expect(h.reports).toHaveLength(count);
-      expect(Object.keys((await h.store.readOwner(h.scope.identity, null))!.children)).toEqual([
-        "sibling",
-      ]);
-      await expect(readFile(h.children.at(-1)!.manager.getSessionFile()!)).rejects.toMatchObject({
-        code: "ENOENT",
-      });
-    },
-  );
+  it.each(["handled", "reject"] as const)("retains submitted identity after %s", async (kind) => {
+    const h = await createHarness();
+    await idle(h, "sibling");
+    h.configureNext((child) => {
+      if (kind === "handled") child.nextDisposition = "handled";
+      else child.promptError = new Error("submission rejected");
+    });
+    await expect(
+      h.runtime.createSubagent(h.caller, { name: "prepared", prompt: "work" }, h.ctx),
+    ).resolves.toMatchObject({ status: "submitted" });
+    await h.flush();
+    expect(h.agent("prepared").identity).toBeDefined();
+    expect(h.agent("prepared").currentExecution).toBeUndefined();
+    expect(await readFile(h.agent("prepared").identity!.sessionFile, "utf8")).toBeTruthy();
+    if (kind === "reject")
+      expect(h.reports.at(-1)?.report.error?.message).toBe("submission rejected");
+  });
 
-  it("handled ask preserves the old identity/history and does not abort extension processing", async () => {
+  it("handled ask preserves history without reusing the old assistant answer", async () => {
     const h = await createHarness();
     const agent = await idle(h, "worker");
     const before = await readFile(agent.identity!.sessionFile, "utf8");
@@ -299,31 +282,12 @@ describe("ordinary ask concurrency and history", () => {
     });
     await expect(
       h.runtime.askSubagent(h.caller, { name: "worker", prompt: "consume" }, h.ctx),
-    ).rejects.toMatchObject({ code: "PROMPT_HANDLED" });
-    expect(await readFile(agent.identity!.sessionFile, "utf8")).toBe(before);
-    expect(agent.state).toBe("idle");
-    expect(h.child("worker").aborts).toBe(0);
-    expect(h.reports).toHaveLength(1);
-  });
-
-  it("unexpected queued ordinary input fails explicitly but retains accepted history and identity", async () => {
-    const h = await createHarness();
-    h.configureNext((child) => {
-      child.nextDisposition = "queued";
-    });
-    await expect(
-      h.runtime.createSubagent(h.caller, { name: "worker", prompt: "queued unexpectedly" }, h.ctx),
-    ).rejects.toMatchObject({ code: "UNEXPECTED_PREFLIGHT" });
+    ).resolves.toMatchObject({ status: "submitted" });
     await h.flush();
-    expect(h.agent("worker").identity).toBeDefined();
-    expect(await readFile(h.agent("worker").identity!.sessionFile, "utf8")).toContain(
-      "queued unexpectedly",
-    );
-    expect(h.reports).toHaveLength(1);
-    expect(h.reports[0]!.report).toMatchObject({
-      outcome: "failed",
-      error: { code: "UNEXPECTED_PREFLIGHT" },
-    });
+    expect(await readFile(agent.identity!.sessionFile, "utf8")).toBe(before);
+    expect(h.agent("worker").state).toBe("idle");
+    expect(h.child("worker").aborts).toBe(0);
+    expect(h.reports.at(-1)?.report.outcome).not.toBe("completed");
   });
 });
 
@@ -338,7 +302,7 @@ describe("exact root restoration", () => {
       state: "opening",
     });
     // Simulate crash metadata, not graceful shutdown's terminal state updates.
-    const saved = (await h.store.readOwner(h.scope.identity, null))!;
+    const saved = (await h.readOwner(h.scope.identity, null))!;
     await h.runtime.shutdown();
     const { PersistentSubagentStore } = await import("../../src/store.js");
     const seed = new PersistentSubagentStore(h.agentDir, h.scope.identity);
@@ -430,7 +394,7 @@ describe("exact root restoration", () => {
         { name: "old-worker", prompt: "new independent history" },
         h.ctx,
       ),
-    ).resolves.toMatchObject({ name: "old-worker", status: "started" });
+    ).resolves.toMatchObject({ name: "old-worker", status: "submitted" });
     const newAgent = (Reflect.get(restored, "scope") as RootScope).children.get("old-worker")!;
     expect(newAgent.identity!.sessionFile).toContain(
       path.join(h.agentDir, "subagents", "histories"),

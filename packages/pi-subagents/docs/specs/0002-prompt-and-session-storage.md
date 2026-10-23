@@ -10,7 +10,7 @@ related_documents:
   - "[权威规格](yesifan-pi-subagents-spec.md)"
   - "[领域模型](../domain-model.md)"
   - "[ADR-0003](../adr/0003-sdk-sessions-and-parent-metadata.md)"
-  - "[后续 Spec 0003](0003-terminal-exit-reporting.md)"
+  - "[后续 Spec 0003](https://github.com/Yesifan/pi-packages/blob/main/packages/pi-subagents/docs/specs/0003-terminal-exit-reporting.md)"
 
 ---
 
@@ -24,7 +24,7 @@ related_documents:
 
 本文是当前重写的权威行为与验收规格。工作区已实现 description/role/history 路径展示、name 工具接口、SDK 原生私有目录 history、按直接 parent 最小 metadata 和 Execution/RootScope 对象生命周期；旧 ID 工具接口、独立 run/mount/report identity、project-local store 与补投恢复契约不再是当前行为。最新目录修订已通过 typecheck、21 个文件 / 245 项测试、build 与 pack；此前 runtime 独立最终复审确认 5 项问题已解决、未发现新的具体缺陷，不将该旧复审冒充最新目录修订已复审。实际交互 TUI/print 手动验收仍未运行，不据此宣称 §14 全部通过。“必须”“不得”为验收要求，“建议”为可选选择，不由批准/代码存在自动推导验收通过。D1–D6 均已确认；冲突处以本文和 ADR-0003 为准。
 
-[Spec 0003](0003-terminal-exit-reporting.md) 是仍未开始的异常退出通知扩展；其现场证据和测试/日志计划原样保留，本文不宣称该扩展已实施。
+[Spec 0003](https://github.com/Yesifan/pi-packages/blob/main/packages/pi-subagents/docs/specs/0003-terminal-exit-reporting.md) 是仍未开始的异常退出通知扩展；其现场证据和测试/日志计划原样保留，本文不宣称该扩展已实施。
 
 优先采用简单的 SDK 行为和有用诊断日志。不为手动打开、discovery 或额外 crash-window 政策增加 owned-child guard、全局索引或状态框架；未批准的边缘策略延后，遇到 SDK 无法支持的核心契约时提供证据再讨论。
 

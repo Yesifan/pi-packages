@@ -29,7 +29,15 @@ function setup(configs: Array<{ name: string; config: ProjectConfig }>): Harness
     fakes.set(ctx.projectId, fake);
     return fake;
   };
-  const pm = new ProjectManager({ getTransport, factory, logger });
+  const pm = new ProjectManager({
+    getTransport,
+    factory,
+    logger,
+    resolveBroadcastAccount: (id) => ({
+      userId: `u-${id.toLowerCase()}`,
+      contextToken: `cached-${id}`,
+    }),
+  });
   return { pm, transports, fakes, configs };
 }
 
@@ -143,7 +151,15 @@ describe("ProjectManager: account routing + project isolation (fake)", () => {
       fakes.set(ctx.projectId, fake);
       return fake;
     };
-    const pm = new ProjectManager({ getTransport, factory, logger });
+    const pm = new ProjectManager({
+      getTransport,
+      factory,
+      logger,
+      resolveBroadcastAccount: (id) => ({
+        userId: `u-${id.toLowerCase()}`,
+        contextToken: `cached-${id}`,
+      }),
+    });
     await expect(pm.sync(twoProjects as never)).rejects.toThrow("application failed");
 
     expect(pm.getRuntime("foo")!.getStatus().state).toBe("error");

@@ -203,8 +203,6 @@ export class PersistentSubagentStore {
   private openPromise?: Promise<ParentSessionRecord | undefined>;
   private closePromise?: Promise<void>;
   private readonly loadedOwners = new Set<string>();
-  private revision = 0;
-  private readonly applied = new Map<string, Map<string, number>>();
 
   constructor(agentDir: string, root: SessionIdentity) {
     if (!nonempty(agentDir) || !path.isAbsolute(agentDir)) {
@@ -324,8 +322,6 @@ export class PersistentSubagentStore {
         this.readOwnerNow(child, normalizedOwner, true);
         if (child.hasChildren) return;
         child.hasChildren = true;
-        // Do not advance the child's mutation revision: this field-only merge must neither
-        // overwrite sync acceptance nor supersede a subsequent queued state update.
         atomicJson(
           path.join(this.sessionsDirectory, `${sessionKey(normalizedOwner)}.json`),
           record,
@@ -347,41 +343,9 @@ export class PersistentSubagentStore {
       const normalizedOwner = normalizeIdentity(owner);
       const normalizedParent = parent === null ? null : normalizeIdentity(parent);
       validateName(name);
-      const revision = ++this.revision;
-      return this.enqueue(() =>
-        this.update(normalizedOwner, normalizedParent, name, prepared, revision),
-      );
+      return this.enqueue(() => this.update(normalizedOwner, normalizedParent, name, prepared));
     } catch (error) {
       return Promise.reject(this.error(error));
-    }
-  }
-
-  /** Synchronous preflight acceptance: requires an already durable opening record. */
-  setChildSync(
-    owner: SessionIdentity,
-    parent: SessionIdentity | null,
-    name: string,
-    child: ChildRecord,
-  ): void {
-    try {
-      if (this.closing) throw storeError("Subagent store is closing.");
-      validateName(name);
-      const prepared = childRecord(child);
-      const record = this.readOwnerNow(owner, parent, true);
-      const previous = record?.children[name];
-      if (
-        !previous ||
-        previous.state !== "opening" ||
-        prepared.state !== "running" ||
-        !sameIdentity(previous, prepared)
-      ) {
-        throw storeError(
-          "Synchronous acceptance requires the same child's durable opening record.",
-        );
-      }
-      this.update(owner, parent, name, prepared, ++this.revision);
-    } catch (error) {
-      throw this.error(error);
     }
   }
 
@@ -390,10 +354,7 @@ export class PersistentSubagentStore {
       validateName(name);
       const normalizedOwner = normalizeIdentity(owner);
       const normalizedParent = parent === null ? null : normalizeIdentity(parent);
-      const revision = ++this.revision;
-      return this.enqueue(() =>
-        this.update(normalizedOwner, normalizedParent, name, undefined, revision),
-      );
+      return this.enqueue(() => this.update(normalizedOwner, normalizedParent, name, undefined));
     } catch (error) {
       return Promise.reject(this.error(error));
     }
@@ -467,7 +428,6 @@ export class PersistentSubagentStore {
     parentInput: SessionIdentity | null,
     name: string,
     child: ChildRecord | undefined,
-    revision: number,
   ): void {
     const owner = normalizeIdentity(ownerInput);
     const parent = parentInput === null ? null : normalizeIdentity(parentInput);
@@ -475,10 +435,6 @@ export class PersistentSubagentStore {
     this.readOwnerNow(this.root, null, !sameIdentity(owner, this.root));
     const record = this.readOwnerNow(owner, parent);
     const key = sessionKey(owner);
-    const revisions = this.applied.get(key) ?? new Map<string, number>();
-    // A sync preflight can overtake queued writes. Skip only the superseded child mutation,
-    // not sibling updates; no asynchronous filesystem write can be in flight here.
-    if ((revisions.get(name) ?? 0) > revision) return;
     if (!record && !child) return;
     const next = record ?? {
       schemaVersion: 1,
@@ -495,8 +451,6 @@ export class PersistentSubagentStore {
     } else delete next.children[name];
     atomicJson(path.join(this.sessionsDirectory, `${key}.json`), next);
     this.loadedOwners.add(key);
-    revisions.set(name, revision);
-    this.applied.set(key, revisions);
   }
 
   private error(error: unknown): SubagentError {

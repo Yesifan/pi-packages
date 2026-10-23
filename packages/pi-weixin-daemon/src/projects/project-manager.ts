@@ -1,4 +1,6 @@
+import { type CliPromptRequest, validateCliPrompt } from "../sessions/cli-prompt.js";
 import type { Logger } from "../util/logger.js";
+import { RecipientUnavailableError, type ResolveRecipientAccount } from "../weixin/recipient.js";
 import type { InboundMessage, WeixinTransport } from "../weixin/types.js";
 import { type ProjectRuntimeConfig, runtimeKeyOf } from "./project-config.js";
 import { ProjectController, type ProjectHostFactory } from "./project-controller.js";
@@ -6,13 +8,11 @@ import { ProjectTransport } from "./project-transport.js";
 import type { ProjectBroadcastResult, ProjectConfig, ProjectStatus } from "./types.js";
 
 export interface ProjectManagerOptions {
+  saveDefaultSession?: (projectId: string, sessionId: string) => void;
   /** Resolve the per-account transport (owned by AccountManager). */
   getTransport: (accountId: string) => WeixinTransport | undefined;
-  /** Owner details and exact cached token, supplied by the account/Weixin layer. */
-  resolveBroadcastAccount?: (accountId: string) => {
-    userId?: string;
-    contextToken?: string;
-  } | null;
+  /** Login user and exact cached token, shared by all project delivery. */
+  resolveBroadcastAccount: ResolveRecipientAccount;
   /** Build the per-project agent host (real PiSdkHost or fake in tests). */
   factory: ProjectHostFactory;
   logger: Logger;
@@ -25,9 +25,6 @@ export interface ProjectManagerOptions {
   abortGraceMs?: number;
 }
 
-/** Result of a desired-state reconcile (ADR-0004 Invariant 3). */
-export type ReconcileResult = "none" | "restart";
-
 /**
  * Owns `Map<ProjectId, ProjectController>` and the derived `accountId -> projectId`
  * index. Reconciles desired-state (`enabled`) from config via diff → restart
@@ -39,7 +36,15 @@ export class ProjectManager {
   private configs = new Map<string, ProjectConfig>();
   private accountProject = new Map<string, string>();
 
-  constructor(private readonly opts: ProjectManagerOptions) {}
+  private readonly transport: ProjectTransport;
+
+  constructor(private readonly opts: ProjectManagerOptions) {
+    this.transport = new ProjectTransport(
+      opts.getTransport,
+      opts.resolveBroadcastAccount,
+      opts.logger,
+    );
+  }
 
   getRuntime(projectId: string): ProjectController | undefined {
     return this.controllers.get(projectId);
@@ -58,7 +63,7 @@ export class ProjectManager {
     const nextConfigs = new Map<string, ProjectConfig>();
     const nextAccountProject = new Map<string, string>();
     for (const { name, config } of configs) {
-      nextConfigs.set(name, config);
+      nextConfigs.set(name, { ...config, accounts: [...config.accounts] });
       for (const acc of config.accounts) {
         nextAccountProject.set(acc, name);
       }
@@ -95,7 +100,6 @@ export class ProjectManager {
         this.controllers.delete(name);
       }
 
-      const transport = new ProjectTransport(this.opts.getTransport);
       const snapshot: ProjectRuntimeConfig = {
         projectId: name,
         cwd: cfg.cwd,
@@ -103,7 +107,14 @@ export class ProjectManager {
       };
       const controller = new ProjectController({
         config: snapshot,
-        transport,
+        defaultSessionId: cfg.defaultSessionId,
+        saveDefaultSession: (id) => {
+          this.opts.saveDefaultSession?.(name, id);
+          const config = this.configs.get(name);
+          if (config) config.defaultSessionId = id;
+        },
+        transport: this.transport,
+        resolveRecipientUserId: (id) => this.opts.resolveBroadcastAccount(id)?.userId,
         logger: this.opts.logger,
         factory: this.opts.factory,
         resolveSenderName: this.opts.resolveSenderName,
@@ -136,67 +147,97 @@ export class ProjectManager {
         { account: accountId, project: projectId },
         "dropping inbound: project not running",
       );
-      // Tell the sender instead of silently dropping (bound+enabled but runtime not up).
-      const transport = this.opts.getTransport(accountId);
-      if (transport && msg.senderId) {
-        await transport
-          .sendText(
-            {
-              accountId,
-              senderId: msg.senderId,
-              messageId: "not-running",
-              contextToken: msg.contextToken,
-            },
-            "⚠️ 项目当前未运行（可能启动失败或仍在启动），请稍后重试。",
-          )
-          .catch((err: unknown) =>
-            this.opts.logger.warn(
-              { err, account: accountId },
-              "project-not-running reply failed (ignored)",
-            ),
-          );
-      }
+      await this.transport
+        .sendText(
+          {
+            accountId,
+            senderId: msg.senderId,
+            messageId: "not-running",
+            contextToken: msg.contextToken,
+          },
+          "⚠️ 项目当前未运行（可能启动失败或仍在启动），请稍后重试。",
+        )
+        .catch((err: unknown) =>
+          this.opts.logger.warn(
+            { err, account: accountId },
+            "project-not-running reply failed (ignored)",
+          ),
+        );
       return;
     }
     await controller.handleMessage(msg);
   }
 
-  /** Explicit owner notification; deliberately independent of Pi and session participants. */
-  async broadcast(projectId: string, text: string): Promise<ProjectBroadcastResult> {
+  async prompt(projectId: string, input: CliPromptRequest) {
+    validateCliPrompt(input);
+    const config = this.configs.get(projectId);
+    if (!config) throw new Error(`project "${projectId}" does not exist`);
+    if (!config.enabled) throw new Error(`project "${projectId}" is disabled`);
+    const targets = input.reply ?? ["caller"];
+    const users = new Map<string, string>();
+    for (const account of config.accounts) {
+      const user = this.opts.resolveBroadcastAccount(account)?.userId;
+      if (user && !users.has(user)) users.set(user, account);
+    }
+    const accounts = new Set<string>();
+    for (const target of targets) {
+      if (target === "caller") continue;
+      if (target === "user:all") {
+        // Missing user records still count as skipped, rather than silently succeeding.
+        for (const account of config.accounts) {
+          const user = this.opts.resolveBroadcastAccount(account)?.userId;
+          if (!user || users.get(user) === account) accounts.add(account);
+        }
+      } else {
+        const account = users.get(target.slice(5));
+        if (!account) throw new Error(`unknown project reply target: ${target}`);
+        accounts.add(account);
+      }
+    }
+    const controller = this.controllers.get(projectId);
+    if (!controller) throw new Error(`project "${projectId}" is not running`);
+    return controller.prompt(input, (text) => this.broadcast(projectId, text, [...accounts]));
+  }
+
+  /** Explicit project notification, independent of Pi session state. */
+  async broadcast(
+    projectId: string,
+    text: string,
+    selectedAccounts?: string[],
+  ): Promise<ProjectBroadcastResult> {
     const config = this.configs.get(projectId);
     if (!config) throw new Error(`project "${projectId}" does not exist`);
     if (!config.enabled) throw new Error(`project "${projectId}" is disabled`);
     if (!text.trim()) throw new Error("broadcast text must not be blank");
 
     const result: ProjectBroadcastResult = { succeeded: 0, skipped: 0, failed: 0 };
-    // Snapshot the bound accounts, not the actual-sender participant registry.
-    for (const accountId of [...config.accounts]) {
-      const account = this.opts.resolveBroadcastAccount?.(accountId);
-      const userId = account?.userId;
-      const contextToken = account?.contextToken;
-      const transport = this.opts.getTransport(accountId);
-      const target = { project: projectId, account: accountId, user: userId };
-      if (!account || !userId || !contextToken || !transport) {
-        const reason = !account
-          ? "missing-account"
-          : !userId
-            ? "missing-user"
-            : !contextToken
-              ? "missing-context-token"
-              : "missing-transport";
+    // Snapshot bound accounts; all exits share the same recipient/token resolver.
+    for (const accountId of selectedAccounts ?? [...config.accounts]) {
+      const target = {
+        project: projectId,
+        account: accountId,
+        user: undefined as string | undefined,
+      };
+      let recipient: ReturnType<ProjectTransport["resolve"]>;
+      try {
+        recipient = this.transport.resolve({
+          accountId,
+          senderId: "",
+          messageId: "project-broadcast",
+        });
+      } catch (err) {
+        if (!(err instanceof RecipientUnavailableError)) throw err;
         result.skipped++;
+        target.user = err.userId;
         this.opts.logger.warn(
-          { ...target, status: "skipped", reason },
+          { ...target, status: "skipped", reason: err.reason },
           "project broadcast target skipped",
         );
         continue;
       }
-
+      target.user = recipient.ctx.senderId;
       try {
-        await transport.sendText(
-          { accountId, senderId: userId, contextToken, messageId: "project-broadcast" },
-          text,
-        );
+        await recipient.transport.sendText(recipient.ctx, text);
         result.succeeded++;
         this.opts.logger.info({ ...target, status: "succeeded" }, "project broadcast target sent");
       } catch {
@@ -232,6 +273,7 @@ export class ProjectManager {
         state: st?.state ?? "off",
         sessionFile: st?.sessionFile,
         sessionId: st?.sessionId,
+        defaultSessionId: st?.defaultSessionId ?? cfg.defaultSessionId,
         model: st?.model,
         configuredTrust: st?.configuredTrust,
         activeSessionTrust: st?.activeSessionTrust,

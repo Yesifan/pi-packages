@@ -1,4 +1,6 @@
+import path from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-ai";
+import type { ImageContent } from "@earendil-works/pi-ai/compat";
 import {
   type AgentSession,
   type AgentSessionRuntime,
@@ -15,7 +17,7 @@ import { type PiHostEvent, toPiHostEvent } from "./events.js";
 import { PiExtensionHost } from "./extension-host.js";
 import { resolveProjectTrust } from "./project-trust.js";
 import { createPiRuntimeFactory, PiInitializationError } from "./runtime-factory.js";
-import { PiSessionHost } from "./session-host.js";
+import { persistSessionIdentity } from "./session-persistence.js";
 import type {
   HostExtensionMode,
   HostModelOption,
@@ -52,6 +54,7 @@ export class PiSdkHost {
   private extensionHost: PiExtensionHost | undefined;
   private readonly listeners = new Set<PiHostEventListener>();
   private generation = 0;
+  private recoveringSessionId: string | undefined;
   private readonly opts: PiSdkHostOptions;
 
   constructor(opts: PiSdkHostOptions) {
@@ -72,8 +75,8 @@ export class PiSdkHost {
     await this.ensureRuntime();
   }
 
-  /** Create a fresh session for `cwd` and bind session-local subscriptions. */
-  private async ensureRuntime(): Promise<AgentSessionRuntime> {
+  /** Build the runtime for a new or validated persisted session and bind subscriptions. */
+  private async ensureRuntime(sessionManager?: SessionManager): Promise<AgentSessionRuntime> {
     if (this.runtime) return this.runtime;
     const { cwd, logger } = this.opts;
     const agentDir = getAgentDir();
@@ -83,52 +86,79 @@ export class PiSdkHost {
       extensionFactories: this.opts.extensionFactories,
     });
 
-    const runtime = await createAgentSessionRuntime(factory, {
+    // The SDK reopens a resume target after asynchronous before-switch hooks.
+    // Check its actual manager before loading any target cwd resources/services.
+    const guardedFactory: typeof factory = async (options) => {
+      this.assertRecoverySession(options.sessionManager);
+      return factory(options);
+    };
+    const runtime = await createAgentSessionRuntime(guardedFactory, {
       cwd,
       agentDir,
-      // Always a fresh session: no cross-restart resume.
-      sessionManager: SessionManager.create(cwd),
+      sessionManager: sessionManager ?? SessionManager.create(cwd),
     });
 
-    // W1 fail-closed: a fatal diagnostic means this project must not run.
-    const fatal = runtime.diagnostics.filter((d) => d.type === "error");
-    if (fatal.length > 0) {
-      const message = fatal.map((d) => d.message).join("; ");
+    try {
+      // W1 fail-closed: a fatal diagnostic means this project must not run.
+      const fatal = runtime.diagnostics.filter((d) => d.type === "error");
+      if (fatal.length > 0) {
+        const message = fatal.map((d) => d.message).join("; ");
+        throw new PiInitializationError(message);
+      }
+
+      this.extensionHost = new PiExtensionHost({
+        uiContext: this.opts.uiContext,
+        mode: this.opts.mode ?? "rpc",
+        logger,
+        onError: (error) => {
+          const message = error.error instanceof Error ? error.error.message : String(error.error);
+          this.emit({
+            type: "extension_error",
+            message,
+            extensionPath: error.extensionPath,
+            event: error.event,
+          });
+        },
+      });
+
+      // Official hook: called automatically after newSession/switchSession/fork
+      // replace the active session. Rebind the UI context + subscriptions.
+      runtime.setRebindSession(async (session) => {
+        await this.bindSession(session, runtime);
+      });
+      await this.bindSession(runtime.session, runtime);
+      this.runtime = runtime;
+
+      logger.info(
+        { sessionFile: runtime.session.sessionFile, sessionId: runtime.session.sessionId },
+        "pi runtime started",
+      );
+      return runtime;
+    } catch (err) {
+      this.generation++;
+      this.unsubscribe?.();
+      this.unsubscribe = undefined;
+      this.sessionRef = undefined;
+      this.extensionHost = undefined;
+      this.runtime = undefined;
       await runtime.dispose().catch(() => {});
-      throw new PiInitializationError(message);
+      throw err;
     }
+  }
 
-    this.extensionHost = new PiExtensionHost({
-      uiContext: this.opts.uiContext,
-      mode: this.opts.mode ?? "rpc",
-      logger,
-      onError: (error) => {
-        const message = error.error instanceof Error ? error.error.message : String(error.error);
-        this.emit({
-          type: "extension_error",
-          message,
-          extensionPath: error.extensionPath,
-          event: error.event,
-        });
-      },
-    });
-
-    // Official hook: called automatically after newSession/switchSession/fork
-    // replace the active session. Rebind the UI context + subscriptions.
-    runtime.setRebindSession(async (session) => {
-      await this.bindSession(session, runtime);
-    });
-    await this.bindSession(runtime.session, runtime);
-    this.runtime = runtime;
-
-    logger.info(
-      { sessionFile: runtime.session.sessionFile, sessionId: runtime.session.sessionId },
-      "pi runtime started",
-    );
-    return runtime;
+  private assertRecoverySession(manager: SessionManager): void {
+    if (
+      this.recoveringSessionId &&
+      (manager.getSessionId() !== this.recoveringSessionId ||
+        path.resolve(manager.getCwd()) !== path.resolve(this.opts.cwd))
+    ) {
+      throw new Error("Session identity or cwd changed during recovery");
+    }
   }
 
   private async bindSession(session: AgentSession, runtime: AgentSessionRuntime): Promise<void> {
+    this.assertRecoverySession(session.sessionManager);
+    persistSessionIdentity(session.sessionManager);
     this.unsubscribe?.();
     const generation = ++this.generation;
     this.sessionRef = session;
@@ -158,7 +188,16 @@ export class PiSdkHost {
   async prompt(input: HostPromptInput): Promise<void> {
     const runtime = await this.ensureRuntime();
     this.opts.logger.info({ sessionId: runtime.session.sessionId }, "prompt");
-    await new PiSessionHost(runtime).prompt(input);
+    const images = input.images?.length
+      ? input.images.map(
+          (image): ImageContent => ({
+            type: "image",
+            data: image.data,
+            mimeType: image.mimeType,
+          }),
+        )
+      : undefined;
+    await runtime.session.prompt(input.text, images ? { images } : undefined);
   }
 
   /** Abort the current agent run. No-op when no session is active. */
@@ -173,15 +212,20 @@ export class PiSdkHost {
     await this.sessionRef?.waitForIdle();
   }
 
-  /** Reset the active session. `/new` only resets an existing session. */
+  /** Create a persistent session, including when the runtime is inactive. */
   async newSession(): Promise<SessionSwitchResult> {
     if (!this.runtime) {
-      this.opts.logger.info("new session ignored: no active session");
+      await this.ensureRuntime();
       return { cancelled: false };
     }
     this.opts.logger.info("new session requested");
-    const r = await this.runtime.newSession();
-    return { cancelled: r.cancelled };
+    try {
+      const r = await this.runtime.newSession();
+      return { cancelled: r.cancelled };
+    } catch (err) {
+      await this.stop().catch(() => {});
+      throw err;
+    }
   }
 
   async listModels(): Promise<HostModelOption[]> {
@@ -228,18 +272,41 @@ export class PiSdkHost {
 
   async listSessions(): Promise<HostSessionOption[]> {
     const sessions = await SessionManager.list(this.opts.cwd);
-    return sessions.map((session) => ({
-      path: session.path,
-      id: session.id,
-      modifiedAt: session.modified.getTime(),
-      firstMessage: session.firstMessage,
-      name: session.name,
-    }));
+    return sessions
+      .filter((session) => path.resolve(session.cwd) === path.resolve(this.opts.cwd))
+      .map((session) => ({
+        path: session.path,
+        id: session.id,
+        modifiedAt: session.modified.getTime(),
+        firstMessage: session.firstMessage,
+        name: session.name,
+      }));
   }
 
   async resumeSession(path: string): Promise<SessionSwitchResult> {
-    const runtime = await this.ensureRuntime();
-    return runtime.switchSession(path);
+    // listSessions restricts recovery to this cwd and validates readable headers.
+    const target = (await this.listSessions()).find((session) => session.path === path);
+    if (!target) throw new Error("Session does not exist or cannot be read");
+    const manager = SessionManager.open(path);
+    if (manager.getCwd() !== this.opts.cwd || manager.getSessionId() !== target.id)
+      throw new Error("Session does not belong to this project cwd or changed during recovery");
+    this.recoveringSessionId = target.id;
+    try {
+      if (!this.runtime) {
+        await this.ensureRuntime(manager);
+        return { cancelled: false };
+      }
+      const runtime = this.runtime;
+      const result = await runtime.switchSession(path);
+      if (!result.cancelled) this.assertRecoverySession(runtime.session.sessionManager);
+      return result;
+    } catch (err) {
+      // SDK replacement can dispose the old session before the factory fails.
+      await this.stop().catch(() => {});
+      throw err;
+    } finally {
+      this.recoveringSessionId = undefined;
+    }
   }
 
   async reload(): Promise<void> {

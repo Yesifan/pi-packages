@@ -3,7 +3,6 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   clearContextTokensForAccount,
-  findAccountIdsByContextToken,
   getContextToken,
   restoreContextTokens,
   setContextToken,
@@ -54,11 +53,5 @@ describe("context token store", () => {
     expect(getContextToken("acct-a", "user-1")).toBeUndefined();
     const file = path.join(stateDir, "accounts", "acct-a.context-tokens.json");
     expect(fs.existsSync(file)).toBe(false);
-  });
-
-  it("findAccountIdsByContextToken finds accounts with an active token", () => {
-    setContextToken("acct-a", "user-9", "t");
-    expect(findAccountIdsByContextToken(["acct-a", "acct-b"], "user-9")).toEqual(["acct-a"]);
-    expect(findAccountIdsByContextToken(["acct-a", "acct-b"], "other")).toEqual([]);
   });
 });

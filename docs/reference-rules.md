@@ -9,7 +9,8 @@
 | `.refer/hermes-agent/` | [`NousResearch/hermes-agent`](https://github.com/NousResearch/hermes-agent) | `pi-weixin-daemon` 的微信 iLink adapter、typing lifecycle 及 gateway 行为参考 |
 
 
-- `gateway/platforms/weixin.py`：微信 adapter、iLink 请求、typing 状态发送。
+- `plugins/platforms/weixin/adapter.py`：微信 adapter、iLink 请求、typing 状态发送；原 `gateway/platforms/weixin.py` 已迁移。2026-10-21 核对上游 commit `cb6bcb401e4387459b67d46c0fae55192ad7cb01`，不代表本地快照已同步。
+- 腾讯官方插件本轮核对 commit `874637a0dbc24050f72d1385add4fc6170a2d726`；身份与回复链路证据见 [iLink 协议核查记录](../packages/pi-weixin-daemon/docs/ilink-protocol.md#11-扫码身份与入站发送者核查2026-10-21)。
 - `gateway/platforms/base.py`：平台上层处理循环及 typing keepalive。
 
 ## 使用规则

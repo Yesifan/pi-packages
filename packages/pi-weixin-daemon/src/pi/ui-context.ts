@@ -238,24 +238,27 @@ export class WeixinUIContext implements ExtensionUIContext {
   }
 
   // --- TUI-only primitives: no-ops over weixin (never throw) ---
-  // Parameters use loose types on purpose: these are inert stubs for an
-  // interface whose TUI types are not exported from the SDK root.
+  // Derive inert stub signatures from the public SDK UI contract.
 
-  onTerminalInput(_handler: never): () => void {
+  onTerminalInput(_handler: Parameters<ExtensionUIContext["onTerminalInput"]>[0]): () => void {
     return () => {};
   }
   setStatus(_key: string, _text: string | undefined): void {}
   setWorkingMessage(_message?: string): void {}
   setWorkingVisible(_visible: boolean): void {}
-  setWorkingIndicator(_options?: never): void {}
+  setWorkingIndicator(_options?: Parameters<ExtensionUIContext["setWorkingIndicator"]>[0]): void {}
   setHiddenThinkingLabel(_label?: string): void {}
-  setWidget(_key: string, _content: never, _options?: never): void {}
-  setFooter(_factory: never): void {}
-  setHeader(_factory: never): void {}
+  setWidget(
+    _key: string,
+    _content: string[] | Parameters<ExtensionUIContext["setWidget"]>[1],
+    _options?: Parameters<ExtensionUIContext["setWidget"]>[2],
+  ): void {}
+  setFooter(_factory: Parameters<ExtensionUIContext["setFooter"]>[0]): void {}
+  setHeader(_factory: Parameters<ExtensionUIContext["setHeader"]>[0]): void {}
   setTitle(_title: string): void {}
 
   /** Unsupported over weixin: resolve undefined (never reject), per D-E. */
-  custom<T>(_factory: never, _options?: never): Promise<T> {
+  custom<T>(..._args: Parameters<ExtensionUIContext["custom"]>): Promise<T> {
     return Promise.resolve(undefined as T);
   }
 
@@ -270,10 +273,12 @@ export class WeixinUIContext implements ExtensionUIContext {
     return this.input(title, prefill);
   }
 
-  addAutocompleteProvider(_factory: never): void {}
-  setEditorComponent(_factory: never): void {}
-  getEditorComponent(): never {
-    return undefined as never;
+  addAutocompleteProvider(
+    _factory: Parameters<ExtensionUIContext["addAutocompleteProvider"]>[0],
+  ): void {}
+  setEditorComponent(_factory: Parameters<ExtensionUIContext["setEditorComponent"]>[0]): void {}
+  getEditorComponent(): ReturnType<ExtensionUIContext["getEditorComponent"]> {
+    return undefined;
   }
   readonly theme = createMinimalTheme();
   getAllThemes(): { name: string; path: string | undefined }[] {

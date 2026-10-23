@@ -2,7 +2,11 @@
 
 > Spec 0002 原 runtime 独立复审已完成；最新私有目录修订的 typecheck、21 个文件 / 245 项测试、build 与 pack 通过，不冒充该修订已独立复审。PR #11 未合并，最终目录/discovery 直接整合进原规格。用户于 2026-10-09 接受手动 TUI/print 验收延期，Spec 0002 保持 completed；手测未运行，不宣称全部验收通过。
 
-行为以[权威实现规格](specs/yesifan-pi-subagents-spec.md)、[Spec 0002](specs/0002-prompt-and-session-storage.md) 和 [ADR-0003](adr/0003-sdk-sessions-and-parent-metadata.md) 为准；原 Spec 0002/ADR-0003 已包含新 history 私有目录、普通发现排除与独立打开允许的最终决定。[Spec 0003](specs/0003-terminal-exit-reporting.md) 的异常退出通知扩展仍为未开始计划，不属于本文的已实现承诺。旧 project-local store、sa/run/mount/report ID、epoch 和持久 delivery 属于历史实现，不是当前不变量。
+行为以[权威实现规格](specs/yesifan-pi-subagents-spec.md)、[Spec 0002](specs/0002-prompt-and-session-storage.md) 和 [ADR-0003](adr/0003-sdk-sessions-and-parent-metadata.md) 为准；原 Spec 0002/ADR-0003 已包含新 history 私有目录、普通发现排除与独立打开允许的最终决定。[Spec 0003](https://github.com/Yesifan/pi-packages/blob/main/packages/pi-subagents/docs/specs/0003-terminal-exit-reporting.md) 的异常退出通知扩展仍为未开始计划，不属于本文的已实现承诺。旧 project-local store、sa/run/mount/report ID、epoch 和持久 delivery 属于历史实现，不是当前不变量。
+
+当前 Pi 1.4.0 生命周期以 [ADR-0004](adr/0004-official-sdk-lifecycle.md) 为准：普通 prompt 先持久化本地准备/running，再调用 SDK 并返回 submitted，不保证 started；公开 steer 的 queued 仅保证排队，handled 不入队。接受模板/skill 展开及 extension command 拒绝，不保证 hook 期间取消零入队。prompt/steer 调用与清理未结束仍 busy，迟到操作仅绑定捕获 session，shutdown 最后释放 writer lock。每 mount 使用独立官方 services，拒绝 error diagnostics；SDK 原生恢复模型/thinking，允许默认选择/fallback/clamp，展示已有公开诊断，不放松 history 身份、cwd、角色、trust 与工具策略。升级实施中，历史验收不代表本次验证。
+
+执行周期锁以 [Spec 0005](specs/0005-execution-scoped-root-lock.md) 与 [ADR-0005](adr/0005-execution-scoped-root-lock.md) 为准，扩展 ADR-0003/0004：打开窗口不持锁、不恢复树；首次 create/普通 ask 获取整树锁后重建最新 identities/metadata。全部 opening、Execution、report 依赖、SDK 调用、持久化与 dispose 清理结束才释放，下一轮重新读取，不能沿用旧树缓存。其他窗口的 create/ask/steer 单次返回 ROOT_SCOPE_IN_USE，不禁用工具、不排队、不 IPC；idle steer 不恢复、不创建执行。root void 报告仍只表示 submitted。
 
 ## 1. 核心实体
 
@@ -28,7 +32,7 @@ Root Session 是整棵树的管理边界，要求 file-backed Pi session。Sessi
 
 ### RootRuntime / RootScope
 
-RootRuntime 是单一整树协调者，不是持久业务身份。RootScope 是一次 root 生命周期的内存对象，保存 children、agents、executions 和 deliveries。关闭后置 closing，不复用该 scope；通过对象身份拒绝迟到 callback，不生成 epoch。
+RootRuntime 是一个窗口的整树协调者，不是持久业务身份。RootScope 是一次 root 窗口生命周期的内存对象，保存 children、agents、executions 和 deliveries。每次获取执行周期锁时重新创建 Agent 树及 store 缓存；窗口空闲保留的 children 不是有效执行依据。关闭后置 closing，不复用该 scope；通过捕获 Execution 对象身份、closed/closing 与当前执行校验拒绝迟到 callback，不生成 epoch。
 
 整树共享 root 项目的 max_depth、max_live_agents、ui_timeout_ms、UI FIFO 与进度 widget。RootRuntime 不把 caller registries 或 external cwd 授权合并成全局资源。
 
@@ -44,7 +48,7 @@ Execution 是一次创建或普通 ask 的临时执行对象，捕获 scope、ag
 
 mount 是 Execution 当前的 Pi AgentSession，承载 target cwd 当前 resources、extensions、tools、ModelRuntime、DelegationContext 和 UI proxy。SDK settled 不等于 Execution 完成；等待 children/reports 时保留 mount，真正完成后 dispose。mount 不持久化，不生成 mount ID。
 
-一次 Execution 可包含初始 prompt 与报告触发的多次 SDK processing。steering 仅追加到当前 streaming execution 的 Pi queue，不创建 Execution、独立报告或持久 run record。
+一次 Execution 可包含初始 prompt 与报告触发的多次 SDK processing。steering 发起时要求当前 Execution streaming，通过公开 steer 追加到捕获 session 的 Pi queue；hook 返回时 run 可能已结束，不保证消费，也不创建 Execution、独立报告或持久 run record。
 
 ### SubagentReport / ReportDelivery
 
@@ -60,7 +64,7 @@ sender 释放后 delivery 可继续存在；即使同一 Agent 的下一次 ask 
 - **AgentTypeRegistry**：内置 → `<getAgentDir()>/agents` → caller 项目 `.pi/agents`，后层同名完整覆盖。caller 选择下一层角色，不为此预读 target 的 agents/config。
 - **AgentDefinitionSnapshot / CurrentRole**：创建时从 caller registry 保存的完整角色定义（prompt、description、tools/disallowedTools、默认 thinking、source/hash）。ask 不重解析同名角色；target 自己的 registry 只决定未来 descendants。角色 prompt 参与当前 system prompt construction，不作为新增 conversation message。
 - **CanonicalCwd / AllowedCwdSet**：存在目录经 realpath 规范化；允许集合为 caller cwd 与 caller 当前配置中 external cwd 的精确集合，不授权子目录或路径前缀。tool cwd 只接受绝对路径；配置可展开 ~、$HOME、${HOME}。
-- **Model / Thinking**：首次创建继承直接 parent 模型，thinking 为参数 > snapshot 默认 > parent 当前 > off，按模型能力 clamp。普通 ask 从 Pi history/SDK 恢复，不采用 parent 后来设置；缺少有效历史、模型不可用、鉴权失败或 SDK fallback 明确失败，不重加 metadata 副本。
+- **Model / Thinking**：首次创建继承直接 parent 模型，thinking 为参数 > snapshot 默认 > parent 当前 > off，按模型能力 clamp。普通 ask 从 Pi history/SDK 恢复，不采用 parent 后来设置；允许 SDK 对缺失选择或不可用模型/鉴权使用默认选择、fallback 与 clamp，展示已有公开诊断；无可用模型或后续调用失败正常报错。不重加 metadata 副本，history 身份/cwd/损坏检查不变。
 
 same-cwd child 为叶节点；external child 仅在角色工具、depth 与 runtime policy 允许时可委派。ancestor cwd 不得重复。trust 早于项目配置/agents/resources 读取及扩展执行；external_directory 是 cwd admission，不是 filesystem sandbox。
 
@@ -75,7 +79,7 @@ same-cwd child 为叶节点；external child 仅在角色工具、depth 与 runt
 
 ParentSessionRecord（schemaVersion 1）包含 root、owner、parent 与 name-keyed children。ChildRecord 仅含 Pi sessionId/sessionFile、完整 roleSnapshot、最新 state 与可选 hasChildren。当前实现使用 hasChildren 记录曾初始化下一层 owner，诊断已声明分支文件缺失；它不是 owned-child 索引，也不是第二份关系表。
 
-A→B→D、A→C 时，A 文件只有 B/C，B 文件只有 D；无项目镜像、全局权威关系索引或跨文件事务。同 owner 更新串行、同目录临时文件原子替换；同步 preflight 接受提交基于已持久 opening，避免排队旧写覆盖 running。metadata 为 0600、本包目录为 0700；损坏、路径不安全、不可写、运行中删除或锁冲突明确失败，不 fallback 到旧布局。
+A→B→D、A→C 时，A 文件只有 B/C，B 文件只有 D；无项目镜像、全局权威关系索引或跨文件事务。同 owner 更新串行、同目录临时文件原子替换；调用 prompt 前完成本地准备和 running 写入，持久化失败不调用 SDK。metadata 为 0600、本包目录为 0700；损坏、路径不安全、不可写、运行中删除或锁冲突明确失败，不 fallback 到旧布局。
 
 新 child history 使用 `SessionManager.create(cwd, privateDir)`，privateDir 为 `<getAgentDir()>/subagents/histories`，SDK 不追加 cwd 分组；不应用 CLI --session-dir、PI_CODING_AGENT_SESSION_DIR 或 settings sessionDir，也不继承 root CLI override。PI_CODING_AGENT_DIR 仍决定 agentDir。私有文件权限/header 适配采用 SDK 给出的实际路径；恢复验证非空普通文件、Pi ID/header/cwd，不猜 recent。存量新 schema metadata 引用的默认目录 histories 按已保存 exact paths 恢复，不搬迁、迁移或删除，可能继续被普通 discovery 列出。
 
@@ -86,15 +90,15 @@ A→B→D、A→C 时，A 文件只有 B/C，B 文件只有 D；无项目镜像�
 | ChildState | 含义 / 恢复 |
 | --- | --- |
 | opening | 本包任务未接受；进程内新 child 失败仅清本次新资源，既有 ask 恢复先前 state。重启无法区分新建/ask，保留 identity/history/name，清 prepared 为 idle。 |
-| running | 已接受，含执行、等待后代/报告与终结清理；恢复变 interrupted，不自动续跑。 |
+| running | 本包已承担后台责任，不保证 SDK streaming；含提交前准备完成窗口、执行、等待与清理，恢复变 interrupted，不自动续跑。 |
 | idle | 可再次普通 ask，不等于上次成功或报告已经投递。 |
 | interrupted | 未完成的已接受任务已停止；直接 parent 可明确 ask 新任务。 |
 
 Execution phase 为 opening / executing / waiting / closing / closed；状态列表中的 running 包含正在初始化、执行、等待和清理，done 对应可再 ask。shared live usage 含初始化名额，结构化 name 保留完整可寻址值，显示标签可单行截断。
 
-普通 prompt 仅 preflight started 接受并可靠提交 running；steering 仅 queued 返回 steered。handled 是未接受：普通清 prepared，steering 原 Execution、状态/名额不变，不 abort 原任务，不声称回滚 extension 历史或外部副作用。非预期 disposition 明确诊断，不假成功，不按纯未接受删除已变历史。
+普通 prompt 返回 submitted，含义仅为必要准备已持久化、prompt 已调用且后台 completion 已接入。handled 不伪造启动或回答，不清除已提交身份/history；提交后失败沿后台完成/失败和清理流程处理。原工具结束或取消不追溯撤回后台任务。
 
-异步 input hook 等待期间需区分取消与 SDK 已排队：queued preflight 在 `_queueSteer` 后发生，已到 queued 就是不可逆接受，tool signal 即使已取消也不得返回假“未排队”或撤销原执行，应返回 steered；未排队路径重校验取消/执行归属，不把 started 冒充 steering。该竞争修正、SDK prompt 取消/报告拒绝/顺序自动测试及独立复审已完成，不代替实际交互 TUI/print 手测。
+steering 调用前检查所有权、Execution/scope、closing/finalizing、mount 与 streaming。公开 steer 的 queued 返回 steered，不保证原 run 存活或消费；handled 保持原执行，不 abort。hook 等待期间旧 run 结束也不另启执行；prompt/steer 调用和清理完成前仍 busy，迟到队列随捕获 session 清理，不能搬到后续任务。
 
 SUBAGENT_NOT_STEERABLE 解释 idle/interrupted/released/opening/waiting children/reports/closing/finalizing/SDK not streaming 等具体原因；拒绝不等于任务已停止，不修改原执行。
 
@@ -109,7 +113,7 @@ SUBAGENT_NOT_STEERABLE 解释 idle/interrupted/released/opening/waiting children
 7. 普通 ask 按当前 cwd/trust/工具资源重校验，完整 role snapshot 不替换；模型/thinking 从历史恢复。
 8. 整树锁保护本包管理，不阻止用户独立打开/resume child 或宿主直接写 JSONL。新 child 位于普通 discovery 根之外，默认 list/listAll/picker/continue 不选取它们；显式 private-directory 查询/custom sessionDir 和 explicit file open 仍允许，不改 mtime，不添加 owned-child guard/marker/index，不承诺并发直接打开无冲突或访问隔离。
 9. 仅停止 root 当前模型响应不停止已接受后台工作；root shutdown/replacement 标 closing、取消 UI、abort/dispose descendants、保存终态、清进度并最后释放锁。
-10. exact root resume 只递归加载轻量关系/history，不恢复 SDK 对象/pending 集合/旧 Promise，不续跑、不对账或补投报告；保存 idle 后投递前退出可能丢在线报告。首次 root owner 文件缺失按空树处理，不承诺诊断历史删除。
+10. exact root resume 的下一次 create/普通 ask 获取锁后才递归加载轻量关系/history，不恢复 SDK 对象/pending 集合/旧 Promise，不续跑、不对账或补投报告；保存 idle 后投递前退出可能丢在线报告。首次 root owner 文件缺失按空树处理，不承诺诊断历史删除。
 
 所有 descendants 共用一个 blocking UI FIFO；confirm/select/input 保留取消、timeout 与无 UI fallback。child 不直接修改 root widget，进度仅为 execution-local 最新摘要，不持久化或复制 thinking/tool output。同进程第三方 singleton、环境修改与不合作退出不保证隔离。不合作的异步 input hook 尚未退出时 shutdown 保留整树 writer lock，避免新 writer 接管仍可能写入的旧工作，不保证关闭立即完成。symlink/realpath/header 校验不是 filesystem sandbox，也不承诺防住恶意并发路径替换的全部 TOCTOU 攻击。
 

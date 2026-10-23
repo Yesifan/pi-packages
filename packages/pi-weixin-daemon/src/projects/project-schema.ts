@@ -10,6 +10,7 @@ export const ProjectConfigSchema = z.object({
   cwd: z.string().min(1, "cwd must not be empty"),
   accounts: z.array(z.string().min(1, "account id must not be empty")).default([]),
   enabled: z.boolean().default(false),
+  defaultSessionId: z.string().min(1).optional(),
 });
 
 export const ProjectStoreDataSchema = z.object({
