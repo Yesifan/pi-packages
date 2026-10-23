@@ -7,8 +7,8 @@ commit: null
 version: null
 related_documents:
   - "[Spec 索引与维护规则](README.md)"
-  - "[仓库开发约定](../../AGENTS.md)"
-  - "[pi-subagents](../../packages/pi-subagents/README.md)"
+  - "[仓库开发约定](../../../../AGENTS.md)"
+  - "[pi-subagents](../../../pi-subagents/README.md)"
   - "[原始 Notion spec](https://app.notion.com/p/3ee0f77a346d80ea8595f4c82b4e580e)"
 ---
 

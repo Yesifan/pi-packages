@@ -11,7 +11,7 @@ related_documents:
   - "[Subagents Spec 0002](../../packages/pi-subagents/docs/specs/0002-prompt-and-session-storage.md)"
   - "[Subagents Spec 0004](../../packages/pi-subagents/docs/specs/0004-sdk-builtin-tools-and-mcp.md)"
   - "[ADR-0003](../../packages/pi-subagents/docs/adr/0003-sdk-sessions-and-parent-metadata.md)"
-  - "[pi-session 规格](pi-session.md)"
+  - "[pi-session 规格](../../packages/pi-session/docs/specs/pi-session.md)"
 ---
 
 ## Goal
