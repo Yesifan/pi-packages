@@ -24,7 +24,9 @@
     "docs/development.md"
   ],
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --test test/*.test.mjs",
+    "test:ci": "node --test test/*.test.mjs"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "catalog:",

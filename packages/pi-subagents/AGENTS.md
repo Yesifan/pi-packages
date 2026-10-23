@@ -13,6 +13,8 @@ AgentSession，并提供 `subagent` 与 `ask_subagent` 工具。实现基线为
 
 当前工作区已实现 [`Spec 0002`](docs/specs/0002-prompt-and-session-storage.md) 的 runtime 重写与私有 history 目录；最新 typecheck、21 个文件 / 245 项测试、build 与 pack 通过。此前 runtime 独立最终复审已完成，不将其冒充最新目录修订已复审；该审查由主代理记录。实际交互 TUI/print 手测未运行，用户明确接受延期并关闭 Spec 0002（completed），不能因此声称 §14 CLI 全验收通过。PR #11 尚未合并，用户要求把最终目录/discovery 直接整合进原 Spec 0002 和 [`ADR-0003`](docs/adr/0003-sdk-sessions-and-parent-metadata.md)，不另立后续规格/决策。权威规格中的 V1 大节仅保留真实历史资料；当前按顶部摘要、Spec 0002/ADR-0003 执行，独立打开仍允许。[`Spec 0003`](docs/specs/0003-terminal-exit-reporting.md) 仍为未开始的异常退出通知计划，未经授权不要顺带实施。
 
+当前升级合同见 [ADR-0004](docs/adr/0004-official-sdk-lifecycle.md)；它替代上述历史 preflight/严格模型恢复约定，旧验收不代表 Pi 1.4.0 验证通过。
+
 ## 核心模型与不变量
 
 - 每个 file-backed root Pi session 对应一个 `RootRuntime` 和新的内存 `RootScope`，持有 `<getAgentDir()>/subagents/locks/<rootKey>/` 整树 writer lock；metadata 按直接 parent session 保存于全局 `subagents/sessions/<sessionKey>.json`，无项目镜像。
@@ -27,8 +29,8 @@ AgentSession，并提供 `subagent` 与 `ask_subagent` 工具。实现基线为
 - `isSteer: true` 只复用 Pi 当前 streaming Execution 的 steering queue，不创建新执行或独立 report；不可 steering 时返回 `SUBAGENT_NOT_STEERABLE` 并说明具体状态，不能把所有拒绝等同已停止。
 - child/report 绑定发起它的具体 parent Execution；等待 child/report 的 parent 不得提前 finalize 或 cold-release。sender 释放后已提交 delivery 仍面向原有效 target，不改下一次执行。
 - 恢复 running→interrupted，不自动续跑、不保存历史 runRecord/result/delivery、不跨重启补投。旧 project/global store 不读取、迁移或 fallback，旧文件不自动删除。
-- root shutdown/session replacement 必须 abort 活动 descendants、取消 UI、dispose sessions 并释放 writer lock。
-- 子 session 的 resources、extensions、tools、ModelRuntime 和动态描述必须按目标 cwd 当前状态重新建立，不能跨 cwd 共享 mutable registry。
+- prompt/steer 调用与资源清理未完成仍 busy，后续普通 ask 不得进入；迟到操作绑定捕获 Execution/session。root shutdown/replacement 使用公开 abort、取消 UI，等待调用结束与 dispose 后最后释放 writer lock，不合作 hook 不得提前释放。
+- 子 session 通过每 mount 独立的官方 services factories 初始化，保留 loader 配置和三项 builtins；拒绝 error diagnostics。resources/tools 按目标 cwd 重建，不共享 mutable services。模型/thinking 由 SDK 原生恢复及 fallback/clamp，不注入 parent/settings 覆盖；展示公开诊断，不放松身份/cwd/trust/角色/工具校验。
 
 任何可能改变 system prompt、tool schema、角色 prompt 拼接顺序、SessionManager 历史前缀或资源缓存边界的改动，都应保留或新增邻近的 `Warning Cache Broke` 注释，并添加恢复/隔离测试。
 
@@ -40,7 +42,7 @@ AgentSession，并提供 `subagent` 与 `ask_subagent` 工具。实现基线为
 - `src/delegation.ts`：session-local delegation context 与动态 tool description。
 - `src/config.ts`、`src/paths.ts`：caller 项目配置、project root、canonical cwd 授权和 cycle 检查。配置读取不强制新建项目 sessions/.gitignore；`src/project-storage.ts` 保留历史 helper，不是当前 runtime store 初始化入口。
 - `src/agents.ts`：内置/global/project agent registry、frontmatter 校验和 snapshot/hash。
-- `src/store.ts`：全局直接 parent owner JSON、归属校验、串行原子写入/同步接受提交、递归恢复与整树 writer lock。
+- `src/store.ts`：全局直接 parent owner JSON、归属校验、串行原子写入/SDK 调用前准备提交、递归恢复与整树 writer lock。
 - `src/progress.ts`：run-local 活动摘要与 root 原生 widget 行格式化。
 - `src/ui.ts`：所有 descendants 共用的 blocking UI FIFO、root progress widget 与受限 UI proxy。
 - `src/tools.ts`：`subagent` / `ask_subagent` schema 和结构化结果。
@@ -52,7 +54,7 @@ AgentSession，并提供 `subagent` 与 `ask_subagent` 工具。实现基线为
 - 不为方便而读取 target cwd 的 agents/config 来替 caller 做委派决策。
 - 不把角色 snapshot、delegation context 或动态工具描述提升为 process-global cache。
 - 不把 steering 实现为第二套 completion/report 流程；原 Execution 仍至多一个在线最终报告。
-- 普通请求仅 preflight started 接受，steering 仅 queued 接受；handled 普通清 prepared，steering 原执行不变。接受后 tool abort 不撤销已接受结果；未接受新 child 仅清本次新资源，既有 ask 恢复先前 state，不声称回滚扩展历史或外部副作用。
+- 普通请求在 prompt 前持久化准备/running，失败不调用 SDK；调用并接入 completion 后返回 submitted，不保证 started。提交后保留身份/history，handled 不假造回答。公开 steer 使用 queued/handled，接受 skill/template 展开及 extension command 拒绝；queued 不保证消费，不保证 hook 期间取消零入队。原工具取消不追溯撤回已提交任务。
 - 允许 child 独立打开/resume/继续聊天；新 histories 在普通扫描根之外，默认 discovery/picker/continue 不选取，显式 private-directory 查询/custom sessionDir 和 explicit file open 仍可用。存量默认目录 histories 可能仍被普通发现。不增加 owned-child guard、标记或索引，不改 mtime 隐藏。整树锁不覆盖宿主直接写 JSONL 的竞争。
 - 新 metadata 不保存 model/thinking/cwd 的第二份副本，不新增持久 inbox、全局关系表或跨文件事务；优先简单 SDK 行为和有用日志。
 - root void sendReport 成功仅表示 submitted，无 processed receipt；nested Execution 才有 SDK 处理 barrier。queued steering 已实际排队，取消不可撤回。不合作的异步 hook 未退出时 shutdown 保留 writer lock；symlink/realpath/header 校验不是 sandbox 或全部恶意路径竞争的防护。

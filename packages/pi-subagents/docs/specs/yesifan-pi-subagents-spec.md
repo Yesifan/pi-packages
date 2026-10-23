@@ -4,15 +4,15 @@
 **状态：** 当前权威规格索引：Spec 0002 于 2026-10-09 按用户明确决定标记 completed，手动 CLI 验收未运行、延期跟进；下文 V1 章节仅为历史记录
 **目标包名：** `@yesifan/pi-subagents`
 **目标宿主：** Pi CLI / TUI  
-**当前 SDK 验证基线：** Pi SDK 1.1.0（源码工作区的 `pnpm-workspace.yaml` catalog 锁定基线；文末 P1–P9 为最初 0.85.1 设计依据）
+**当前 SDK 验证基线：** Pi SDK 1.4.0（源码工作区的 `pnpm-workspace.yaml` catalog 锁定基线；文末 P1–P9 为最初 0.85.1 设计依据）
 **实现语言：** TypeScript，ES modules  
 **用途：** 交给 coding agent 完成 package、测试、示例和使用文档。
 
-[Spec 0002](0002-prompt-and-session-storage.md) 的展示、name 接口、SDK 私有目录原生 history、按直接 parent metadata 和 Execution/RootScope 生命周期重写均已在当前工作区实现。最新 privateDir 修订已通过 typecheck、21 个文件 / 245 项测试、build 与 pack；此前 runtime 独立最终复审确认 5 项问题已解决，不将旧复审冒充最新目录修订已复审，该审查由主代理记录。用户于 2026-10-09 明确要求先标记完成再提交 PR，接受在实际交互 TUI/print 手动验收前关闭 Spec 0002。手测实际未运行、延期跟进，completed 不证明 §14 全部验收通过。[Spec 0003](0003-terminal-exit-reporting.md) 的异常退出通知扩展仍未开始，不属于本轮完成声明。
+[Spec 0002](0002-prompt-and-session-storage.md) 的展示、name 接口、SDK 私有目录原生 history、按直接 parent metadata 和 Execution/RootScope 生命周期重写均已在当前工作区实现。最新 privateDir 修订已通过 typecheck、21 个文件 / 245 项测试、build 与 pack；此前 runtime 独立最终复审确认 5 项问题已解决，不将旧复审冒充最新目录修订已复审，该审查由主代理记录。用户于 2026-10-09 明确要求先标记完成再提交 PR，接受在实际交互 TUI/print 手动验收前关闭 Spec 0002。手测实际未运行、延期跟进，completed 不证明 §14 全部验收通过。[Spec 0003](https://github.com/Yesifan/pi-packages/blob/main/packages/pi-subagents/docs/specs/0003-terminal-exit-reporting.md) 的异常退出通知扩展仍未开始，不属于本轮完成声明。
 
 ## 当前契约与规格优先级
 
-本节、[Spec 0002](0002-prompt-and-session-storage.md)、[领域模型](../domain-model.md) 和 [ADR-0003](../adr/0003-sdk-sessions-and-parent-metadata.md) 定义当前契约。PR #11 尚未合并，按用户要求直接在原 Spec 0002/ADR-0003 整合新 history 位置与 discovery 的最终决定，不制造后续替代决策记录。下文 V1 第 1–19 节及附录均为历史资料，不是当前实现指令或当前验收清单；其 ID、project-local store、metadata model/thinking/cwd 和补投承诺已废止。共同的 cwd/trust、角色 snapshot、当前资源、并发、等待 barrier、UI/widget、shutdown 和非 sandbox 边界按 Spec 0002 继续执行，不要求兼容旧 TS 类型/示例。
+本节与 [ADR-0004](../adr/0004-official-sdk-lifecycle.md) 定义当前 Pi 1.4.0 生命周期，替代 Spec 0002/ADR-0003 的 preflight 接受与严格历史模型恢复约定；其存储、身份、角色、trust、工具策略及所有权决定保留。升级验收见[全仓规格](https://github.com/Yesifan/pi-packages/blob/main/docs/specs/pi-1.4-upgrade.md)，已完成离线自动验收及独立审查；未执行本次 TUI/print 手测，旧验收不代表本次验证。下文 V1 第 1–19 节及附录仅为历史资料，不是当前要求。
 
 | 历史章节（非当前要求） | 当前 Spec 0002 契约 |
 | --- | --- |
@@ -22,29 +22,29 @@
 | §10/§12/§13：完整 run/result/delivery | 每 parent session 一个最小 name-keyed children JSON，不保存历史 runRecord/result/delivery；在线报告至多一次，重启不补投、不自动续跑，running→interrupted。 |
 | §12：root 项目存全树/相对 history | metadata 在 `<getAgentDir()>/subagents/` 按直接 parent 分开；新 history 使用 `SessionManager.create(cwd, privateDir)` 存于 `<getAgentDir()>/subagents/histories`，存量 history 不搬迁；实际绝对 ID+file 身份用于恢复。无项目镜像，仍有一个整树 writer lock、串行原子 owner 写入，无跨文件事务。 |
 | §4/§7/§12：项目运行目录/ignore 初始化 | `.pi/subagents/setting.json` 和 caller-local/root-only 作用域不变，读取配置不强制新建项目 sessions/.gitignore；新 store 失败不回退旧 store。 |
-| §3/§8：boolean preflight | 普通仅 started 接受，steering 仅 queued 接受；handled 未接受：普通清 prepared，steering 原 Execution 不变。不伪装回滚扩展历史或外部副作用。 |
-| §17–§19/附录 A：旧存储/ID/补投验收 | 相关旧验收由 Spec 0002 §14 替代；共同行为继续回归。实施顺序与完成条件采用 Spec 0002 §13/§15 和当前锁定 Pi 1.1.0，不照抄历史 0.85.1 步骤。 |
+| §3/§8：boolean preflight | prompt 前持久化准备/running，调用并接入 completion 后返回 submitted，不保证 started；公开 steer queued 返回 steered，不保证消费，handled 不入队、不 abort 原执行。 |
+| §17–§19/附录 A：旧存储/ID/补投验收 | 历史验收保留；本轮采用全仓 Pi 1.4.0 升级规格的验证矩阵与完成门槛，不以旧记录代替。 |
 
-D2 允许 child 独立打开/resume/继续聊天，不增加 owned-child guard 或索引，不接管原 root metadata；整树锁不覆盖宿主直接写 JSONL 的竞争。D3/D4 的最终选择为 SDK 显式 privateDir：新 history 在普通扫描根之外，默认 discovery/picker/continue 不选取；显式 private-directory 查询/custom sessionDir 与 explicit file open 仍允许。存量新 schema metadata 引用的默认目录 history 原样保留、exact-path 恢复不变，可能仍被普通发现；不迁移、删除、改 mtime 或新增 marker/index/guard。D4 的覆盖规则不变：不应用 CLI `--session-dir`、`PI_CODING_AGENT_SESSION_DIR` 或 settings `sessionDir`，不继承 root CLI override；`PI_CODING_AGENT_DIR` 仍决定 agentDir，root 原文件不搬迁。D6 的 handled 清理只针对本包未接受准备资源，steering 不 abort 原任务。
+D2 允许 child 独立打开/resume/继续聊天，不增加 owned-child guard 或索引，不接管原 root metadata；整树锁不覆盖宿主直接写 JSONL 的竞争。D3/D4 的最终选择为 SDK 显式 privateDir：新 history 在普通扫描根之外，默认 discovery/picker/continue 不选取；显式 private-directory 查询/custom sessionDir 与 explicit file open 仍允许。存量新 schema metadata 引用的默认目录 history 原样保留、exact-path 恢复不变，可能仍被普通发现；不迁移、删除、改 mtime 或新增 marker/index/guard。D4 的覆盖规则不变：不应用 CLI `--session-dir`、`PI_CODING_AGENT_SESSION_DIR` 或 settings `sessionDir`，不继承 root CLI override；`PI_CODING_AGENT_DIR` 仍决定 agentDir，root 原文件不搬迁。普通 handled 按 submitted 后的实际结果结束，不复用旧回答、不删除已提交身份/history；steering handled 不 abort 原任务。
 
-这是 BREAKING：旧 agents 不在新 registry 恢复、无法继续 ask；不迁移、不兼容、不删除旧文件。优先简单 SDK 行为和有用日志，未批准边缘策略延后。当前实现与原 runtime 独立复审已完成，privateDir 修订自动验证已通过；Spec 0002 按用户决定关闭，完成状态不代替目录修订的独立审查；实际交互 TUI/print 手动验收未运行、延期跟进。
+此前 Spec 0002 的存储变更是 BREAKING：旧 project-local/legacy agentDir store 的 agents 不在新 registry 恢复、无法继续 ask；不迁移、不兼容、不删除旧文件。本次 Pi 1.4 升级不清空当前 schema 的身份/history，也不新引入存储迁移。优先简单 SDK 行为和有用日志，未批准边缘策略延后。当前实现与原 runtime 独立复审已完成，privateDir 修订自动验证已通过；Spec 0002 按用户决定关闭，完成状态不代替目录修订的独立审查；实际交互 TUI/print 手动验收未运行、延期跟进。
 
-当前 child schemaVersion 为 1，hasChildren 标记用于已初始化分支缺失诊断，不是 owned-child 索引。同步接受提交可靠写入 opening→running，普通更新经串行原子写队列。ask 使用 Pi 历史 model/thinking（并验证实际 SDK 恢复，无静默 fallback），不是 metadata 固定模型副本。nested report 使用 Pi entry identity 与 settled 的处理 barrier；root 使用返回 void 的宿主 sendReport，成功仅表示 submitted、不是 processed 证明；成功提交后释放 scope delivery，无本包 root parent mount finalize 依赖。持有至 SDK 处理确认仅适用于 nested Execution，不新增 root inbox/receipt，不承诺跨重启补投或 exactly-once。异常退出通路进一步覆盖、抑制/失败日志要求仅为 Spec 0003 计划，不能据本摘要声称该计划已实施。
+当前 child schemaVersion 为 1，hasChildren 标记用于已初始化分支缺失诊断，不是 owned-child 索引。prompt 前完成 opening→running 持久化，running 表示本包承担后台责任，不表示 streaming；写入失败不调用 SDK，写入后到调用前退出保守恢复为 interrupted。ask 使用 SDK 原生模型/thinking 恢复、默认选择、fallback 与 clamp，展示已有公开诊断，无可用模型或后续调用失败正常报错；history 身份/cwd/损坏检查不变。nested report 使用 Pi entry identity 与 settled 的处理 barrier；root 使用返回 void 的宿主 sendReport，成功仅表示 submitted、不是 processed 证明；成功提交后释放 scope delivery，无本包 root parent mount finalize 依赖。持有至 SDK 处理确认仅适用于 nested Execution，不新增 root inbox/receipt，不承诺跨重启补投或 exactly-once。异常退出通路进一步覆盖、抑制/失败日志要求仅为 Spec 0003 计划，不能据本摘要声称该计划已实施。
 
-steering 的异步 input hook / tool 取消竞争修正、自动测试与独立复审已完成：Pi queued preflight 发生在实际排队后，不可据已取消的 signal 将其描述为未接受或撤销；未排队路径仍需校验执行归属/取消，不把 started 当成 steering。细则见 Spec 0002 §8.3，不代替未运行的实际交互 TUI/print 手测。不合作的异步 hook 未退出时 shutdown 保留 writer lock，不承诺强制终止任意扩展；symlink/realpath/header 校验不是 sandbox，也不保证抵抗全部恶意路径替换竞争。
+公开 session.steer() 接受 skill/template 展开与 extension command 拒绝；queued 不保证原 run 存活或消费，调用前取消不提交，hook 期间取消不承诺零入队。迟到 queued 仅留在捕获 session，不另启 run、不生成独立报告或搬运到后续任务。prompt/steer 调用与清理未完成仍 busy；shutdown 使用公开 abort，等待 dispose 后最后释放 writer lock，不合作 hook 不保证强制终止。每 mount 独立使用官方 services factories，保留 trust 前置、loader 配置、own-extension 排除、角色 prompt 顺序及三项 builtins；拒绝 error diagnostics，不手工重接 provider/runtime。
 
-### 当前工具策略（Pi SDK 1.1.0）
+### 当前工具策略（Pi SDK 1.4.0）
 
 [Spec 0004](0004-sdk-builtin-tools-and-mcp.md) 扩展本节：child mount 通过 SDK named `builtin: true` factories 加载 `codemode`、`tool_search`、`mcp`，遵循 target cwd、agentDir、有效配置、`-builtin:<name>` 禁用和第三方同名替换机制。加载不等于无条件激活；不复制 parent registry、连接或临时 CLI override。MCP 默认 codemode exposure，脚本发现与调用工具；deferred/direct/hidden 保持 SDK 行为。工具排除约束实际调用（含 codemode），trust 和委派边界不变。
 
-用户明确接受 SDK 1.1.0 的默认工具选择与排除语义，不在本包另建严格的全工具白名单。以下当前契约优先于历史 V1 §5.2/§7.2 的精确匹配与全工具白名单描述；不改写 V1 或 Spec 0002 的历史记录。
+用户明确接受 SDK 1.4.0 的默认工具选择与排除语义，不在本包另建严格的全工具白名单。以下当前契约优先于历史 V1 §5.2/§7.2 的精确匹配与全工具白名单描述；不改写 V1 或 Spec 0002 的历史记录。
 
 - 角色 `tools` 与 `disallowedTools` 仍严格互斥（包括空数组）；字段均为数组，元素必须是非空字符串，按原顺序去重。省略两者保留 target session 正常工具集合；`disallowedTools: []` 不增加限制。
 - 非空 `tools` 按 SDK 规则选择内置/扩展工具。列表中没有以 `mcp__` 开头的工具名称时，保留 target session 已注册的 MCP 工具；只有列出以 `mcp__` 开头的名称时才过滤 MCP 工具。仅列出 `list_mcp_resources` 等 MCP resource helper 不触发该过滤。`tools: []` 排除全部工具，包括 MCP。因此不能把非空 `tools` 描述为覆盖全部工具类别的严格白名单。
 - 按用户确认的 Spec 0004 修订，本包不再预校验工具名称是否存在，也不因未知或拼错的 `tools` 条目返回 `TOOL_UNAVAILABLE`。选择列表（含 SDK 支持的模式）直接交给 SDK；未匹配名称不提供工具，显式 MCP 选择可匹配后续动态注册。实际调用不可用工具仍由 SDK 报错。保留字段格式、互斥和去重校验；不新增 discovery 等待、轮询或连接管理。
 - `disallowedTools` 经 SDK `excludeTools` 应用，`*` 是通配符（例如 `mcp_*`），不是仅匹配字面工具名。未知排除项不报错；后续动态注册/重新注册的匹配工具仍被排除，`setActiveTools()` 不能重新启用被排除工具。排除优先于选择；runtime 委派排除项同样合并至 `excludeTools`，角色工具选择不能绕过 same-cwd、depth 或 runtime 限制。
 - MCP 工具必须在 target session 实际注册后才可用。仅启用 codemode 不等于连接 MCP 服务或注册其工具；不承诺复制 parent 的 MCP 连接或未注册工具。
-- 创建时保存完整角色策略 snapshot，后续 ask/root 恢复不重新解析同名角色替换 snapshot，但按 target cwd 当前资源和 SDK 1.1.0 规则重建工具集合。工具策略不是 filesystem sandbox；`explore` 排除 `edit/write/bash` 仍不保证严格只读，其他工具、扩展及进一步委派可能有副作用。
+- 创建时保存完整角色策略 snapshot，后续 ask/root 恢复不重新解析同名角色替换 snapshot，但按 target cwd 当前资源和 SDK 1.4.0 规则重建工具集合。工具策略不是 filesystem sandbox；`explore` 排除 `edit/write/bash` 仍不保证严格只读，其他工具、扩展及进一步委派可能有副作用。
 
 ---
 

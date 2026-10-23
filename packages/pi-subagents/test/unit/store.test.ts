@@ -173,14 +173,14 @@ describe("PersistentSubagentStore", () => {
     expect(Object.keys((await diskRecord(agentDir, b)).children)).toEqual(["D"]);
   });
 
-  it("merges a queued marker into the latest child after synchronous acceptance, preserving subsequent state writes", async () => {
+  it("merges a queued marker into the latest child during serialized preparation, preserving subsequent state writes", async () => {
     const { agentDir, directory, root, store } = await fixture();
     await store.open();
     const b = child(directory, "B");
     await store.setChild(root, null, "B", b);
     await store.ensureOwner(b, root);
     const marker = store.markHasChildren(root, null, "B");
-    store.setChildSync(root, null, "B", { ...b, state: "running" });
+    await store.setChild(root, null, "B", { ...b, state: "running" });
     const idle = store.setChild(root, null, "B", { ...b, state: "idle" });
     const sibling = store.setChild(root, null, "sibling", child(directory, "sibling"));
     await Promise.all([marker, idle, sibling]);
@@ -339,45 +339,20 @@ describe("PersistentSubagentStore", () => {
     expect(Object.values(record.children).every((entry) => entry.state === "idle")).toBe(true);
   });
 
-  it("sync preflight overtakes stale queued writes/removes without losing sibling writes", async () => {
+  it("serializes running preparation after queued writes and removals without losing siblings", async () => {
     const { agentDir, directory, root, store } = await fixture();
     await store.open();
     const opening = child(directory);
     await store.setChild(root, null, "worker", opening);
-    const staleWrite = store.setChild(root, null, "worker", opening);
-    const staleRemoval = store.removeChild(root, null, "worker");
+    const write = store.setChild(root, null, "worker", opening);
+    const removal = store.removeChild(root, null, "worker");
     const sibling = store.setChild(root, null, "sibling", child(directory, "sibling"));
-    store.setChildSync(root, null, "worker", { ...opening, state: "running" });
-    expect(childOf(await diskRecord(agentDir, root), "worker").state).toBe("running");
-    await Promise.all([staleWrite, staleRemoval, sibling]);
+    await store.setChild(root, null, "worker", { ...opening, state: "running" });
+    await Promise.all([write, removal, sibling]);
     expect((await diskRecord(agentDir, root)).children).toMatchObject({
       worker: { state: "running" },
       sibling: { state: "opening" },
     });
-    await store.setChild(root, null, "worker", { ...opening, state: "idle" });
-    expect(childOf(await diskRecord(agentDir, root), "worker").state).toBe("idle");
-  });
-
-  it("sync acceptance requires the same child's already durable opening record", async () => {
-    const { directory, root, store } = await fixture();
-    await store.open();
-    const opening = child(directory);
-    expect(() =>
-      store.setChildSync(root, null, "worker", { ...opening, state: "running" }),
-    ).toThrow();
-    const pending = store.setChild(root, null, "worker", opening);
-    expect(() =>
-      store.setChildSync(root, null, "worker", { ...opening, state: "running" }),
-    ).toThrow();
-    await pending;
-    expect(() => store.setChildSync(root, null, "worker", opening)).toThrow();
-    expect(() =>
-      store.setChildSync(root, null, "worker", child(directory, "other", "running")),
-    ).toThrow();
-    store.setChildSync(root, null, "worker", { ...opening, state: "running" });
-    expect(() =>
-      store.setChildSync(root, null, "worker", { ...opening, state: "running" }),
-    ).toThrow();
   });
 
   it("rollback retains siblings and an empty branch owner instead of deleting identities or histories", async () => {
@@ -392,7 +367,7 @@ describe("PersistentSubagentStore", () => {
     expect((await diskRecord(agentDir, b)).children).toEqual({});
     expect(childOf(await diskRecord(agentDir, root), "B").hasChildren).toBe(true);
     await store.setChild(root, null, "B", { ...b, state: "opening" });
-    store.setChildSync(root, null, "B", { ...b, state: "running" });
+    await store.setChild(root, null, "B", { ...b, state: "running" });
     expect(childOf(await diskRecord(agentDir, root), "B").hasChildren).toBe(true);
     await store.removeChild(root, null, "B");
     expect(Object.keys((await diskRecord(agentDir, root)).children)).toEqual(["sibling"]);
@@ -459,7 +434,7 @@ describe("PersistentSubagentStore", () => {
   });
 
   it.each(["root", "owner", "parent", "schemaVersion"])(
-    "rejects mismatched %s headers on read, async write, and sync commit",
+    "rejects mismatched %s headers on read and preparation writes",
     async (field) => {
       const { agentDir, directory, root, store } = await fixture();
       await store.open();
@@ -476,9 +451,9 @@ describe("PersistentSubagentStore", () => {
       await expect(store.setChild(root, null, "sibling", opening)).rejects.toMatchObject({
         code: "STORE_ERROR",
       });
-      expect(() =>
-        store.setChildSync(root, null, "worker", { ...opening, state: "running" }),
-      ).toThrow();
+      await expect(
+        store.setChild(root, null, "worker", { ...opening, state: "running" }),
+      ).rejects.toMatchObject({ code: "STORE_ERROR" });
       expect(await readFile(ownerFile(agentDir, root), "utf8")).toBe(contents);
       await store.close();
       await expect(createStore(agentDir, root).open()).rejects.toMatchObject({
@@ -511,7 +486,9 @@ describe("PersistentSubagentStore", () => {
     await writeFile(ownerFile(agentDir, root), JSON.stringify(corrupted));
     await expect(store.setChild(b, root, "D", d)).rejects.toMatchObject({ code: "STORE_ERROR" });
     await expect(store.removeChild(b, root, "D")).rejects.toMatchObject({ code: "STORE_ERROR" });
-    expect(() => store.setChildSync(b, root, "D", { ...d, state: "running" })).toThrow();
+    await expect(store.setChild(b, root, "D", { ...d, state: "running" })).rejects.toMatchObject({
+      code: "STORE_ERROR",
+    });
     expect(childOf(await diskRecord(agentDir, b), "D").state).toBe("opening");
   });
 

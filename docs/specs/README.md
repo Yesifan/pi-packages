@@ -6,6 +6,7 @@
 
 | Spec | Purpose | Status | Execution time |
 | --- | --- | --- | --- |
+| [Pi 1.4.0 全仓升级](pi-1.4-upgrade.md) | 原版 SDK 升级、官方 services/恢复/steering 替换、submitted 与串行清理合同、daemon UI 类型及四包回归。 | completed | 2026-10-22 / 2026-10-22 |
 | [pi-session](pi-session.md) | Session 名称引用补全、授权 cwd 正文搜索及通过完整 ID 继续原会话的轻量后台对话。 | completed | 2026-10-08 / 2026-10-21 |
 
 包内既有规格仍由其自身索引维护：[pi-subagents 规格索引](../../packages/pi-subagents/docs/specs/README.md)。本目录不迁移或重复维护包内历史规格。

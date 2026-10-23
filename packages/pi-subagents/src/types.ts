@@ -75,7 +75,7 @@ export interface AcceptedResult {
   name: string;
   agent_type: string;
   cwd: string;
-  status: "started" | "steered";
+  status: "submitted" | "steered";
   thinking: ThinkingLevel;
   delegation_status: DelegationStatusSnapshot;
 }

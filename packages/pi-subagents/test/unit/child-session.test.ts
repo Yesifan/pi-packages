@@ -26,12 +26,15 @@ import type {
   SessionIdentity,
   ThinkingLevel,
 } from "../../src/types.js";
-import { RootUiBroker } from "../../src/ui.js";
+import { RootUiBroker, SubagentUiProxy } from "../../src/ui.js";
 
 // Keep real SDK services; wrap only the factory export to inspect/perturb its result.
 vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
   const actual = await importOriginal<typeof sdk>();
-  return { ...actual, createAgentSession: vi.fn(actual.createAgentSession) };
+  return {
+    ...actual,
+    createAgentSessionFromServices: vi.fn(actual.createAgentSessionFromServices),
+  };
 });
 
 const temporaryDirectories: string[] = [];
@@ -48,7 +51,9 @@ const roleSnapshot: AgentDefinitionSnapshot = {
 afterEach(async () => {
   vi.restoreAllMocks();
   const actual = await vi.importActual<typeof sdk>("@earendil-works/pi-coding-agent");
-  vi.mocked(sdk.createAgentSession).mockReset().mockImplementation(actual.createAgentSession);
+  vi.mocked(sdk.createAgentSessionFromServices)
+    .mockReset()
+    .mockImplementation(actual.createAgentSessionFromServices);
   await Promise.all(children.splice(0).map((child) => child.dispose()));
   if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
   else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
@@ -490,7 +495,7 @@ describe("ChildSessionFactory target mounts", () => {
     await writeFile(path.join(h.cwd, "AGENTS.md"), "Current target instructions");
     const restoredManager = await h.factory.openSessionManager(identity(manager));
     const before = restoredManager.getEntries();
-    const create = vi.spyOn(sdk, "createAgentSession");
+    const create = vi.spyOn(sdk, "createAgentSessionFromServices");
     create.mockClear();
     const child = await h.open(restoredManager, {
       restoring: true,
@@ -509,40 +514,40 @@ describe("ChildSessionFactory target mounts", () => {
     expect(child.session.messages).toEqual(restoredManager.buildSessionContext().messages);
   });
 
-  it.each(["header-only", "setup-only", "missing-model", "missing-thinking", "invalid-thinking"])(
-    "rejects insufficient restoration state: %s before SDK factory fallback",
+  it.each(["header-only", "setup-only", "missing-model", "missing-thinking"])(
+    "lets the SDK restore incomplete selection state: %s",
     async (scenario) => {
       const h = await harness();
       const manager = await h.factory.createSessionManager(h.cwd);
       if (scenario !== "header-only" && scenario !== "missing-model")
         manager.appendModelChange("child-test", "a");
       if (scenario !== "header-only" && scenario !== "missing-thinking")
-        manager.appendThinkingLevelChange(
-          scenario === "invalid-thinking" ? ("bogus" as ThinkingLevel) : "high",
-        );
+        manager.appendThinkingLevelChange("high");
       if (scenario !== "header-only" && scenario !== "setup-only")
         manager.appendMessage({ role: "user", content: "task", timestamp: Date.now() });
-      const before = manager.getEntries();
-      const create = vi.spyOn(sdk, "createAgentSession");
-      await expect(h.open(manager, { restoring: true })).rejects.toMatchObject({
-        code: scenario === "missing-model" ? "MODEL_UNAVAILABLE" : "SESSION_HISTORY_UNAVAILABLE",
-      });
-      expect(create).not.toHaveBeenCalled();
-      expect(manager.getEntries()).toEqual(before);
+      const child = await h.open(manager, { restoring: true });
+      expect(child.session.model?.provider).toBe("child-test");
+      expect(child.session.model?.id).toBe(scenario === "missing-thinking" ? "a" : "b");
+      expect(child.session.sessionManager.getSessionId()).toBe(manager.getSessionId());
     },
   );
 
   it.each([
-    ["absent-provider", "a", "MODEL_UNAVAILABLE"],
-    ["child-test", "absent-model", "MODEL_UNAVAILABLE"],
-    ["child-no-auth", "a", "MODEL_AUTH_UNAVAILABLE"],
-  ])("rejects historical model/auth unavailability: %s/%s", async (provider, model, code) => {
+    ["absent-provider", "a"],
+    ["child-test", "absent-model"],
+    ["child-no-auth", "a"],
+  ])("uses SDK fallback and displays its diagnostic: %s/%s", async (provider, model) => {
     const h = await harness();
     const manager = await h.factory.createSessionManager(h.cwd);
     addHistory(manager, provider, model);
-    const create = vi.spyOn(sdk, "createAgentSession");
-    await expect(h.open(manager, { restoring: true })).rejects.toMatchObject({ code });
-    expect(create).not.toHaveBeenCalled();
+    const warning = vi.spyOn(SubagentUiProxy.prototype, "notify").mockImplementation(() => {});
+    const child = await h.open(manager, { restoring: true });
+    expect(child.session.model?.id).toBe("b");
+    expect(child.session.model?.provider).toBe("child-test");
+    expect(warning).toHaveBeenCalledWith(
+      expect.stringContaining("Could not restore model"),
+      "warning",
+    );
   });
 
   it("uses the latest physical response unless a registered virtual model_change holds", async () => {
@@ -577,37 +582,107 @@ describe("ChildSessionFactory target mounts", () => {
     expect((await h.open(manager, { restoring: true })).actualThinking).toBe("off");
   });
 
-  it.each(["fallback", "model-mismatch", "thinking-mismatch"])(
-    "rejects an SDK restoration discrepancy: %s",
-    async (scenario) => {
-      const h = await harness();
-      const manager = await h.factory.createSessionManager(h.cwd);
-      addHistory(manager);
-      const { createAgentSession: realCreate } = await vi.importActual<typeof sdk>(
-        "@earendil-works/pi-coding-agent",
-      );
-      const dispose = vi.fn();
-      vi.spyOn(sdk, "createAgentSession").mockImplementation(async (options) => {
-        const result = await realCreate(options);
-        const realDispose = result.session.dispose.bind(result.session);
-        vi.spyOn(result.session, "dispose").mockImplementation(() => {
-          dispose();
-          realDispose();
-        });
-        if (scenario === "model-mismatch")
-          result.session.agent.state.model = h.modelRuntime.getModel("child-test", "b")!;
-        if (scenario === "thinking-mismatch") result.session.agent.state.thinkingLevel = "low";
-        return {
-          ...result,
-          ...(scenario === "fallback" ? { modelFallbackMessage: "Unexpected fallback" } : {}),
-        };
+  it("rejects services provider registration diagnostics before constructing a session", async () => {
+    const h = await harness();
+    await mkdir(path.dirname(h.ownExtension));
+    await writeFile(
+      path.join(path.dirname(h.ownExtension), "bad-provider.js"),
+      `export default function(pi) {
+        pi.registerProvider("broken", { models: [{ id: "bad" }] });
+      }`,
+    );
+    const create = vi.spyOn(sdk, "createAgentSessionFromServices");
+    await expect(h.open(await h.factory.createSessionManager(h.cwd))).rejects.toThrow(
+      /bad-provider.*error/i,
+    );
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it("fails when the SDK has no available model and disposes the created session", async () => {
+    const h = await harness();
+    const manager = await h.factory.createSessionManager(h.cwd);
+    addHistory(manager, "absent-provider", "a");
+    const actual = await vi.importActual<typeof sdk>("@earendil-works/pi-coding-agent");
+    const dispose = vi.fn();
+    vi.mocked(sdk.createAgentSessionFromServices).mockImplementation(async (options) => {
+      vi.spyOn(options.services.modelRuntime, "hasConfiguredAuth").mockReturnValue(false);
+      vi.spyOn(options.services.modelRuntime, "getAvailableSnapshot").mockReturnValue([]);
+      const result = await actual.createAgentSessionFromServices(options);
+      const realDispose = result.session.dispose.bind(result.session);
+      vi.spyOn(result.session, "dispose").mockImplementation(() => {
+        dispose();
+        realDispose();
       });
+      return result;
+    });
+    await expect(h.open(manager, { restoring: true })).rejects.toMatchObject({
+      code: "MODEL_UNAVAILABLE",
+    });
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it("rejects restoration with real SDK services and isolated empty credentials offline", async () => {
+    const h = await harness();
+    const manager = await h.factory.createSessionManager(h.cwd);
+    addHistory(manager, "absent-provider", "missing-model");
+    await Promise.all([
+      writeFile(path.join(h.agentDir, "auth.json"), "{}"),
+      writeFile(path.join(h.agentDir, "models.json"), "{}"),
+      writeFile(path.join(h.cwd, ".pi", "settings.json"), '{"cacheWarming":"off"}'),
+    ]);
+    const environment = process.env;
+    // Clear every provider's credential/endpoint environment and redirect ambient
+    // home credentials. PI_OFFLINE disables SDK model-network initialization.
+    process.env = {
+      PATH: environment.PATH,
+      HOME: h.root,
+      USERPROFILE: h.root,
+      PI_CODING_AGENT_DIR: h.agentDir,
+      PI_OFFLINE: "1",
+    };
+    try {
+      const create = vi.mocked(sdk.createAgentSessionFromServices);
+      create.mockClear();
+      const notify = vi.spyOn(SubagentUiProxy.prototype, "notify").mockImplementation(() => {});
       await expect(h.open(manager, { restoring: true })).rejects.toMatchObject({
         code: "MODEL_UNAVAILABLE",
       });
-      expect(dispose).toHaveBeenCalledOnce();
-    },
-  );
+      expect(create).toHaveBeenCalledOnce();
+      const services = create.mock.calls[0]![0].services;
+      expect(services.modelRuntime.getAvailableSnapshot()).toEqual([]);
+      expect(services.diagnostics).toEqual([]);
+      expect(notify).toHaveBeenCalledWith(expect.stringMatching(/no models/i), "warning");
+    } finally {
+      process.env = environment;
+    }
+  });
+
+  it("creates independent services with target provider, native and virtual registrations", async () => {
+    const h = await harness();
+    await mkdir(path.dirname(h.ownExtension));
+    await writeFile(
+      path.join(path.dirname(h.ownExtension), "providers.js"),
+      `export default function(pi) {
+        pi.registerProvider("target-provider", { baseUrl: "https://unused.invalid", api: "openai-completions", apiKey: "fixture",
+          models: [{ id: "target", name: "Target", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 1000, maxTokens: 100 }] });
+        pi.registerProvider({ id: "target-native", name: "Native", auth: {}, getModels: () => [] });
+        pi.registerVirtualModel({ provider: "target-router", id: "auto", name: "Auto", route: () => { throw new Error("offline only"); } });
+      }`,
+    );
+    const create = vi.spyOn(sdk, "createAgentSessionFromServices");
+    await h.open(await h.factory.createSessionManager(h.cwd));
+    await h.open(await h.factory.createSessionManager(h.cwd));
+    const services = create.mock.calls.map(([options]) => options.services);
+    expect(services).toHaveLength(2);
+    expect(services[0]?.modelRuntime).not.toBe(services[1]?.modelRuntime);
+    expect(services[0]?.resourceLoader).not.toBe(services[1]?.resourceLoader);
+    for (const service of services) {
+      expect(service.diagnostics).toEqual([]);
+      expect(service.modelRuntime.getModel("target-provider", "target")).toBeDefined();
+      expect(service.modelRuntime.getRegisteredNativeProvider("target-native")).toBeDefined();
+      expect(service.modelRuntime.getModel("target-router", "auto")?.api).toBe("pi-virtual");
+    }
+  });
 
   it("checks trust before loading target extensions", async () => {
     const h = await harness(false);

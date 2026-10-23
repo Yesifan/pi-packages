@@ -1,31 +1,27 @@
 import { constants } from "node:fs";
 import { chmod, lstat, open, realpath, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { type Api, clampThinkingLevel, type Model } from "@earendil-works/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import {
   type AgentSession,
-  createAgentSession,
+  createAgentSessionFromServices,
+  createAgentSessionServices,
   createCodemodeExtension,
   createMcpExtension,
   createToolSearchExtension,
-  DefaultResourceLoader,
   type Extension,
   getAgentDir,
-  ModelRuntime,
-  type SessionEntry,
   SessionManager,
-  SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { SubagentError } from "./errors.js";
 import { createDelegationExtension, type DelegationRuntimeApi } from "./tools.js";
-import {
-  type Agent,
-  type AgentDefinitionSnapshot,
-  type CallerBinding,
-  type DelegationContext,
-  type SessionIdentity,
-  THINKING_LEVELS,
-  type ThinkingLevel,
+import type {
+  Agent,
+  AgentDefinitionSnapshot,
+  CallerBinding,
+  DelegationContext,
+  SessionIdentity,
+  ThinkingLevel,
 } from "./types.js";
 import type { RootUiBroker, SubagentUiProxy } from "./ui.js";
 
@@ -51,48 +47,6 @@ async function shutdownSession(session: AgentSession): Promise<void> {
   } finally {
     session.dispose();
   }
-}
-
-// SDK 1.1.0's branch selection is not exported. Mirror its selection using public
-// entries/catalog only: a registered virtual model_change holds over physical replies.
-function historicalModel(branch: SessionEntry[], runtime: ModelRuntime): Model<Api> {
-  let selection: { provider: string; modelId: string } | undefined;
-  let change: typeof selection;
-  for (const entry of branch) {
-    if (entry.type === "model_change") {
-      change = { provider: entry.provider, modelId: entry.modelId };
-      selection = change;
-    } else if (
-      entry.type === "message" &&
-      entry.message.role === "assistant" &&
-      entry.message.api !== "pi-virtual"
-    ) {
-      selection =
-        change && runtime.getModel(change.provider, change.modelId)?.api === "pi-virtual"
-          ? change
-          : { provider: entry.message.provider, modelId: entry.message.model };
-    }
-  }
-  if (
-    !selection ||
-    typeof selection.provider !== "string" ||
-    !selection.provider ||
-    typeof selection.modelId !== "string" ||
-    !selection.modelId
-  ) {
-    throw new SubagentError(
-      "MODEL_UNAVAILABLE",
-      "Child history has no valid historical model selection",
-    );
-  }
-  const model = runtime.getModel(selection.provider, selection.modelId);
-  if (!model) {
-    throw new SubagentError(
-      "MODEL_UNAVAILABLE",
-      `Historical model is unavailable: ${selection.provider}/${selection.modelId}`,
-    );
-  }
-  return model;
 }
 
 export interface OpenChildOptions {
@@ -253,7 +207,6 @@ export class ChildSessionFactory {
     const { cwd, roleSnapshot } = options;
     const trusted = await this.resolveTrust(cwd);
     if (!trusted) throw new SubagentError("PROJECT_NOT_TRUSTED", `Project is not trusted: ${cwd}`);
-    const settingsManager = SettingsManager.create(cwd, this.agentDir);
     const childBinding: CallerBinding | undefined =
       options.canDelegate && options.delegationContext
         ? {
@@ -273,138 +226,96 @@ Your final response is automatically reported to your direct parent.`;
 
     // Warning Cache Broke: preserve append order on restoration. Current target resources
     // are rebuilt, but the current role is always the saved snapshot, never a role-file reload.
-    const resourceLoader = new DefaultResourceLoader({
+    const services = await createAgentSessionServices({
       cwd,
       agentDir: this.agentDir,
-      settingsManager,
-      // Warning Cache Broke: rebuild the CLI's replaceable built-ins in the target
-      // resource registry. builtin entries honor target settings and load after trust;
-      // MCP retains its own exposure/activation policy rather than copying parent tools.
-      extensionFactories: [
-        {
-          name: "codemode",
-          factory: createCodemodeExtension(),
-          builtin: true,
-          replaceable: true,
-        },
-        {
-          name: "tool-search",
-          factory: createToolSearchExtension(),
-          builtin: true,
-          replaceable: true,
-        },
-        {
-          name: "mcp",
-          factory: createMcpExtension(),
-          builtin: true,
-          replaceable: true,
-        },
-        ...(internalFactory
-          ? [{ name: "pi-subagents:child", factory: internalFactory, hidden: true }]
-          : []),
-      ],
-      extensionsOverride: (base) => ({
-        ...base,
-        extensions: base.extensions.filter(
-          (extension) => !isOwnExtension(extension, this.ownExtensionPath),
-        ),
-      }),
-      appendSystemPromptOverride: (base) => [...base, runtimePrompt, roleSnapshot.prompt],
+      resourceLoaderReloadOptions: { resolveProjectTrust: async () => trusted },
+      resourceLoaderOptions: {
+        // Warning Cache Broke: rebuild the CLI's replaceable built-ins in the target
+        // resource registry. builtin entries honor target settings and load after trust;
+        // MCP retains its own exposure/activation policy rather than copying parent tools.
+        extensionFactories: [
+          {
+            name: "codemode",
+            factory: createCodemodeExtension(),
+            builtin: true,
+            replaceable: true,
+          },
+          {
+            name: "tool-search",
+            factory: createToolSearchExtension(),
+            builtin: true,
+            replaceable: true,
+          },
+          {
+            name: "mcp",
+            factory: createMcpExtension(),
+            builtin: true,
+            replaceable: true,
+          },
+          ...(internalFactory
+            ? [{ name: "pi-subagents:child", factory: internalFactory, hidden: true }]
+            : []),
+        ],
+        extensionsOverride: (base) => ({
+          ...base,
+          extensions: base.extensions.filter(
+            (extension) => !isOwnExtension(extension, this.ownExtensionPath),
+          ),
+        }),
+        appendSystemPromptOverride: (base) => [...base, runtimePrompt, roleSnapshot.prompt],
+      },
     });
-    await resourceLoader.reload({ resolveProjectTrust: async () => trusted });
-    const extensionsResult = resourceLoader.getExtensions();
-
-    // Provider registrations are mutable: each mount gets a fresh target-cwd runtime.
-    const modelRuntime = await ModelRuntime.create({
-      authPath: path.join(this.agentDir, "auth.json"),
-      modelsPath: path.join(this.agentDir, "models.json"),
-    });
-    for (const registration of extensionsResult.runtime.pendingProviderRegistrations) {
-      modelRuntime.registerProvider(registration.name, registration.config);
+    const errors = services.diagnostics.filter((diagnostic) => diagnostic.type === "error");
+    if (errors.length) {
+      throw new SubagentError(
+        "MODEL_UNAVAILABLE",
+        errors.map((diagnostic) => diagnostic.message).join("\n"),
+      );
     }
-    extensionsResult.runtime.pendingProviderRegistrations = [];
-    for (const registration of extensionsResult.runtime.pendingNativeProviderRegistrations) {
-      modelRuntime.registerNativeProvider(registration.provider);
-    }
-    extensionsResult.runtime.pendingNativeProviderRegistrations = [];
-    for (const registration of extensionsResult.runtime.pendingVirtualModelRegistrations) {
-      modelRuntime.registerVirtualModel(registration.definition);
-    }
-    extensionsResult.runtime.pendingVirtualModelRegistrations = [];
-    await modelRuntime.refresh({ allowNetwork: false });
 
     let model: Model<Api> | undefined;
-    let expectedThinking: ThinkingLevel | undefined;
-    if (options.restoring) {
-      const context = options.sessionManager.buildSessionContext();
-      const branch = options.sessionManager.getBranch();
-      if (context.messages.length === 0) {
-        throw new SubagentError(
-          "SESSION_HISTORY_UNAVAILABLE",
-          "Child history has no restorable conversation context",
-        );
-      }
-      const thinkingEntry = branch.findLast((entry) => entry.type === "thinking_level_change");
-      if (
-        !thinkingEntry ||
-        !THINKING_LEVELS.includes(thinkingEntry.thinkingLevel as ThinkingLevel)
-      ) {
-        throw new SubagentError(
-          "SESSION_HISTORY_UNAVAILABLE",
-          "Child history has no valid historical thinking entry",
-        );
-      }
-      model = historicalModel(branch, modelRuntime);
-      expectedThinking = clampThinkingLevel(model, context.thinkingLevel as ThinkingLevel);
-    } else {
+    if (!options.restoring) {
       if (!options.model)
         throw new SubagentError("PARENT_MODEL_UNAVAILABLE", "Parent model is unavailable");
-      model = modelRuntime.getModel(options.model.provider, options.model.id) ?? options.model;
-    }
-    if (!model || !modelRuntime.hasConfiguredAuth(model.provider)) {
-      throw new SubagentError(
-        "MODEL_AUTH_UNAVAILABLE",
-        `Model authentication is unavailable for ${model?.provider ?? "parent model"}`,
-      );
+      model =
+        services.modelRuntime.getModel(options.model.provider, options.model.id) ?? options.model;
+      if (!services.modelRuntime.hasConfiguredAuth(model.provider)) {
+        throw new SubagentError(
+          "MODEL_AUTH_UNAVAILABLE",
+          `Model authentication is unavailable for ${model.provider}`,
+        );
+      }
     }
 
     let session: AgentSession | undefined;
     const ui = this.uiBroker.proxy(options.sessionManager.getSessionId(), options.name);
     try {
-      const created = await createAgentSession({
-        cwd,
-        agentDir: this.agentDir,
-        modelRuntime,
+      for (const diagnostic of services.diagnostics) ui.notify(diagnostic.message, diagnostic.type);
+      const created = await createAgentSessionFromServices({
+        services,
         // Restoration must take the SDK's normal branch path, with no settings/parent overrides.
         ...(options.restoring ? {} : { model, thinkingLevel: options.thinking ?? "off" }),
         ...(roleSnapshot.tools ? { tools: roleSnapshot.tools } : {}),
-        // Warning Cache Broke: SDK 1.1.0 applies exclusions to the full registry on
+        // Warning Cache Broke: SDK applies exclusions to the full registry on
         // every refresh, including dynamic registration; setActiveTools cannot bypass it.
         excludeTools: [
           ...(roleSnapshot.disallowedTools ?? []),
           ...(options.canDelegate ? [] : ["subagent", "ask_subagent"]),
         ],
-        resourceLoader,
         sessionManager: options.sessionManager,
-        settingsManager,
         sessionStartEvent: { type: "session_start", reason: "startup" },
       });
       session = created.session;
-      const assertRestoredSelection = () => {
-        if (
-          options.restoring &&
-          (created.modelFallbackMessage ||
-            session?.model?.provider !== model.provider ||
-            session.model.id !== model.id ||
-            session.thinkingLevel !== expectedThinking)
-        ) {
-          throw new SubagentError(
-            "MODEL_UNAVAILABLE",
-            `SDK did not restore the historical model/thinking${created.modelFallbackMessage ? `: ${created.modelFallbackMessage}` : ""}`,
-          );
-        }
-      };
-      assertRestoredSelection();
+      if (created.modelFallbackMessage) ui.notify(created.modelFallbackMessage, "warning");
+      // The underlying Agent may expose its default placeholder when the SDK has
+      // no selectable model. Do not mount it as a usable authenticated fallback.
+      if (!session.model || !services.modelRuntime.hasConfiguredAuth(session.model.provider)) {
+        throw new SubagentError(
+          "MODEL_UNAVAILABLE",
+          created.modelFallbackMessage ?? "No model is available for the child session",
+        );
+      }
       await session.bindExtensions({
         uiContext: ui,
         mode: "tui",
@@ -418,7 +329,6 @@ Your final response is automatically reported to your direct parent.`;
           ui.notify(`${error.event}: ${error.error}`, "error");
         },
       });
-      assertRestoredSelection();
       const openedSession = session;
       return {
         session: openedSession,

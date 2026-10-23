@@ -21,7 +21,7 @@
       └─────────────────────────┘
 ```
 
-> 路由的完整说明(用户 → 项目 → 会话,面向非读者)见 [`docs/routing.md`](docs/routing.md)。
+> 路由的完整说明(用户 → 项目 → 会话,面向非读者)见 [`docs/routing.md`](https://github.com/Yesifan/pi-packages/blob/main/packages/pi-weixin-daemon/docs/routing.md)。
 
 ## 特性
 
@@ -45,7 +45,7 @@
 
 ## 安装
 
-要求：Node.js >= 22.19，pnpm **11.x**（本项目已用 `packageManager` 固定为 `pnpm@11.25.0`）。
+要求：Node.js >= 22.19，pnpm **11.x**（本项目已用 `packageManager` 固定为 `pnpm@11.25.0`）。当前开发与内嵌运行时基线为 Pi SDK 1.4.0；微信路由、UI 超时和回复投递行为不变。
 
 > ⚠️ 推荐 11.x：pnpm 12 对 `install -g <本地路径/tarball>` 有回归（会把本地路径误当 registry 包名，报 `@scope` 错）。
 

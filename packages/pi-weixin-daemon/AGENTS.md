@@ -42,7 +42,7 @@ pnpm --filter @yesifan/pi-weixin-daemon test:model # 可选，会访问真实模
 pnpm --filter @yesifan/pi-weixin-daemon build
 ```
 
-运行环境要求 Node.js `>=22.19.0`、pnpm `11.x`；版本和依赖以 `package.json` 为准。
+运行环境要求 Node.js `>=22.19.0`、pnpm `11.x`；当前开发与内嵌运行时基线为 Pi SDK `1.4.0`，版本和依赖以 `package.json` 与 workspace catalog 为准。UI 适配使用公开 SDK 类型；项目级标量设置仍写项目设置，不替换为 global setter。
 
 ---
 

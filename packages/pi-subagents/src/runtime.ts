@@ -90,6 +90,7 @@ export class RootRuntime implements DelegationRuntimeApi {
   private initialization?: Promise<void>;
   private initialized = false;
   private readonly pendingPrompts = new WeakMap<Execution, number>();
+  private readonly promptWaiters = new WeakMap<Execution, () => void>();
   private readonly abortTasks = new WeakMap<Execution, Promise<void>>();
   private readonly branchInitializations = new WeakMap<Agent, Promise<void>>();
   constructor(private readonly ownExtensionPath: string) {}
@@ -521,110 +522,52 @@ export class RootRuntime implements DelegationRuntimeApi {
     execution.opened = opened;
     execution.session = opened.session;
     execution.startLeafId = manager.getLeafId();
-    execution.unsubscribe = opened.session.subscribe((event) => this.onEvent(execution, event));
+    execution.unsubscribe = opened.session.subscribe((event) => {
+      if (
+        execution.scope.closing &&
+        execution.session === opened.session &&
+        event.type === "agent_start"
+      ) {
+        // An input hook can outlive shutdown's first abort while the SDK is still idle.
+        // Abort this captured mount again when it starts; never await idle in its listener.
+        void opened.session.abort().catch((error) => this.notify(error));
+        return;
+      }
+      this.onEvent(execution, event);
+    });
   }
-  private start(
+  private async start(
     execution: Execution,
     prompt: string,
     signal?: AbortSignal,
   ): Promise<AcceptedResult> {
     this.assertCurrent(execution);
-    return new Promise<AcceptedResult>((resolve, reject) => {
-      let finished = false;
-      const finish = (result?: AcceptedResult, error?: unknown) => {
-        if (finished) return;
-        finished = true;
-        signal?.removeEventListener("abort", abort);
-        if (error) reject(error);
-        else resolve(result!);
-      };
-      const abort = () => {
-        if (execution.accepted) return;
-        finish(
-          undefined,
-          new SubagentError("ABORTED", "Tool call was aborted before Pi accepted the prompt"),
-        );
-        void execution.session?.abort();
-      };
-      signal?.addEventListener("abort", abort, { once: true });
-      if (signal?.aborted) {
-        abort();
-        return;
-      }
-      this.holdPrompt(execution);
-      const completion = execution.session!.prompt(prompt, {
-        expandPromptTemplates: false,
-        preflightResult: (disposition) => {
-          if (!this.current(execution)) {
-            const error = new SubagentError(
-              "ROOT_CLOSING",
-              "Owning execution ended before acceptance",
-            );
-            finish(undefined, error);
-            throw error;
-          }
-          if (signal?.aborted && !execution.accepted) {
-            const error = new SubagentError(
-              "ABORTED",
-              "Tool call was aborted before Pi accepted the prompt",
-            );
-            finish(undefined, error);
-            throw error;
-          }
-          if (disposition === "handled") {
-            finish(
-              undefined,
-              new SubagentError(
-                "PROMPT_HANDLED",
-                "An input extension handled the request; no subagent task was started.",
-              ),
-            );
-            return;
-          }
-          execution.accepted = true;
-          if (disposition !== "started") {
-            const error = new SubagentError(
-              "UNEXPECTED_PREFLIGHT",
-              `Expected started but SDK returned ${disposition}; history and identity are retained.`,
-            );
-            finish(undefined, error);
-            void this.failExecution(execution, error);
-            throw error;
-          }
-          execution.phase = "executing";
-          execution.agent.state = "running";
-          try {
-            this.saveAgentSync(execution.agent);
-            finish(this.acceptedResult(execution, "started"));
-          } catch (error) {
-            finish(undefined, error);
-            // Throwing out of SDK preflight prevents the subsequent _runAgentPrompt call.
-            // The started disposition still retains identity/history rather than rollback.
-            throw error;
-          }
-        },
-      });
-      void completion.then(
-        () => {
-          this.releasePrompt(execution);
-          if (!finished)
-            finish(
-              undefined,
-              new SubagentError("PROMPT_NOT_STARTED", "SDK returned without confirming acceptance"),
-            );
-          if (this.current(execution) && execution.accepted) {
-            execution.sdkSettled = execution.session!.isIdle;
-            this.maybeFinalize(execution);
-          }
-        },
-        (error) => {
-          this.releasePrompt(execution);
-          finish(undefined, error);
-          if (execution.accepted && this.current(execution))
-            void this.failExecution(execution, error);
-        },
-      );
-    });
+    if (signal?.aborted)
+      throw new SubagentError("ABORTED", "Tool call was aborted before submission");
+    // Durable responsibility precedes SDK submission, not an internal startup notification.
+    execution.agent.state = "running";
+    await this.saveAgent(execution.agent);
+    this.assertCurrent(execution);
+    if (signal?.aborted)
+      throw new SubagentError("ABORTED", "Tool call was aborted before submission");
+    execution.accepted = true;
+    execution.phase = "executing";
+    this.holdPrompt(execution);
+    const completion = execution.session!.prompt(prompt, { expandPromptTemplates: false });
+    void completion.then(
+      () => {
+        this.releasePrompt(execution);
+        if (this.current(execution)) {
+          execution.sdkSettled = execution.session!.isIdle;
+          this.maybeFinalize(execution);
+        }
+      },
+      (error) => {
+        this.releasePrompt(execution);
+        if (this.current(execution)) void this.failExecution(execution, error);
+      },
+    );
+    return this.acceptedResult(execution, "submitted");
   }
   private async steer(agent: Agent, prompt: string, signal?: AbortSignal): Promise<AcceptedResult> {
     const execution = agent.currentExecution;
@@ -660,55 +603,19 @@ export class RootRuntime implements DelegationRuntimeApi {
     if (reason || !execution)
       throw new SubagentError("SUBAGENT_NOT_STEERABLE", `${agent.name} ${reason}.`);
     signal?.throwIfAborted();
-    return new Promise((resolve, reject) => {
-      let answered = false;
-      const completion = execution.session!.prompt(prompt, {
-        streamingBehavior: "steer",
-        expandPromptTemplates: false,
-        preflightResult: (disposition) => {
-          answered = true;
-          if (!this.current(execution)) {
-            const error = new SubagentError("ROOT_CLOSING", "The target execution ended");
-            reject(error);
-            // The hook may outlive E1 and its disposed mount. Stop SDK started processing,
-            // never abort the logical agent's new E2; already queued effects cannot be undone.
-            throw error;
-          }
-          if (disposition !== "queued" && signal?.aborted) {
-            const error = new SubagentError(
-              "ABORTED",
-              "Tool call was aborted before Pi accepted steering",
-            );
-            reject(error);
-            throw error;
-          }
-          // SDK queues before this callback: queued is already accepted even if the tool
-          // was canceled during an input hook. Do not claim to undo the accepted queue.
-          if (disposition === "queued") resolve(this.acceptedResult(execution, "steered"));
-          else if (disposition === "handled")
-            reject(
-              new SubagentError(
-                "PROMPT_HANDLED",
-                "An input extension handled the steering input; the original execution is unchanged.",
-              ),
-            );
-          else {
-            const error = new SubagentError(
-              "UNEXPECTED_PREFLIGHT",
-              `Expected queued steering but SDK returned ${disposition}.`,
-            );
-            reject(error);
-            void this.failExecution(execution, error);
-            // Started preflight precedes _runAgentPrompt; throwing prevents a second run.
-            throw error;
-          }
-        },
-      });
-      void completion.then(() => {
-        if (!answered)
-          reject(new SubagentError("PROMPT_NOT_STARTED", "SDK did not queue steering input"));
-      }, reject);
-    });
+    this.holdPrompt(execution);
+    try {
+      const disposition = await execution.session!.steer(prompt);
+      if (disposition === "handled")
+        throw new SubagentError(
+          "PROMPT_HANDLED",
+          "An input extension handled the steering input; the original execution is unchanged.",
+        );
+      return this.acceptedResult(execution, "steered");
+    } finally {
+      this.releasePrompt(execution);
+      this.maybeFinalize(execution);
+    }
   }
   private onEvent(execution: Execution, event: AgentSessionEvent): void {
     if (!this.current(execution)) return;
@@ -772,7 +679,11 @@ export class RootRuntime implements DelegationRuntimeApi {
   private releasePrompt(execution: Execution): void {
     const remaining = (this.pendingPrompts.get(execution) ?? 1) - 1;
     if (remaining) this.pendingPrompts.set(execution, remaining);
-    else this.pendingPrompts.delete(execution);
+    else {
+      this.pendingPrompts.delete(execution);
+      this.promptWaiters.get(execution)?.();
+      this.promptWaiters.delete(execution);
+    }
   }
   private maybeFinalize(execution: Execution): void {
     if (
@@ -1002,6 +913,10 @@ export class RootRuntime implements DelegationRuntimeApi {
     return execution.release;
   }
   private async releaseResources(execution: Execution): Promise<void> {
+    // abort() does not join a suspended steer input hook. Keep this mount busy and
+    // the writer lock held until every captured SDK call has stopped writing to it.
+    if (this.pendingPrompts.has(execution))
+      await new Promise<void>((resolve) => this.promptWaiters.set(execution, resolve));
     execution.unsubscribe?.();
     execution.unsubscribe = undefined;
     try {
@@ -1081,15 +996,7 @@ export class RootRuntime implements DelegationRuntimeApi {
       childRecord(agent),
     );
   }
-  private saveAgentSync(agent: Agent): void {
-    this.store.setChildSync(
-      this.owner(agent),
-      this.ownerParent(agent),
-      agent.name,
-      childRecord(agent),
-    );
-  }
-  private acceptedResult(execution: Execution, status: "started" | "steered"): AcceptedResult {
+  private acceptedResult(execution: Execution, status: "submitted" | "steered"): AcceptedResult {
     return {
       ok: true,
       name: execution.agent.name,

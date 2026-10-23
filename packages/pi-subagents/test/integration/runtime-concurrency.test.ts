@@ -28,7 +28,7 @@ describe("name reservation and direct ownership", () => {
       message: expect.stringContaining("ask_subagent"),
     });
     const result = await first;
-    expect(result).toMatchObject({ name: "Worker", status: "started", agent_type: "general" });
+    expect(result).toMatchObject({ name: "Worker", status: "submitted", agent_type: "general" });
     expect(result).not.toHaveProperty("id");
     expect(result).not.toHaveProperty("run_id");
     await expect(
@@ -42,7 +42,7 @@ describe("name reservation and direct ownership", () => {
     ).rejects.toMatchObject({ code: "SUBAGENT_NAME_EXISTS" });
     await expect(
       h.runtime.askSubagent(h.caller, { name: " Worker ", prompt: "follow-up" }, h.ctx),
-    ).resolves.toMatchObject({ name: "Worker", status: "started" });
+    ).resolves.toMatchObject({ name: "Worker", status: "submitted" });
   });
 
   it.each(["", "  \n\t"])("rejects empty trimmed name %j", async (name) => {
@@ -186,7 +186,7 @@ describe("ordinary ask concurrency and history", () => {
     await expect(first).resolves.toMatchObject({
       name: "worker",
       thinking: "high",
-      status: "started",
+      status: "submitted",
     });
     expect(agent.currentExecution).toBe(execution);
     expect(agent.identity).toEqual(identity);
@@ -257,40 +257,28 @@ describe("ordinary ask concurrency and history", () => {
     ]);
     await expect(
       h.runtime.askSubagent(h.caller, { name: "worker", prompt: "retry" }, h.ctx),
-    ).resolves.toMatchObject({ name: "worker", status: "started" });
+    ).resolves.toMatchObject({ name: "worker", status: "submitted" });
   });
 
-  it.each(["handled", "reject"] as const)(
-    "rolls back a new child on preaccept %s",
-    async (kind) => {
-      const h = await createHarness();
-      await idle(h, "sibling");
-      const count = h.reports.length;
-      h.configureNext((child) => {
-        if (kind === "handled") child.nextDisposition = "handled";
-        else child.promptError = new Error("preflight rejected");
-      });
-      const pending = h.runtime.createSubagent(
-        h.caller,
-        { name: "prepared", prompt: "work" },
-        h.ctx,
-      );
-      if (kind === "handled")
-        await expect(pending).rejects.toMatchObject({ code: "PROMPT_HANDLED" });
-      else await expect(pending).rejects.toThrow("preflight rejected");
-      expect(h.scope.children.has("prepared")).toBe(false);
-      expect(h.scope.executions.size).toBe(0);
-      expect(h.reports).toHaveLength(count);
-      expect(Object.keys((await h.store.readOwner(h.scope.identity, null))!.children)).toEqual([
-        "sibling",
-      ]);
-      await expect(readFile(h.children.at(-1)!.manager.getSessionFile()!)).rejects.toMatchObject({
-        code: "ENOENT",
-      });
-    },
-  );
+  it.each(["handled", "reject"] as const)("retains submitted identity after %s", async (kind) => {
+    const h = await createHarness();
+    await idle(h, "sibling");
+    h.configureNext((child) => {
+      if (kind === "handled") child.nextDisposition = "handled";
+      else child.promptError = new Error("submission rejected");
+    });
+    await expect(
+      h.runtime.createSubagent(h.caller, { name: "prepared", prompt: "work" }, h.ctx),
+    ).resolves.toMatchObject({ status: "submitted" });
+    await h.flush();
+    expect(h.agent("prepared").identity).toBeDefined();
+    expect(h.agent("prepared").currentExecution).toBeUndefined();
+    expect(await readFile(h.agent("prepared").identity!.sessionFile, "utf8")).toBeTruthy();
+    if (kind === "reject")
+      expect(h.reports.at(-1)?.report.error?.message).toBe("submission rejected");
+  });
 
-  it("handled ask preserves the old identity/history and does not abort extension processing", async () => {
+  it("handled ask preserves history without reusing the old assistant answer", async () => {
     const h = await createHarness();
     const agent = await idle(h, "worker");
     const before = await readFile(agent.identity!.sessionFile, "utf8");
@@ -299,31 +287,12 @@ describe("ordinary ask concurrency and history", () => {
     });
     await expect(
       h.runtime.askSubagent(h.caller, { name: "worker", prompt: "consume" }, h.ctx),
-    ).rejects.toMatchObject({ code: "PROMPT_HANDLED" });
+    ).resolves.toMatchObject({ status: "submitted" });
+    await h.flush();
     expect(await readFile(agent.identity!.sessionFile, "utf8")).toBe(before);
     expect(agent.state).toBe("idle");
     expect(h.child("worker").aborts).toBe(0);
-    expect(h.reports).toHaveLength(1);
-  });
-
-  it("unexpected queued ordinary input fails explicitly but retains accepted history and identity", async () => {
-    const h = await createHarness();
-    h.configureNext((child) => {
-      child.nextDisposition = "queued";
-    });
-    await expect(
-      h.runtime.createSubagent(h.caller, { name: "worker", prompt: "queued unexpectedly" }, h.ctx),
-    ).rejects.toMatchObject({ code: "UNEXPECTED_PREFLIGHT" });
-    await h.flush();
-    expect(h.agent("worker").identity).toBeDefined();
-    expect(await readFile(h.agent("worker").identity!.sessionFile, "utf8")).toContain(
-      "queued unexpectedly",
-    );
-    expect(h.reports).toHaveLength(1);
-    expect(h.reports[0]!.report).toMatchObject({
-      outcome: "failed",
-      error: { code: "UNEXPECTED_PREFLIGHT" },
-    });
+    expect(h.reports.at(-1)?.report.outcome).not.toBe("completed");
   });
 });
 
@@ -430,7 +399,7 @@ describe("exact root restoration", () => {
         { name: "old-worker", prompt: "new independent history" },
         h.ctx,
       ),
-    ).resolves.toMatchObject({ name: "old-worker", status: "started" });
+    ).resolves.toMatchObject({ name: "old-worker", status: "submitted" });
     const newAgent = (Reflect.get(restored, "scope") as RootScope).children.get("old-worker")!;
     expect(newAgent.identity!.sessionFile).toContain(
       path.join(h.agentDir, "subagents", "histories"),

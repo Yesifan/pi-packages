@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { ProjectTrustStore } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
@@ -83,10 +83,8 @@ describe("runtime steering and acceptance", () => {
     expect(agent.currentExecution).toBe(execution);
     expect(h.mounts).toHaveLength(1);
     expect(child.aborts).toBe(0);
-    expect(child.promptCalls.map((call) => call.options.streamingBehavior)).toEqual([
-      undefined,
-      "steer",
-    ]);
+    expect(child.steerCalls).toEqual(["focus"]);
+    expect(child.promptCalls).toHaveLength(1);
     expect(child.promptCalls.every((call) => call.options.expandPromptTemplates === false)).toBe(
       true,
     );
@@ -126,28 +124,6 @@ describe("runtime steering and acceptance", () => {
     child.complete();
     await h.flush();
     expect(h.reports).toHaveLength(1);
-  });
-
-  it("fails an unexpected started steering disposition without pretending it was queued", async () => {
-    const h = await createHarness();
-    await h.runtime.createSubagent(h.caller, { name: "worker", prompt: "start" }, h.ctx);
-    const identity = h.agent("worker").identity;
-    h.child("worker").nextDisposition = "started";
-    await expect(
-      h.runtime.askSubagent(
-        h.caller,
-        { name: "worker", prompt: "not queued", isSteer: true },
-        h.ctx,
-      ),
-    ).rejects.toMatchObject({ code: "UNEXPECTED_PREFLIGHT" });
-    await h.flush();
-    expect(h.agent("worker").identity).toBe(identity);
-    expect(await readFile(identity!.sessionFile, "utf8")).toContain("start");
-    expect(h.reports).toHaveLength(1);
-    expect(h.reports[0]!.report).toMatchObject({
-      outcome: "failed",
-      error: { code: "UNEXPECTED_PREFLIGHT" },
-    });
   });
 
   it("does not invoke SDK steering against an idle or waiting-for-child agent", async () => {
