@@ -8,7 +8,7 @@ version: null
 related_documents:
   - "[规格索引](README.md)"
   - "[原已完成规格](pi-session.md)"
-  - "[包文档](../../packages/pi-session/README.md)"
+  - "[包文档](../../README.md)"
 ---
 
 ## 范围与决策

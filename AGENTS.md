@@ -137,7 +137,11 @@ pnpm --filter @yesifan/<pkg> pack --pack-destination /tmp
 
 ### Specifications
 
-新增、编辑或实施 spec 前，先阅读 [spec 索引与维护规则](docs/specs/README.md)，并同步维护规格及索引。包内已有规格继续遵循对应包的索引和规则。
+新增、编辑或实施 spec 前，先阅读 [spec 索引与维护规则](docs/specs/README.md)，并同步维护规格及索引。
+
+- 单包规格放在 `packages/<pkg>/docs/specs/`，由该目录的 `README.md` 维护索引；包内已有规格继续遵循对应包的索引和规则。
+- 根 `docs/specs/` 仅保存跨包或全仓规格，并提供包内规格索引入口，不重复维护包内规格条目。跨运行模式不等于跨包，应按实际涉及的包确定归属。
+- 移动规格时同步所有引用和相关索引；仅修正路径不改变已完成规格的约定、状态、执行日期和验收记录。
 
 ### ADR 约定
 
