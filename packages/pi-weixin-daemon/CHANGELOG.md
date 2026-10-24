@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.8.0
+
+### Minor Changes
+
+- 1c29c4c: BREAKING: move account registration, credentials and project configuration writes to CLI commands coordinated with the read-only daemon by Linux util-linux flock. Stop the old daemon before upgrading CLI and daemon together.
+
+  CLI account selectors accept unique, case-sensitive names only, never IDs. Configuration changes resolve names from current disk state under the shared lock. Legacy account/project mutation RPCs are rejected; use CLI configuration commands and `pi-wx reload` to apply current state.
+
+  Separate saved configuration, runtime application and best-effort account cleanup. Reject deletion or login replacement while bound, allow confirmed-offline saves, rebuild monitors on credential changes, and expose receivers that remain after a failed stop. AccountManager now owns cancellation and receive tasks; late receive/download work cannot write caches or dispatch after cancellation. Confirm receiver shutdown before removing files; report residual files for manual cleanup without rolling back saved configuration.
+
+  Rebuild same-name project instances when their working directory changes between desired-state snapshots, including coalesced deletion and recreation.
+
+- e185269: BREAKING: Unify Weixin recipients around each project's bound accounts and their saved `userId`, removing the observed-participant registry. Agent replies, typing and notifications can now reach bound users before they speak in the current daemon process; directed output goes to the source account's saved user. Missing user IDs, exact recipient context tokens or transports are skipped rather than borrowing another sender's token. Inbound project routing remains unchanged and does not add sender identity filtering.
+- 94aabaf: BREAKING: Frame each local RPC request with a newline so fragmented JSON and UTF-8 are buffered before dispatch. CLI and daemon versions must match; restart the daemon after upgrading. Unterminated requests are never dispatched, including at EOF, and incomplete requests close after 15 seconds of read inactivity. Each connection dispatches only its first request; responses remain EOF-delimited. Request-read timeouts are disabled before dispatch, preserving long-running broadcasts. No legacy protocol detection or automatic retries are added.
+
+### Patch Changes
+
+- 569aadd: Simplify internal Pi adapters, login records, account lifecycle state and monitor retry handling without changing CLI, RPC or Weixin behavior. Remove unused internal helpers and forwarding modules; keep Pi session operations behind PiSdkHost and preserve exact recipient tokens and session lifecycle safeguards.
+- 2cc6a98: Fix Weixin API version metadata and client-version headers to use the shared version from the scoped package manifest.
+- 47dcebc: Sanitize Weixin API failure logs and propagated errors consistently across endpoints, retaining safe operation/status classifications without upstream response bodies or credential echoes.
+- 48ef465: Remove the unused context-token account inference helper; recipient delivery continues to use explicit account IDs and exact user token lookups.
+- c2de661: BREAKING: Subagent creation and ordinary asks return submitted after local persistence and SDK submission, rather than a synchronous started handshake. Steering uses public steer with skill/template expansion and extension-command rejection; queued does not guarantee consumption or cancellation rollback. Agents remain busy through outstanding calls and cleanup. History restoration follows SDK defaults/fallback instead of requiring an exact historical model/thinking selection.
+
+  During root shutdown, abort captured sessions again if an ordinary prompt resumes from an input hook and starts a run; retain the writer lock until pending calls and cleanup finish.
+
+  Use Pi 1.4.0 official session services and lifecycle APIs while retaining history identity, ownership, trust, and role tool policies. Upgrade the daemon's embedded Pi runtime to 1.4.0 and use public UI types without changing Weixin routing or delivery behavior.
+
+- f138783: Remove the unused mid-broadcast session guard. An already-started broadcast continues attempting all bound users after a session stops or changes; stale events and deliveries that have not started remain isolated.
+- 576769b: Persist each project's default Pi session and restore it on demand after idle release or restart. Automatically use the first successfully activated session as default; add shared active/default selection, explicit new/resume/default controls, and project-wide switch notifications independent of reply targets.
+
+  Add `pi-wx prompt` over the local UDS control plane with default, specified, or new-session selection and combinable caller/project-user reply targets. Support text-based interaction answers from subsequent local CLI prompts in the same project, preserve busy rejection and independent Agent-turn broadcasts, and allow project-scoped Weixin tool delivery independently of final reply targets. Report execution and delivery outcomes without automatic retries.
+
+- Persist shared default session identities in daemon-owned state at the XDG state directory's `projects.json`, without writing CLI-owned project configuration. Read legacy configuration defaults as a fallback and scope runtime state to each project's name and cwd.
+- a4bf61d: Preserve runtime error details when displaying merged project configuration and status in `pi-wx project list` and `show`.
+- e414cdf: Buffer RPC response bytes until EOF before decoding and parsing JSON, preserving fragmented UTF-8 responses and rejecting empty or incomplete replies.
+- c735613: Keep the project runtime and active/default session unchanged when an account owner changes. Only rebuild the affected receiver and clear its Weixin token caches, avoiding timing-dependent project restarts during account reloads.
+
 ## 0.7.1
 
 ### Patch Changes
