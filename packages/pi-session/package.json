@@ -1,6 +1,6 @@
 {
   "name": "@yesifan/pi-session",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Pi session reference completion, history search and lightweight background conversations",
   "keywords": [
     "pi-package",
