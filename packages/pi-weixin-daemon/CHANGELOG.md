@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.1
+
+### Patch Changes
+
+- 0ab7eda: Suppress idle-close notifications for the default session while retaining non-default close notices and close-failure diagnostics.
+
 ## 0.8.0
 
 ### Minor Changes
