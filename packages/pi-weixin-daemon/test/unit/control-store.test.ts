@@ -55,5 +55,9 @@ it("serializes control operations and excludes a second daemon", async () => {
       order.push(3);
     }),
   ]);
-  expect(order).toEqual([1, 2, 3]);
+  // flock guarantees mutual exclusion, not acquisition in JavaScript call order.
+  expect([
+    [1, 2, 3],
+    [3, 1, 2],
+  ]).toContainEqual(order);
 });
