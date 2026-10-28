@@ -997,6 +997,8 @@ export class SessionController {
 
     // Real dispose: the SDK runtime is torn down; the wrapper/bridge
     // survive. The next message restores the persistent default identity.
+    const closingSessionId = this.deps.host.getStatus().sessionId;
+    const notifyClose = !closingSessionId || closingSessionId !== this.defaultSessionId;
     this.state = "replacing";
     this.invalidateRuns();
     try {
@@ -1007,7 +1009,7 @@ export class SessionController {
       );
       this.state = "inactive";
       this.deps.logger.info({ project: this.deps.projectId }, "session auto-closed (idle)");
-      if (this.deps.broadcastText) {
+      if (notifyClose && this.deps.broadcastText) {
         await this.deps
           .broadcastText("本次会话已关闭")
           .catch((err: unknown) =>
