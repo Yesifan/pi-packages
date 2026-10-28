@@ -56,6 +56,16 @@ function agentCwd(agent: Agent): string {
   return initialized(agent.cwd, "Agent cwd");
 }
 
+function isCommentary(signature: string | undefined): boolean {
+  if (!signature) return false;
+  try {
+    const parsed = JSON.parse(signature);
+    return parsed?.v === 1 && parsed?.phase === "commentary";
+  } catch {
+    return false; // Legacy opaque signatures have no phase.
+  }
+}
+
 function identity(agent: Agent): SessionIdentity {
   if (!agent.identity)
     throw new SubagentError(
@@ -751,10 +761,32 @@ export class RootRuntime implements DelegationRuntimeApi {
       }
     }
     if (event.type === "agent_settled") {
+      if (event.aborted) {
+        void this.failExecution(
+          execution,
+          new SubagentError(
+            "ABORTED",
+            "The SDK reported an aborted execution; the cancellation source is unknown.",
+          ),
+        );
+        return;
+      }
       execution.sdkSettled = true;
       // SDK public message_end precedes persistence. Only a later settled with the entry on
       // the active Pi branch acknowledges processing; a send Promise is never an acknowledgment.
-      const branch = mountedSession(execution).sessionManager.getBranch();
+      let branch: ReturnType<SessionManager["getBranch"]>;
+      try {
+        branch = execution.pendingReports.size
+          ? mountedSession(execution).sessionManager.getBranch()
+          : [];
+      } catch (error) {
+        this.diagnostic(execution, "processing_failed", "SESSION_HISTORY_UNAVAILABLE");
+        void this.failExecution(
+          execution,
+          new SubagentError("SESSION_HISTORY_UNAVAILABLE", asSubagentError(error).message),
+        );
+        return;
+      }
       const usedReceipts = execution.reportReceipts ?? new Set<string>();
       execution.reportReceipts = usedReceipts;
       for (const delivery of execution.pendingReports) {
@@ -776,6 +808,7 @@ export class RootRuntime implements DelegationRuntimeApi {
         usedReceipts.add(entry.id);
         delivery.recordedEntryId = entry.id;
         delivery.processed = true;
+        this.diagnostic(delivery.source, "delivery_processed");
         execution.pendingReports.delete(delivery);
         execution.scope.deliveries.delete(delivery);
       }
@@ -799,6 +832,7 @@ export class RootRuntime implements DelegationRuntimeApi {
       !this.current(execution) ||
       !execution.accepted ||
       execution.finalizing ||
+      execution.reportSuppression ||
       !execution.sdkSettled
     )
       return;
@@ -856,19 +890,27 @@ export class RootRuntime implements DelegationRuntimeApi {
       entries.find((entry) => entry.type === "message" && entry.message.role === "user")?.id ??
       execution.startLeafId ??
       undefined;
-    if (execution.failure) {
-      report.outcome = "failed";
-      report.error = execution.failure;
-      report.result = "";
-      return report;
-    }
     const last = [...entries]
       .reverse()
       .find((entry) => entry.type === "message" && entry.message.role === "assistant");
+    if (execution.failure) {
+      report.outcome = execution.terminalOutcome ?? "failed";
+      report.error = { ...execution.failure };
+      if (
+        report.outcome === "aborted" &&
+        last?.type === "message" &&
+        last.message.role === "assistant" &&
+        last.message.errorMessage
+      )
+        report.error.message += ` SDK detail: ${last.message.errorMessage}`;
+      report.result = "";
+      return report;
+    }
     if (last?.type === "message" && last.message.role === "assistant") {
       const message = last.message;
       report.result = message.content
         .filter((value) => value.type === "text")
+        .filter((value) => !isCommentary(value.textSignature))
         .map((value) => value.text)
         .join("\n");
       report.outcome =
@@ -879,8 +921,13 @@ export class RootRuntime implements DelegationRuntimeApi {
             : message.stopReason === "length"
               ? "incomplete"
               : "completed";
-      if (message.errorMessage)
-        report.error = { code: "MODEL_ERROR", message: message.errorMessage };
+      if (message.errorMessage || report.outcome === "failed" || report.outcome === "aborted")
+        report.error = {
+          code: report.outcome === "aborted" ? "ABORTED" : "MODEL_ERROR",
+          message:
+            message.errorMessage ??
+            "The SDK stopped this execution without a more specific reason.",
+        };
       if (!report.result && report.outcome === "completed") {
         report.outcome = "incomplete";
         report.result =
@@ -891,7 +938,23 @@ export class RootRuntime implements DelegationRuntimeApi {
   }
   private async finalize(execution: Execution): Promise<void> {
     if (!this.current(execution)) return;
-    const report = this.result(execution);
+    let report: SubagentReport;
+    try {
+      report = this.result(execution);
+    } catch (error) {
+      report = {
+        name: execution.agent.name,
+        agentType: execution.agent.roleSnapshot.id,
+        cwd: agentCwd(execution.agent),
+        outcome: execution.terminalOutcome ?? "failed",
+        result: "No final result could be read from this execution's history.",
+        error: execution.failure ?? {
+          code: "SESSION_HISTORY_UNAVAILABLE",
+          message: asSubagentError(error).message,
+        },
+      };
+    }
+    this.diagnostic(execution, "terminal", report.error?.code ?? report.outcome);
     const mountedManager = execution.session?.sessionManager;
     const mountedHistory = mountedManager
       ? {
@@ -916,7 +979,8 @@ export class RootRuntime implements DelegationRuntimeApi {
       target.pendingReports.add(delivery);
       target.pendingChildren.delete(execution);
     }
-    execution.agent.state = "idle";
+    execution.agent.state =
+      report.outcome === "aborted" || report.outcome === "interrupted" ? "interrupted" : "idle";
     try {
       await this.saveAgent(execution.agent);
     } catch (error) {
@@ -926,8 +990,13 @@ export class RootRuntime implements DelegationRuntimeApi {
       this.notify(error);
     }
     await this.releaseExecution(execution);
+    if (execution.cleanupFailure) {
+      report.outcome = "failed";
+      report.error = execution.cleanupFailure;
+      report.result = "The execution stopped, but its session cleanup failed.";
+    }
     if (!this.deliveryCurrent(delivery)) {
-      execution.scope.deliveries.delete(delivery);
+      this.suppressDelivery(delivery);
       return;
     }
     try {
@@ -947,22 +1016,28 @@ export class RootRuntime implements DelegationRuntimeApi {
       /* Unavailable history is explicitly represented by the report formatter. */
     }
     if (!this.deliveryCurrent(delivery)) {
-      execution.scope.deliveries.delete(delivery);
+      this.suppressDelivery(delivery);
       return;
     }
+    this.diagnostic(execution, "delivery_attempt");
     execution.reportSubmitted = true;
     delivery.submitted = true;
     const status = this.statusFor(execution.agent.parent);
     if (!("agent" in target)) {
       try {
         this.host.sendReport(report, status);
-        delivery.processed = true;
+        // Root sendReport is void: submission is not a processing receipt.
+        this.diagnostic(execution, "delivery_submitted");
+      } catch (error) {
+        this.diagnostic(execution, "delivery_failed", asSubagentError(error).code);
+        this.notify(error);
       } finally {
         execution.scope.deliveries.delete(delivery);
       }
       return;
     }
     if (!delivery.sourceEntryId) {
+      this.diagnostic(execution, "delivery_failed", "SESSION_HISTORY_UNAVAILABLE");
       target.pendingReports.delete(delivery);
       execution.scope.deliveries.delete(delivery);
       await this.failExecution(
@@ -974,37 +1049,74 @@ export class RootRuntime implements DelegationRuntimeApi {
       );
       return;
     }
-    delivery.receiptBoundary = mountedSession(target).sessionManager.getLeafId();
-    target.sdkSettled = false;
-    target.phase = "executing";
-    this.holdPrompt(target);
-    void mountedSession(target)
-      .sendCustomMessage(
-        {
-          customType: "subagent-report",
-          content: formatSubagentReport(report, status),
-          display: true,
-          details: {
-            ...report,
-            delegation_status: status,
-            sourceSessionId: identity(execution.agent).sessionId,
-            sourceEntryId: delivery.sourceEntryId,
+    let promptHeld = false;
+    try {
+      delivery.receiptBoundary = mountedSession(target).sessionManager.getLeafId();
+      target.sdkSettled = false;
+      target.phase = "executing";
+      this.holdPrompt(target);
+      promptHeld = true;
+      void mountedSession(target)
+        .sendCustomMessage(
+          {
+            customType: "subagent-report",
+            content: formatSubagentReport(report, status),
+            display: true,
+            details: {
+              ...report,
+              delegation_status: status,
+              sourceSessionId: identity(execution.agent).sessionId,
+              sourceEntryId: delivery.sourceEntryId,
+            },
           },
-        },
-        { deliverAs: "steer", triggerTurn: true },
-      )
-      .then(
-        () => {
-          this.releasePrompt(target);
-          this.maybeFinalize(target);
-        },
-        (error) => {
-          this.releasePrompt(target);
-          // A receipt may already have removed delivery at settled, but the same owning
-          // execution still needs the subsequent SDK completion failure before finalizing.
-          if (this.current(target)) void this.failExecution(target, error);
-        },
+          { deliverAs: "steer", triggerTurn: true },
+        )
+        .then(
+          () => {
+            this.releasePrompt(target);
+            this.diagnostic(execution, "delivery_submitted");
+            this.maybeFinalize(target);
+          },
+          (error) => {
+            this.releasePrompt(target);
+            this.diagnostic(execution, "delivery_failed", asSubagentError(error).code);
+            // A receipt may already have removed delivery at settled, but the same owning
+            // execution still needs the subsequent SDK completion failure before finalizing.
+            if (this.current(target)) void this.failExecution(target, error);
+          },
+        );
+    } catch (error) {
+      if (promptHeld) this.releasePrompt(target);
+      this.diagnostic(execution, "delivery_failed", asSubagentError(error).code);
+      target.pendingReports.delete(delivery);
+      execution.scope.deliveries.delete(delivery);
+      await this.failExecution(target, error);
+    }
+  }
+  private suppressDelivery(delivery: ReportDelivery): void {
+    this.diagnostic(
+      delivery.source,
+      "delivery_suppressed",
+      delivery.source.scope.closing ? "root_closed" : "caller_unavailable",
+    );
+    if ("agent" in delivery.target) delivery.target.pendingReports.delete(delivery);
+    delivery.source.scope.deliveries.delete(delivery);
+  }
+  private diagnostic(execution: Execution, event: string, reason?: string): void {
+    // No prompts, tool output, result bodies or provider error text in lifecycle logs.
+    try {
+      console.warn(
+        JSON.stringify({
+          component: "pi-subagents",
+          name: execution.agent.name,
+          sessionId: execution.agent.identity?.sessionId,
+          event,
+          ...(reason ? { reason } : {}),
+        }),
       );
+    } catch {
+      /* Logging cannot prevent cleanup. */
+    }
   }
   private deliveryCurrent(delivery: ReportDelivery): boolean {
     const scope = delivery.source.scope;
@@ -1017,16 +1129,34 @@ export class RootRuntime implements DelegationRuntimeApi {
     );
   }
   private async failExecution(execution: Execution, error: unknown): Promise<void> {
-    if (!this.current(execution) || execution.finalizing) return;
-    const failure = asSubagentError(error);
+    if (!this.current(execution) || execution.finalizing || execution.reportSuppression) return;
+    if (execution.failure) {
+      if (execution.failure.code === "ABORTED" && !(error instanceof SubagentError))
+        execution.failure.message = asSubagentError(error).message;
+      return;
+    }
+    const cancelled = error instanceof Error && error.name === "AbortError";
+    const failure = asSubagentError(error, cancelled ? "ABORTED" : "INTERNAL_ERROR");
     execution.failure = { code: failure.code, message: failure.message };
-    await Promise.all([...execution.pendingChildren].map((child) => this.interrupt(child)));
-    for (const delivery of execution.pendingReports) execution.scope.deliveries.delete(delivery);
-    execution.pendingReports.clear();
-    await execution.session?.abort().catch((abortError) => this.notify(abortError));
-    if (!this.current(execution)) return;
-    execution.sdkSettled = true;
-    this.maybeFinalize(execution);
+    execution.terminalOutcome =
+      failure.code === "INTERRUPTED"
+        ? "interrupted"
+        : failure.code === "ABORTED"
+          ? "aborted"
+          : "failed";
+    // Stop callbacks from finalizing while descendant cleanup is still in flight.
+    this.holdPrompt(execution);
+    try {
+      await Promise.all(
+        [...execution.pendingChildren].map((child) => this.interrupt(child, true, "parent_failed")),
+      );
+      for (const delivery of execution.pendingReports) this.suppressDelivery(delivery);
+      await execution.session?.abort().catch((abortError) => this.notify(abortError));
+      if (this.current(execution)) execution.sdkSettled = true;
+    } finally {
+      this.releasePrompt(execution);
+      this.maybeFinalize(execution);
+    }
   }
   private releaseExecution(execution: Execution): Promise<void> {
     execution.release ??= this.releaseResources(execution);
@@ -1042,6 +1172,11 @@ export class RootRuntime implements DelegationRuntimeApi {
     try {
       await execution.opened?.dispose();
     } catch (error) {
+      execution.cleanupFailure = {
+        code: "SESSION_CLEANUP_FAILED",
+        message: asSubagentError(error).message,
+      };
+      this.diagnostic(execution, "cleanup_failed", "SESSION_CLEANUP_FAILED");
       this.notify(error);
     }
     execution.opened = undefined;
@@ -1209,18 +1344,33 @@ export class RootRuntime implements DelegationRuntimeApi {
     }
     return abort;
   }
-  private async interrupt(execution: Execution, descendants = true): Promise<void> {
+  private async interrupt(
+    execution: Execution,
+    descendants = true,
+    suppression?: "parent_failed",
+  ): Promise<void> {
+    if (!suppression && !execution.scope.closing && this.current(execution) && execution.accepted) {
+      await this.failExecution(
+        execution,
+        new SubagentError(
+          "INTERRUPTED",
+          "The host interrupted this execution; no more specific reason is available.",
+        ),
+      );
+      return;
+    }
+    execution.reportSuppression = suppression ?? "root_closed";
+    if (execution.accepted && !execution.finalizing)
+      this.diagnostic(execution, "delivery_suppressed", execution.reportSuppression);
     // Signal this mount and descendants before waiting for any one abort to settle.
     const abort = this.abortExecution(execution);
     await Promise.all([
       abort,
-      ...(descendants ? [...execution.pendingChildren].map((child) => this.interrupt(child)) : []),
+      ...(descendants
+        ? [...execution.pendingChildren].map((child) => this.interrupt(child, true, suppression))
+        : []),
     ]);
-    execution.agent.state = execution.finalizing
-      ? "idle"
-      : execution.accepted
-        ? "interrupted"
-        : "idle";
+    if (!execution.finalizing) execution.agent.state = execution.accepted ? "interrupted" : "idle";
     if (execution.agent.identity)
       await this.saveAgent(execution.agent).catch((error) => this.notify(error));
     if ("agent" in execution.parent) execution.parent.pendingChildren.delete(execution);

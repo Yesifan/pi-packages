@@ -11,7 +11,7 @@ AgentSession，并提供 `subagent` 与 `ask_subagent` 工具。实现基线为
 [`docs/README.md`](docs/README.md) 索引及相关引用。
 新增、编辑或实施规格前先阅读并遵守 [`规格索引与维护规则`](docs/specs/README.md)，同步规格 metadata 与索引。
 
-当前工作区已实现 [`Spec 0002`](docs/specs/0002-prompt-and-session-storage.md) 的 runtime 重写与私有 history 目录；最新 typecheck、21 个文件 / 245 项测试、build 与 pack 通过。此前 runtime 独立最终复审已完成，不将其冒充最新目录修订已复审；该审查由主代理记录。实际交互 TUI/print 手测未运行，用户明确接受延期并关闭 Spec 0002（completed），不能因此声称 §14 CLI 全验收通过。PR #11 尚未合并，用户要求把最终目录/discovery 直接整合进原 Spec 0002 和 [`ADR-0003`](docs/adr/0003-sdk-sessions-and-parent-metadata.md)，不另立后续规格/决策。权威规格中的 V1 大节仅保留真实历史资料；当前按顶部摘要、Spec 0002/ADR-0003 执行，独立打开仍允许。[`Spec 0003`](docs/specs/0003-terminal-exit-reporting.md) 仍为未开始的异常退出通知计划，未经授权不要顺带实施。
+当前工作区已实现 [`Spec 0002`](docs/specs/0002-prompt-and-session-storage.md) 的 runtime 重写与私有 history 目录；最新 typecheck、21 个文件 / 245 项测试、build 与 pack 通过。此前 runtime 独立最终复审已完成，不将其冒充最新目录修订已复审；该审查由主代理记录。实际交互 TUI/print 手测未运行，用户明确接受延期并关闭 Spec 0002（completed），不能因此声称 §14 CLI 全验收通过。PR #11 尚未合并，用户要求把最终目录/discovery 直接整合进原 Spec 0002 和 [`ADR-0003`](docs/adr/0003-sdk-sessions-and-parent-metadata.md)，不另立后续规格/决策。权威规格中的 V1 大节仅保留真实历史资料；当前按顶部摘要、Spec 0002/ADR-0003 执行，独立打开仍允许。[`Spec 0003`](docs/specs/0003-terminal-exit-reporting.md) 记录 #40 本轮异常退出通知实现与自动验收；CLI 手测未运行，不扩大跨重启补投或 parent 失败逐 child 通知范围。
 
 当前升级合同见 [ADR-0004](docs/adr/0004-official-sdk-lifecycle.md)；它替代上述历史 preflight/严格模型恢复约定，旧验收不代表 Pi 1.4.0 验证通过。
 
