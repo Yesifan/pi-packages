@@ -43,6 +43,19 @@ import type {
 } from "./types.js";
 import { RootUiBroker } from "./ui.js";
 
+// Lifecycle-only values must be initialized before use. Fail at the boundary rather
+// than masking a broken invariant with a fallback or a silent early return.
+function initialized<T>(value: T | undefined, label: string): T {
+  if (value === undefined) throw new SubagentError("INTERNAL_ERROR", `${label} is not initialized`);
+  return value;
+}
+function mountedSession(execution: Execution) {
+  return initialized(execution.session, "Execution session");
+}
+function agentCwd(agent: Agent): string {
+  return initialized(agent.cwd, "Agent cwd");
+}
+
 function identity(agent: Agent): SessionIdentity {
   if (!agent.identity)
     throw new SubagentError(
@@ -564,7 +577,7 @@ export class RootRuntime implements DelegationRuntimeApi {
     thinking?: SubagentThinkingLevel,
   ): Promise<void> {
     const agent = execution.agent;
-    const cwd = agent.cwd!;
+    const cwd = agentCwd(agent);
     const depth = caller.depth + 1;
     const canDelegate =
       cwd !== caller.delegation.cwd &&
@@ -645,15 +658,16 @@ export class RootRuntime implements DelegationRuntimeApi {
     this.assertCurrent(execution);
     if (signal?.aborted)
       throw new SubagentError("ABORTED", "Tool call was aborted before submission");
+    const session = mountedSession(execution);
     execution.accepted = true;
     execution.phase = "executing";
     this.holdPrompt(execution);
-    const completion = execution.session!.prompt(prompt, { expandPromptTemplates: false });
+    const completion = session.prompt(prompt, { expandPromptTemplates: false });
     void completion.then(
       () => {
         this.releasePrompt(execution);
         if (this.current(execution)) {
-          execution.sdkSettled = execution.session!.isIdle;
+          execution.sdkSettled = session.isIdle;
           this.maybeFinalize(execution);
         }
       },
@@ -695,12 +709,12 @@ export class RootRuntime implements DelegationRuntimeApi {
         ? "has an SDK execution that has settled and is not streaming"
         : "has an SDK execution that is currently not streaming";
     }
-    if (reason || !execution)
+    if (reason || !execution || !execution.session)
       throw new SubagentError("SUBAGENT_NOT_STEERABLE", `${agent.name} ${reason}.`);
     signal?.throwIfAborted();
     this.holdPrompt(execution);
     try {
-      const disposition = await execution.session!.steer(prompt);
+      const disposition = await execution.session.steer(prompt);
       if (disposition === "handled")
         throw new SubagentError(
           "PROMPT_HANDLED",
@@ -740,7 +754,7 @@ export class RootRuntime implements DelegationRuntimeApi {
       execution.sdkSettled = true;
       // SDK public message_end precedes persistence. Only a later settled with the entry on
       // the active Pi branch acknowledges processing; a send Promise is never an acknowledgment.
-      const branch = execution.session!.sessionManager.getBranch();
+      const branch = mountedSession(execution).sessionManager.getBranch();
       const usedReceipts = execution.reportReceipts ?? new Set<string>();
       execution.reportReceipts = usedReceipts;
       for (const delivery of execution.pendingReports) {
@@ -819,11 +833,11 @@ export class RootRuntime implements DelegationRuntimeApi {
     const report: SubagentReport = {
       name: agent.name,
       agentType: agent.roleSnapshot.id,
-      cwd: agent.cwd!,
+      cwd: agentCwd(agent),
       outcome: "incomplete",
       result: "No final assistant text was produced for this task.",
     };
-    const branch = execution.session!.sessionManager.getBranch();
+    const branch = mountedSession(execution).sessionManager.getBranch();
     const index = execution.startLeafId
       ? branch.findIndex((entry) => entry.id === execution.startLeafId)
       : -1;
@@ -960,12 +974,12 @@ export class RootRuntime implements DelegationRuntimeApi {
       );
       return;
     }
-    delivery.receiptBoundary = target.session!.sessionManager.getLeafId();
+    delivery.receiptBoundary = mountedSession(target).sessionManager.getLeafId();
     target.sdkSettled = false;
     target.phase = "executing";
     this.holdPrompt(target);
-    void target
-      .session!.sendCustomMessage(
+    void mountedSession(target)
+      .sendCustomMessage(
         {
           customType: "subagent-report",
           content: formatSubagentReport(report, status),
@@ -1067,13 +1081,13 @@ export class RootRuntime implements DelegationRuntimeApi {
     if ("agent" in execution.parent) this.maybeFinalize(execution.parent);
   }
   private owner(agent: Agent): SessionIdentity {
-    return agent.parent ? identity(agent.parent) : this.scope!.identity;
+    return agent.parent ? identity(agent.parent) : initialized(this.scope, "Root scope").identity;
   }
   private ownerParent(agent: Agent): SessionIdentity | null {
     return agent.parent
       ? agent.parent.parent
         ? identity(agent.parent.parent)
-        : this.scope!.identity
+        : initialized(this.scope, "Root scope").identity
       : null;
   }
   private ensureBranch(agent: Agent): Promise<void> {
@@ -1107,14 +1121,16 @@ export class RootRuntime implements DelegationRuntimeApi {
       ok: true,
       name: execution.agent.name,
       agent_type: execution.agent.roleSnapshot.id,
-      cwd: execution.agent.cwd!,
-      thinking: execution.opened!.actualThinking,
+      cwd: agentCwd(execution.agent),
+      thinking: initialized(execution.opened, "Opened child").actualThinking,
       status,
       delegation_status: this.statusFor(execution.agent.parent),
     };
   }
   private statusFor(parent: Agent | null) {
-    const children = [...(parent?.children ?? this.scope!.children).values()];
+    const children = [
+      ...(parent?.children ?? initialized(this.scope, "Root scope").children).values(),
+    ];
     const direct = children.map((agent) => ({
       name: agent.name,
       agentType: agent.roleSnapshot.id,
@@ -1126,7 +1142,7 @@ export class RootRuntime implements DelegationRuntimeApi {
     }));
     return createDelegationStatusSnapshot(
       direct.filter((agent) => agent.state === "running"),
-      this.scope!.executions.size,
+      initialized(this.scope, "Root scope").executions.size,
       this.rootConfig.maxLiveAgents,
       direct,
     );
