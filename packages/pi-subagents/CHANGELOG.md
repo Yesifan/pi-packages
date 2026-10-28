@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.1
+
+### Patch Changes
+
+- c12b055: Report accepted subagent cancellations and interruptions once to the original live caller, exclude commentary from final results, preserve nested processing barriers, and diagnose delivery failures or shutdown suppression without promising cross-restart delivery.
+- e52a900: Replace runtime non-null assertions with explicit lifecycle invariant checks and retain the mounted session during prompt completion.
+
 ## 0.6.0
 
 ### Minor Changes
