@@ -2,8 +2,8 @@
 
 ---
 
-status: not-started
-execution_time: "2026-10-09"
+status: completed
+execution_time: "2026-10-09 / 2026-10-28"
 commit: null
 version: null
 related_documents:
@@ -17,7 +17,7 @@ related_documents:
 
 用户委派后台任务后，即使 child 没有生成最终回复、被取消或因 SDK/工具异常退出，直接 parent 也应收到明确终态和原因，不能一直误以为仍在运行。主代理无需通过 steering 失败或再次 ask 才发现任务已结束。
 
-本需求来自两次异常终态已记录但 delivery 为 pending 的现场；事实与未知原因见[证据记录](evidence/0003-terminal-exit-2026-10-09.md)。本规格只记录退出通知要求，不把 abort 推断为进程崩溃、挂起或模型自愿暂停。
+本需求来自两次异常终态已记录但 delivery 为 pending 的现场；事实与未知原因见[证据记录](evidence/0003-terminal-exit-2026-10-09.md)。本规格定义退出通知要求，不把 abort 推断为进程崩溃、挂起或模型自愿暂停。
 
 ## Solution
 
@@ -66,7 +66,7 @@ related_documents:
 - T09：持久化、mount 清理、发送及接收处理分别注入异常，不会显示假 processed 或留下永远等待的 parent；日志可区分投递失败与归属失效，不能依据 idle/completed 状态推断已发送。
 - T10：缺少或损坏历史明确显示不可读取，不伪造路径；通知本身不因最终正文为空而消失。
 
-使用临时 PI_CODING_AGENT_DIR 隔离状态、可控 Promise/barrier 构造竞争，不靠 sleep。测试须真实证明发送后处理语义；mock 可以验证归属竞争，不能冒充真实 SDK 确认。上述测试边界为拟采用方案，实施前请用户确认是否还需要真实 CLI 手测边界。
+使用临时 PI_CODING_AGENT_DIR 隔离状态、可控 Promise/barrier 构造竞争，不靠 sleep。测试须真实证明发送后处理语义；mock 可以验证归属竞争，不能冒充真实 SDK 确认。本轮按 #40 修复请求执行 runtime integration 与锁定 Pi 1.4.0 SDK gate；真实 CLI 手测未运行，不据自动测试宣称已验证交互式退出。
 
 ## Out of Scope
 
@@ -75,12 +75,23 @@ related_documents:
 - 跨重启补投、持久 delivery、exactly-once inbox、恢复旧布局 pending 记录或迁移现场旧数据。
 - 向新 root 转交旧 child 报告，或自动重跑未完成任务。
 - 周期性进度报告、超时判死、自动续跑或新的查询/取消 LLM tool。
-- 本次文档任务不继续 Spec 0002 剩余实现，不把未完成回归标为通过。
+- 不继续 Spec 0002 的其他后续任务，不把未执行手测标为通过。
 
 ## Further Notes
 
 - 本规格扩展 Spec 0002 的在线终态通知覆盖，不改变其“不承诺重启后补投”决策。
 - 现场最后一条 assistant 为 error，旧记录 delivery pending，当前 root 已不同；尚未证明原 parent 有效时确实丢投，需在实施阶段复现并分类根因。
-- 需要用户确认测试边界：以 runtime integration + 锁定 SDK gates 为主，是否要求额外真实 CLI 退出/切换验证。
+- 本轮用户明确要求修复 #40 并提交 PR；测试以 runtime integration + 锁定 SDK gates 为主，真实 CLI 退出/切换手测未运行。
 - 用户已确认：parent 自身失败并中断 children 不在本版通知范围内；不增加逐份投递或汇总协议。
 - 若希望 root 已关闭后也保证通知，需另行确认持久化与恢复策略；这会改变 Spec 0002 的已批准范围，本规格暂不加入。
+
+## 2026-10-28 实施与验证
+
+- SDK `agent_settled.aborted`、AbortError rejection 与宿主有效中断归入单次终态出口；保留已知错误文本，未知取消来源明确说明未知。取消/中断保存为 interrupted；ordinary ask 仍可显式重新执行。
+- commentary 通过 Pi 1.4.0 `TextContent.textSignature` 的 v1 phase 识别，不当作最终正文；没有最终正文时提供宿主诊断。历史提取失败仍清理资源并发失败报告，历史路径继续独立验证。
+- 原 parent Execution 的报告处理 barrier、E1/E2 归属和 scope 检查不变。root void send 只记录 submitted，不记录假 processed。同步/异步发送失败导致有效 parent 走失败收尾，不留下永久 pendingReports。
+- 通过 Node stderr 输出 JSON 生命周期诊断：terminal、delivery_attempt/submitted/processed/failed/suppressed、processing_failed、cleanup_failed；仅记录 name、Pi sessionId、事件和原因代码，不记录 prompt、完整工具输出或结果正文。root_closed / caller_unavailable / parent_failed 区分抑制归属；不向新 root 转交。
+- root shutdown/replacement 的已接受执行保存 interrupted，终态消息不投给正在关闭的接收方；parent 自身失败造成的 child 中断不逐份通知，记录 parent_failed。进程被 kill 或掉电无法在线记录日志/发送，下一次执行周期获取锁后把残留 running 恢复为 interrupted；无补投、无自动续跑。
+- 自动验收：受影响包 typecheck、包级 Biome（无警告）、25 文件 / 294 项测试通过、2 项跳过、build 与 pack 通过；tarball 包含 dist/runtime.js，不含测试、AGENTS.md 或开发配置。新增 15 项 runtime regression + 2 项真实 Pi 1.4.0 SDK gate；既有恢复、scope 替换、E1/E2、pre-accept/handled 和 processing barrier 回归继续通过。
+- T01/T03/T07/T08/T10 由既有回归与新增竞争/历史异常测试覆盖；T02/T04/T09 新增取消、无最终文本、发送/持久化/清理失败测试。T05 保持 root 模型停止不触发 runtime shutdown 的原有接线；T06 自动测试覆盖 runtime shutdown/replacement 与历史验证竞争。真实交互式 root abort/退出/切换 CLI 手测未运行，不声称该边界已实测。
+- 完整进程被 kill/机器掉电时无法在线通知，沿既有 running→interrupted 的下一执行周期恢复约定，不新增补偿队列或必达承诺。

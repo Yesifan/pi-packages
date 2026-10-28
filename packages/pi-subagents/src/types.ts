@@ -139,6 +139,9 @@ export interface Execution {
   startLeafId: string | null;
   sourceEntryId?: string;
   failure?: { code: string; message: string };
+  terminalOutcome?: RunOutcome;
+  reportSuppression?: "root_closed" | "parent_failed";
+  cleanupFailure?: { code: string; message: string };
   progress: SubagentProgressState;
 }
 export interface ReportDelivery {

@@ -8,7 +8,7 @@
 **实现语言：** TypeScript，ES modules  
 **用途：** 交给 coding agent 完成 package、测试、示例和使用文档。
 
-[Spec 0002](0002-prompt-and-session-storage.md) 的展示、name 接口、SDK 私有目录原生 history、按直接 parent metadata 和 Execution/RootScope 生命周期重写均已在当前工作区实现。最新 privateDir 修订已通过 typecheck、21 个文件 / 245 项测试、build 与 pack；此前 runtime 独立最终复审确认 5 项问题已解决，不将旧复审冒充最新目录修订已复审，该审查由主代理记录。用户于 2026-10-09 明确要求先标记完成再提交 PR，接受在实际交互 TUI/print 手动验收前关闭 Spec 0002。手测实际未运行、延期跟进，completed 不证明 §14 全部验收通过。[Spec 0003](https://github.com/Yesifan/pi-packages/blob/main/packages/pi-subagents/docs/specs/0003-terminal-exit-reporting.md) 的异常退出通知扩展仍未开始，不属于本轮完成声明。
+[Spec 0002](0002-prompt-and-session-storage.md) 的展示、name 接口、SDK 私有目录原生 history、按直接 parent metadata 和 Execution/RootScope 生命周期重写均已在当前工作区实现。最新 privateDir 修订已通过 typecheck、21 个文件 / 245 项测试、build 与 pack；此前 runtime 独立最终复审确认 5 项问题已解决，不将旧复审冒充最新目录修订已复审，该审查由主代理记录。用户于 2026-10-09 明确要求先标记完成再提交 PR，接受在实际交互 TUI/print 手动验收前关闭 Spec 0002。手测实际未运行、延期跟进，completed 不证明 §14 全部验收通过。[Spec 0003](https://github.com/Yesifan/pi-packages/blob/main/packages/pi-subagents/docs/specs/0003-terminal-exit-reporting.md) 扩展异常终态覆盖与诊断；本轮实现与自动验收记录见该规格，不代表已执行 CLI 手测。
 
 ## 当前契约与规格优先级
 
@@ -29,7 +29,7 @@ D2 允许 child 独立打开/resume/继续聊天，不增加 owned-child guard �
 
 此前 Spec 0002 的存储变更是 BREAKING：旧 project-local/legacy agentDir store 的 agents 不在新 registry 恢复、无法继续 ask；不迁移、不兼容、不删除旧文件。本次 Pi 1.4 升级不清空当前 schema 的身份/history，也不新引入存储迁移。优先简单 SDK 行为和有用日志，未批准边缘策略延后。当前实现与原 runtime 独立复审已完成，privateDir 修订自动验证已通过；Spec 0002 按用户决定关闭，完成状态不代替目录修订的独立审查；实际交互 TUI/print 手动验收未运行、延期跟进。
 
-当前 child schemaVersion 为 1，hasChildren 标记用于已初始化分支缺失诊断，不是 owned-child 索引。prompt 前完成 opening→running 持久化，running 表示本包承担后台责任，不表示 streaming；写入失败不调用 SDK，写入后到调用前退出保守恢复为 interrupted。ask 使用 SDK 原生模型/thinking 恢复、默认选择、fallback 与 clamp，展示已有公开诊断，无可用模型或后续调用失败正常报错；history 身份/cwd/损坏检查不变。nested report 使用 Pi entry identity 与 settled 的处理 barrier；root 使用返回 void 的宿主 sendReport，成功仅表示 submitted、不是 processed 证明；成功提交后释放 scope delivery，无本包 root parent mount finalize 依赖。持有至 SDK 处理确认仅适用于 nested Execution，不新增 root inbox/receipt，不承诺跨重启补投或 exactly-once。异常退出通路进一步覆盖、抑制/失败日志要求仅为 Spec 0003 计划，不能据本摘要声称该计划已实施。
+当前 child schemaVersion 为 1，hasChildren 标记用于已初始化分支缺失诊断，不是 owned-child 索引。prompt 前完成 opening→running 持久化，running 表示本包承担后台责任，不表示 streaming；写入失败不调用 SDK，写入后到调用前退出保守恢复为 interrupted。ask 使用 SDK 原生模型/thinking 恢复、默认选择、fallback 与 clamp，展示已有公开诊断，无可用模型或后续调用失败正常报错；history 身份/cwd/损坏检查不变。nested report 使用 Pi entry identity 与 settled 的处理 barrier；root 使用返回 void 的宿主 sendReport，成功仅表示 submitted、不是 processed 证明；成功提交后释放 scope delivery，无本包 root parent mount finalize 依赖。持有至 SDK 处理确认仅适用于 nested Execution，不新增 root inbox/receipt，不承诺跨重启补投或 exactly-once。异常退出通路、抑制/失败诊断及取消状态由 Spec 0003 扩展；实际自动验收与未执行手测的边界见该规格。
 
 公开 session.steer() 接受 skill/template 展开与 extension command 拒绝；queued 不保证原 run 存活或消费，调用前取消不提交，hook 期间取消不承诺零入队。迟到 queued 仅留在捕获 session，不另启 run、不生成独立报告或搬运到后续任务。prompt/steer 调用与清理未完成仍 busy；shutdown 使用公开 abort，等待 dispose 后最后释放 writer lock，不合作 hook 不保证强制终止。每 mount 独立使用官方 services factories，保留 trust 前置、loader 配置、own-extension 排除、角色 prompt 顺序及三项 builtins；拒绝 error diagnostics，不手工重接 provider/runtime。
 
