@@ -17,9 +17,9 @@
 - PR #11 尚未合并，按用户要求将最终目录/discovery 决策直接整合进原 Spec 0002/ADR-0003，不另立后续规格或虚构已发布的替代历史。Spec 0002 保持 completed，日期 `2026-10-08 / 2026-10-09`；用户明确接受实际交互 TUI/print 手测延期，手测未运行，不表示 §14 全部验收通过。
 - 最新 privateDir 修订已有 typecheck、21 文件 / 245 测试、build、pack 成功记录。原 runtime 独立复审已解决此前 5 项问题；不将该旧复审冒充最新目录修订已复审，该审查由主代理记录。root submitted 无 processing receipt、queued 不可撤回、不合作 hook 保留关闭锁、路径检查非 sandbox 的边界继续有效。
 
-## 待实施的异常退出通知
+## 异常退出通知
 
-- [Spec 0003：异常退出也向主代理报告](https://github.com/Yesifan/pi-packages/blob/main/packages/pi-subagents/docs/specs/0003-terminal-exit-reporting.md) — 未开始实现；包含[现场证据](https://github.com/Yesifan/pi-packages/blob/main/packages/pi-subagents/docs/specs/evidence/0003-terminal-exit-2026-10-09.md)。不因本轮目录修订声称异常退出通知或诊断完善已完成。
+- [Spec 0003：异常退出也向主代理报告](https://github.com/Yesifan/pi-packages/blob/main/packages/pi-subagents/docs/specs/0003-terminal-exit-reporting.md) — #40 本轮实施与验证见规格正文；包含[现场证据](https://github.com/Yesifan/pi-packages/blob/main/packages/pi-subagents/docs/specs/evidence/0003-terminal-exit-2026-10-09.md)。本轮增加取消/失败终态覆盖及投递诊断，交互式 CLI 手测未运行。
 
 ## 原生 Codemode 与 MCP
 
