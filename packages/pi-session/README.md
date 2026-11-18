@@ -1,6 +1,6 @@
 # pi-session
 
-Pi extension for session references, history search and lightweight background conversations. Requires Node.js 22.19+ and Pi 1.1.0+; development baseline: Pi 1.4.0.
+Pi extension for session references, history search and lightweight background conversations. Requires Node.js 22.19+ and Pi 1.1.0+; development baseline: Pi 1.5.2.
 
 ## Install
 

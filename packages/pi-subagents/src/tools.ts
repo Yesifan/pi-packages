@@ -1,4 +1,3 @@
-import { StringEnum } from "@earendil-works/pi-ai";
 import type {
   AgentToolResult,
   ExtensionContext,
@@ -18,7 +17,9 @@ import {
   type SubagentThinkingLevel,
 } from "./types.js";
 
-const thinkingSchema = StringEnum(SUBAGENT_THINKING_LEVELS, {
+const thinkingSchema = Type.Unsafe<SubagentThinkingLevel>({
+  type: "string",
+  enum: [...SUBAGENT_THINKING_LEVELS],
   description: "Thinking level for this subagent.",
 });
 
