@@ -22,6 +22,7 @@ import {
   buildProgressWidgetLines,
   createSubagentProgressState,
 } from "./progress.js";
+import { describeSubagentResult } from "./result.js";
 import { createDelegationStatusSnapshot, formatSubagentReport } from "./status.js";
 import { PersistentSubagentStore } from "./store.js";
 import type { DelegationRuntimeApi } from "./tools.js";
@@ -56,14 +57,9 @@ function agentCwd(agent: Agent): string {
   return initialized(agent.cwd, "Agent cwd");
 }
 
-function isCommentary(signature: string | undefined): boolean {
-  if (!signature) return false;
-  try {
-    const parsed = JSON.parse(signature);
-    return parsed?.v === 1 && parsed?.phase === "commentary";
-  } catch {
-    return false; // Legacy opaque signatures have no phase.
-  }
+function lastPersistedActivity(manager: SessionManager): number {
+  const lastMessage = manager.getBranch().findLast((entry) => entry.type === "message");
+  return Date.parse(lastMessage?.timestamp ?? manager.getHeader()?.timestamp ?? "") || 0;
 }
 
 function identity(agent: Agent): SessionIdentity {
@@ -240,6 +236,7 @@ export class RootRuntime implements DelegationRuntimeApi {
             children: new Map(),
             state,
             cwd: childCwd,
+            lastActiveAt: lastPersistedActivity(manager),
             ...(record.hasChildren ? { hasChildren: true } : {}),
           };
           (owner?.children ?? scope.children).set(name, agent);
@@ -490,6 +487,7 @@ export class RootRuntime implements DelegationRuntimeApi {
       parent: caller.agent,
       children: new Map(),
       state: "opening",
+      lastActiveAt: 0,
     };
     const execution = this.reserve(agent, parent, scope);
     children.set(name, agent);
@@ -670,9 +668,13 @@ export class RootRuntime implements DelegationRuntimeApi {
       throw new SubagentError("ABORTED", "Tool call was aborted before submission");
     const session = mountedSession(execution);
     execution.accepted = true;
+    execution.agent.lastActiveAt = Date.now();
     execution.phase = "executing";
     this.holdPrompt(execution);
-    const completion = session.prompt(prompt, { expandPromptTemplates: false });
+    const completion = session.prompt(prompt, {
+      expandPromptTemplates: false,
+      source: "extension",
+    });
     void completion.then(
       () => {
         this.releasePrompt(execution);
@@ -724,7 +726,7 @@ export class RootRuntime implements DelegationRuntimeApi {
     signal?.throwIfAborted();
     this.holdPrompt(execution);
     try {
-      const disposition = await execution.session.steer(prompt);
+      const disposition = await execution.session.steer(prompt, undefined, { source: "extension" });
       if (disposition === "handled")
         throw new SubagentError(
           "PROMPT_HANDLED",
@@ -738,6 +740,7 @@ export class RootRuntime implements DelegationRuntimeApi {
   }
   private onEvent(execution: Execution, event: AgentSessionEvent): void {
     if (!this.current(execution)) return;
+    if (event.type === "message_end") execution.agent.lastActiveAt = Date.now();
     applyProgressEvent(execution.progress, event);
     this.refreshProgress();
     if (event.type === "agent_start") {
@@ -890,9 +893,9 @@ export class RootRuntime implements DelegationRuntimeApi {
       entries.find((entry) => entry.type === "message" && entry.message.role === "user")?.id ??
       execution.startLeafId ??
       undefined;
-    const last = [...entries]
-      .reverse()
-      .find((entry) => entry.type === "message" && entry.message.role === "assistant");
+    const last = entries.findLast(
+      (entry) => entry.type === "message" && entry.message.role === "assistant",
+    );
     if (execution.failure) {
       report.outcome = execution.terminalOutcome ?? "failed";
       report.error = { ...execution.failure };
@@ -906,35 +909,9 @@ export class RootRuntime implements DelegationRuntimeApi {
       report.result = "";
       return report;
     }
-    if (last?.type === "message" && last.message.role === "assistant") {
-      const message = last.message;
-      report.result = message.content
-        .filter((value) => value.type === "text")
-        .filter((value) => !isCommentary(value.textSignature))
-        .map((value) => value.text)
-        .join("\n");
-      report.outcome =
-        message.stopReason === "error"
-          ? "failed"
-          : message.stopReason === "aborted"
-            ? "aborted"
-            : message.stopReason === "length"
-              ? "incomplete"
-              : "completed";
-      if (message.errorMessage || report.outcome === "failed" || report.outcome === "aborted")
-        report.error = {
-          code: report.outcome === "aborted" ? "ABORTED" : "MODEL_ERROR",
-          message:
-            message.errorMessage ??
-            "The SDK stopped this execution without a more specific reason.",
-        };
-      if (!report.result && report.outcome === "completed") {
-        report.outcome = "incomplete";
-        report.result =
-          "The final response contains no text; inspect the complete conversation for non-text content.";
-      }
-    }
-    return report;
+    const message =
+      last?.type === "message" && last.message.role === "assistant" ? last.message : undefined;
+    return { ...report, ...describeSubagentResult(message) };
   }
   private async finalize(execution: Execution): Promise<void> {
     if (!this.current(execution)) return;
@@ -1022,10 +999,15 @@ export class RootRuntime implements DelegationRuntimeApi {
     this.diagnostic(execution, "delivery_attempt");
     execution.reportSubmitted = true;
     delivery.submitted = true;
-    const status = this.statusFor(execution.agent.parent);
+    const parent = execution.agent.parent;
+    const status = this.statusFor(parent);
+    const activity = new Map(
+      Array.from(this.directChildren(parent), ([name, agent]) => [name, agent.lastActiveAt ?? 0]),
+    );
+    const content = formatSubagentReport(report, status, activity);
     if (!("agent" in target)) {
       try {
-        this.host.sendReport(report, status);
+        this.host.sendReport(report, status, content);
         // Root sendReport is void: submission is not a processing receipt.
         this.diagnostic(execution, "delivery_submitted");
       } catch (error) {
@@ -1060,7 +1042,7 @@ export class RootRuntime implements DelegationRuntimeApi {
         .sendCustomMessage(
           {
             customType: "subagent-report",
-            content: formatSubagentReport(report, status),
+            content,
             display: true,
             details: {
               ...report,
@@ -1262,11 +1244,12 @@ export class RootRuntime implements DelegationRuntimeApi {
       delegation_status: this.statusFor(execution.agent.parent),
     };
   }
+  private directChildren(parent: Agent | null) {
+    return parent?.children ?? initialized(this.scope, "Root scope").children;
+  }
+
   private statusFor(parent: Agent | null) {
-    const children = [
-      ...(parent?.children ?? initialized(this.scope, "Root scope").children).values(),
-    ];
-    const direct = children.map((agent) => ({
+    const direct = Array.from(this.directChildren(parent).values(), (agent) => ({
       name: agent.name,
       agentType: agent.roleSnapshot.id,
       state: agent.currentExecution

@@ -1,13 +1,15 @@
+import { realpathSync } from "node:fs";
 import {
   type AgentSession,
   createAgentSession,
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
+import { describeSessionResult } from "./result.js";
 import { findSession, type SessionTarget } from "./sessions.js";
 
 export type TaskSession = Pick<
   AgentSession,
-  "prompt" | "steer" | "getLastAssistantText" | "messages" | "isStreaming"
+  "abort" | "prompt" | "steer" | "subscribe" | "sessionManager" | "isStreaming"
 > & { dispose: () => void | Promise<void> };
 export interface TaskReport extends SessionTarget {
   status: "completed" | "failed";
@@ -27,26 +29,43 @@ export interface TaskDependencies {
 }
 
 async function loadSession(target: SessionTarget): Promise<TaskSession> {
-  const { session } = await createAgentSession({
-    cwd: target.cwd,
-    sessionManager: SessionManager.open(target.path),
-  });
-  const dispose = session.dispose.bind(session);
-  let cleanup: Promise<void> | undefined;
-  const shutdown = () =>
-    (cleanup ??= Promise.resolve().then(async () => {
-      try {
-        await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
-      } finally {
-        dispose();
-      }
-    }));
+  if (realpathSync(target.path) !== target.path) {
+    throw new Error("Session path no longer matches the authorized target");
+  }
+  const sessionManager = SessionManager.open(target.path);
+  const openedPath = sessionManager.getSessionFile();
+  if (
+    sessionManager.getSessionId() !== target.id ||
+    !openedPath ||
+    realpathSync(openedPath) !== target.path ||
+    realpathSync(sessionManager.getCwd()) !== target.cwd
+  ) {
+    throw new Error("Opened session identity or cwd does not match the authorized target");
+  }
+  const { session } = await createAgentSession({ cwd: target.cwd, sessionManager });
+  const dispose = async () => {
+    try {
+      await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+    } finally {
+      session.dispose();
+    }
+  };
   try {
     // Headless defaults intentionally use the target project's resources, not caller overrides.
     await session.bindExtensions({ mode: "print" });
-    return Object.assign(session, { dispose: shutdown });
+    return {
+      abort: () => session.abort(),
+      prompt: (text, options) => session.prompt(text, options),
+      steer: (text, images, options) => session.steer(text, images, options),
+      subscribe: (listener) => session.subscribe(listener),
+      sessionManager,
+      get isStreaming() {
+        return session.isStreaming;
+      },
+      dispose,
+    };
   } catch (error) {
-    await shutdown();
+    await dispose();
     throw error;
   }
 }
@@ -56,6 +75,8 @@ type ActiveTask = {
   session?: TaskSession;
   loading?: Promise<TaskSession>;
   cleanup?: Promise<void>;
+  pending: Set<Promise<unknown>>;
+  unsubscribe?: () => void;
 };
 
 /** One runtime per caller lifecycle. No idle cache, external locks, or restart recovery. */
@@ -85,14 +106,14 @@ export class SessionTasks {
     const target = this.deps.find(request.cwd, request.id);
     const existing = this.active.get(request.id);
     if (request.steer) {
-      if (!existing || existing.target.path !== target.path)
+      if (!existing || existing.target.path !== target.path || existing.cleanup)
         throw new Error("No active task for this session");
       if (!existing.session) throw new Error("Session is still loading; cannot steer yet");
       if (!existing.session.isStreaming) throw new Error("Session is not streaming; cannot steer");
       const session = existing.session;
-      const result = await session.steer(request.prompt, undefined, {
-        source: "extension",
-      });
+      const result = await this.track(existing, () =>
+        session.steer(request.prompt, undefined, { source: "extension" }),
+      );
       if (
         result === "queued" &&
         (this.closed ||
@@ -110,7 +131,7 @@ export class SessionTasks {
       };
     }
     if (existing) throw new Error("Session is busy");
-    const task: ActiveTask = { target };
+    const task: ActiveTask = { target, pending: new Set() };
     this.active.set(target.id, task);
     void this.run(task, request.prompt, report);
     return { status: "accepted", id: target.id, path: target.path };
@@ -127,22 +148,17 @@ export class SessionTasks {
       const session = await task.loading;
       task.session = session;
       if (this.closed) return;
-      const previous = session.messages.findLast((message) => message.role === "assistant");
-      await session.prompt(prompt, { source: "extension" });
-      const latest = session.messages.findLast((message) => message.role === "assistant");
-      const last = latest !== previous ? latest : undefined;
-      if (
-        last?.role === "assistant" &&
-        (last.stopReason === "error" || last.stopReason === "aborted")
-      ) {
-        throw new Error(last.errorMessage || `Session ${last.stopReason}`);
-      }
+      task.unsubscribe = session.subscribe((event) => {
+        if (event.type === "agent_start" && task.cleanup) {
+          // An input hook may resume after an earlier abort observed an idle session.
+          void this.abort(session);
+        }
+      });
+      const startLeafId = session.sessionManager.getLeafId();
+      await this.track(task, () => session.prompt(prompt, { source: "extension" }));
       result = {
         ...task.target,
-        status: "completed",
-        text:
-          (last ? session.getLastAssistantText() : undefined) ??
-          "Session completed without an assistant response.",
+        ...describeSessionResult(startLeafId, session.sessionManager.getBranch()),
       };
     } catch (error) {
       result = {
@@ -163,11 +179,34 @@ export class SessionTasks {
     }
   }
 
+  private track<T>(task: ActiveTask, call: () => Promise<T>): Promise<T> {
+    const pending = Promise.resolve().then(() => {
+      if (task.cleanup) throw new Error("Session stopped before the SDK call could run");
+      return call();
+    });
+    task.pending.add(pending);
+    return pending.finally(() => task.pending.delete(pending));
+  }
+
+  private async abort(session: TaskSession): Promise<void> {
+    try {
+      await session.abort();
+    } catch (error) {
+      this.deps.onReportError(error);
+    }
+  }
+
   private cleanup(task: ActiveTask): Promise<void> {
     task.cleanup ??= Promise.resolve().then(async () => {
       // Loading may still be binding extensions; do not race their startup with shutdown.
       const session = await task.loading?.catch(() => undefined);
       try {
+        if (session && task.pending.size) {
+          const abort = this.abort(session);
+          await Promise.allSettled(task.pending);
+          await abort;
+        }
+        task.unsubscribe?.();
         await session?.dispose();
       } catch (error) {
         this.deps.onReportError(error);

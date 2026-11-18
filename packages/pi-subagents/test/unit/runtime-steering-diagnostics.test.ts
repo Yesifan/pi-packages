@@ -87,7 +87,7 @@ describe("steering rejection diagnostics", () => {
     );
     value.prompt.mockResolvedValue("queued");
     await expect(value.steer()).resolves.toBe(result);
-    expect(value.prompt).toHaveBeenCalledWith("Focus");
+    expect(value.prompt).toHaveBeenCalledWith("Focus", undefined, { source: "extension" });
     expect(value.agent.currentExecution).toBe(value.execution);
     expect(value.execution.pendingChildren.size).toBe(1);
   });

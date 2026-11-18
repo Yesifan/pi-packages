@@ -5,7 +5,6 @@ import { buildDelegationContext } from "./delegation.js";
 import { asSubagentError, SubagentError } from "./errors.js";
 import { canonicalizeDirectory, findProjectRoot } from "./paths.js";
 import { RootRuntime } from "./runtime.js";
-import { formatSubagentReport } from "./status.js";
 import { createDelegationExtension, type DelegationRuntimeApi } from "./tools.js";
 import type {
   CallerBinding,
@@ -121,11 +120,11 @@ export default function piSubagents(
           rootSessionId: ctx.sessionManager.getSessionId(),
           rootSessionFile,
           ctx,
-          sendReport: (report: SubagentReport, status: DelegationStatusSnapshot) => {
+          sendReport: (report, status, content) => {
             pi.sendMessage(
               {
                 customType: "subagent-report",
-                content: formatSubagentReport(report, status),
+                content,
                 display: true,
                 details: deliveredReport(report, status),
               },

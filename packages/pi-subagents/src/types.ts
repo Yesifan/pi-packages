@@ -98,7 +98,7 @@ export interface RootHostBinding {
   rootSessionId: string;
   rootSessionFile: string;
   ctx: ExtensionContext;
-  sendReport(report: SubagentReport, status: DelegationStatusSnapshot): void;
+  sendReport(report: SubagentReport, status: DelegationStatusSnapshot, content: string): void;
 }
 export interface RootScope {
   identity: SessionIdentity;
@@ -118,6 +118,7 @@ export interface Agent {
   state: ChildState;
   hasChildren?: true;
   cwd?: string;
+  lastActiveAt?: number;
   currentExecution?: Execution;
 }
 export interface Execution {
