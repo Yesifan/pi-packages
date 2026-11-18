@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
@@ -136,7 +136,7 @@ it.each(modes)("tolerates autocomplete and notify failures in %s", async (mode) 
 it.each(modes)("expands interactive/rpc input but skips extension input in %s", async (mode) => {
   const target = saved(cwd, "Notes");
   const h = harness(cwd, mode);
-  const input = `@s:${target.getSessionId()}`;
+  const input = `@session[Notes](${target.getSessionId()})`;
   for (const source of ["interactive", "rpc", "extension"]) {
     const result = await h.handlers.get("input")!({ text: input, source }, h.ctx);
     expect(result).toEqual(
@@ -150,6 +150,30 @@ it.each(modes)("expands interactive/rpc input but skips extension input in %s", 
   }
 });
 
+it("keeps valid RPC references expanded when duplicate-ID notification fails", async () => {
+  const valid = saved(cwd, "Valid");
+  const duplicate = saved(cwd, "Duplicate");
+  const actual = await SessionManager.list(cwd);
+  const copy = actual.find((entry) => entry.id === duplicate.getSessionId())!;
+  const list = vi
+    .spyOn(SessionManager, "list")
+    .mockResolvedValue([...actual, { ...copy, path: `${copy.path}.copy` }]);
+  const h = harness(cwd, "rpc");
+  vi.mocked(h.ctx.ui.notify).mockImplementation(() => {
+    throw new Error("notify failed");
+  });
+  try {
+    const text = `@session[x](${duplicate.getSessionId()}) @session[x](${valid.getSessionId()})`;
+    expect(await h.handlers.get("input")!({ text, source: "rpc" }, h.ctx)).toEqual({
+      action: "transform",
+      text: `@session[x](${duplicate.getSessionId()}) Read or search Valid ${valid.getSessionFile()} if more context is needed.`,
+    });
+    expect(h.ctx.ui.notify).toHaveBeenCalledOnce();
+  } finally {
+    list.mockRestore();
+  }
+});
+
 it("keeps input unchanged even when enumeration and warning both fail", async () => {
   const h = harness(cwd, "rpc");
   const list = vi.spyOn(SessionManager, "list").mockRejectedValue(new Error("enumeration failed"));
@@ -157,7 +181,9 @@ it("keeps input unchanged even when enumeration and warning both fail", async ()
     throw new Error("notify failed");
   });
   try {
-    expect(await h.handlers.get("input")!({ text: "@s:unknown", source: "rpc" }, h.ctx)).toEqual({
+    expect(
+      await h.handlers.get("input")!({ text: "@session[unknown](unknown)", source: "rpc" }, h.ctx),
+    ).toEqual({
       action: "continue",
     });
     expect(h.ctx.ui.notify).toHaveBeenCalledOnce();
@@ -170,20 +196,28 @@ it("discovers real SDK sessions, refreshes names, inserts IDs and expands only i
   const local = saved(cwd, "Design notes");
   const external = saved(other, "Design elsewhere");
   const h = harness(cwd);
+  await mkdir(join(cwd, ".pi/pi-session"), { recursive: true });
+  await writeFile(
+    join(cwd, ".pi/pi-session/setting.json"),
+    JSON.stringify({ externalDirectories: [other] }),
+  );
   await h.handlers.get("session_start")!({}, h.ctx);
   const original = { getSuggestions: vi.fn(async () => null), applyCompletion: vi.fn() };
   const provider = h.addAutocompleteProvider.mock.calls[0][0](original);
   const options = { signal: new AbortController().signal };
-  const localResults = await provider.getSuggestions(["@s:Design"], 0, 9, options);
-  expect(localResults.items.map((x: { value: string }) => x.value)).toEqual([
-    `@s:${local.getSessionId()}`,
-  ]);
-  expect((await provider.getSuggestions(["@as:Design"], 0, 10, options)).items).toHaveLength(2);
-  local.appendSessionInfo("Renamed notes");
-  expect((await provider.getSuggestions(["@s:Renamed"], 0, 10, options)).items[0].label).toBe(
-    "Renamed notes",
+  const localResults = await provider.getSuggestions(["@Design"], 0, 7, options);
+  expect(localResults.items.map((x: { value: string }) => x.value)).toEqual(
+    expect.arrayContaining([
+      `@session[Design notes](${local.getSessionId()})`,
+      `@session[Design elsewhere](${external.getSessionId()})`,
+    ]),
   );
-  const input = `before @s:${local.getSessionId()}\n@as:${external.getSessionId()} after`;
+  local.appendSessionInfo("Renamed notes");
+  await provider.getSuggestions(["plain"], 0, 5, options);
+  expect((await provider.getSuggestions(["@Renamed"], 0, 8, options)).items[0].label).toBe(
+    "[session]Renamed notes",
+  );
+  const input = `before @session[old](${local.getSessionId()})\n@session[other](${external.getSessionId()}) after`;
   const result = await h.handlers.get("input")!({ text: input, source: "interactive" }, h.ctx);
   expect(result?.action).toBe("transform");
   expect(result?.text).toBe(
@@ -193,6 +227,124 @@ it("discovers real SDK sessions, refreshes names, inserts IDs and expands only i
     action: "continue",
   });
   expect(h.sendMessage).not.toHaveBeenCalled();
+});
+
+it("uses Untitled for an SDK session without a first user message", async () => {
+  const empty = SessionManager.create(cwd);
+  empty.appendMessage({ role: "user", content: "", timestamp: Date.now() });
+  const infos = await SessionManager.listAll();
+  expect(infos.find((info) => info.id === empty.getSessionId())?.firstMessage).toBe(
+    "(no messages)",
+  );
+  const h = harness(cwd);
+  await h.handlers.get("session_start")!({}, h.ctx);
+  const provider = h.addAutocompleteProvider.mock.calls[0][0]({
+    getSuggestions: vi.fn(async () => null),
+    applyCompletion: vi.fn(),
+  });
+  const result = await provider.getSuggestions(["@untitled"], 0, 9, {
+    signal: new AbortController().signal,
+  });
+  expect(result.items[0]).toMatchObject({
+    label: "[session]Untitled",
+    value: `@session[Untitled](${empty.getSessionId()})`,
+  });
+});
+
+it("restricts discovery and expansion to exact authorized canonical projects", async () => {
+  const nested = join(other, "nested");
+  await mkdir(nested);
+  const local = saved(cwd, "Same");
+  const remote = saved(other, "Same");
+  const child = saved(nested, "Same");
+  const alias = join(root, "alias");
+  await symlink(other, alias);
+  const h = harness(cwd);
+  await h.handlers.get("session_start")!({}, h.ctx);
+  const provider = h.addAutocompleteProvider.mock.calls[0][0]({
+    getSuggestions: vi.fn(async () => null),
+    applyCompletion: vi.fn(),
+  });
+  const opts = { signal: new AbortController().signal };
+  expect(
+    (await provider.getSuggestions(["@same"], 0, 5, opts)).items.map(
+      (item: { value: string }) => item.value,
+    ),
+  ).toEqual([`@session[Same](${local.getSessionId()})`]);
+  const input = `@session[x](${remote.getSessionId()}) @session[x](${child.getSessionId()})`;
+  expect(await h.handlers.get("input")!({ text: input, source: "interactive" }, h.ctx)).toEqual({
+    action: "continue",
+  });
+  await mkdir(join(cwd, ".pi/pi-session"), { recursive: true });
+  await writeFile(
+    join(cwd, ".pi/pi-session/setting.json"),
+    JSON.stringify({ externalDirectories: [alias, other] }),
+  );
+  await provider.getSuggestions(["plain"], 0, 5, opts);
+  const result = await provider.getSuggestions(["@same"], 0, 5, opts);
+  expect(result.items.map((item: { label: string }) => item.label)).toEqual([
+    "[session]Same",
+    "[session other]Same",
+  ]);
+  const expanded = await h.handlers.get("input")!({ text: input, source: "interactive" }, h.ctx);
+  expect(expanded?.text).toBe(
+    `Read or search Same ${remote.getSessionFile()} if more context is needed. @session[x](${child.getSessionId()})`,
+  );
+  await writeFile(join(cwd, ".pi/pi-session/setting.json"), "{");
+  expect(await h.handlers.get("input")!({ text: input, source: "interactive" }, h.ctx)).toEqual({
+    action: "continue",
+  });
+  expect(h.ctx.ui.notify).toHaveBeenCalledWith(
+    expect.stringContaining("Session references left unchanged"),
+    "warning",
+  );
+});
+
+it("discovers SDK sessions stored under explicit caller and external symlink spellings", async () => {
+  const callerAlias = join(root, "caller-alias");
+  const externalAlias = join(root, "external-alias");
+  await symlink(cwd, callerAlias);
+  await symlink(other, externalAlias);
+  const local = saved(callerAlias, "Alias local");
+  const remote = saved(externalAlias, "Alias remote");
+  saved(other, "Alias canonical");
+  await mkdir(join(cwd, ".pi/pi-session"), { recursive: true });
+  await writeFile(
+    join(cwd, ".pi/pi-session/setting.json"),
+    JSON.stringify({ externalDirectories: [externalAlias] }),
+  );
+  const h = harness(callerAlias);
+  await h.handlers.get("session_start")!({}, h.ctx);
+  const provider = h.addAutocompleteProvider.mock.calls[0][0]({
+    getSuggestions: vi.fn(async () => null),
+    applyCompletion: vi.fn(),
+  });
+  const result = await provider.getSuggestions(["@alias"], 0, 6, {
+    signal: new AbortController().signal,
+  });
+  expect(result.items.map((item: { label: string }) => item.label)).toEqual(
+    expect.arrayContaining([
+      "[session]Alias local",
+      "[session other]Alias remote",
+      "[session other]Alias canonical",
+    ]),
+  );
+  const input = `@session[x](${local.getSessionId()}) @session[x](${remote.getSessionId()})`;
+  const expanded = await h.handlers.get("input")!({ text: input, source: "interactive" }, h.ctx);
+  expect(expanded?.text).toBe(
+    `Read or search Alias local ${local.getSessionFile()} if more context is needed. Read or search Alias remote ${remote.getSessionFile()} if more context is needed.`,
+  );
+  await writeFile(
+    join(cwd, ".pi/pi-session/setting.json"),
+    JSON.stringify({ externalDirectories: [externalAlias, join(root, "missing")] }),
+  );
+  expect(await h.handlers.get("input")!({ text: input, source: "interactive" }, h.ctx)).toEqual({
+    action: "continue",
+  });
+  expect(h.ctx.ui.notify).toHaveBeenCalledWith(
+    expect.stringContaining("Session references left unchanged"),
+    "warning",
+  );
 });
 
 describe("tool registration boundary", () => {

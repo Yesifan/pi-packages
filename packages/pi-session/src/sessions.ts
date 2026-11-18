@@ -16,6 +16,13 @@ export async function resolveCwd(callerCwd: string, requested?: string): Promise
   const caller = await directory(callerCwd);
   const target = await directory(requested?.trim() ? requested : caller);
   if (target === caller) return target;
+  for (const allowed of await externalDirectories(caller)) {
+    if ((await directory(allowed)) === target) return target;
+  }
+  throw new Error(`Unauthorized cwd: ${target}`);
+}
+
+async function externalDirectories(caller: string): Promise<string[]> {
   let config: unknown;
   try {
     config = JSON.parse(await readFile(join(caller, ".pi/pi-session/setting.json"), "utf8"));
@@ -27,13 +34,42 @@ export async function resolveCwd(callerCwd: string, requested?: string): Promise
   if (!Array.isArray(entries) || entries.some((entry) => typeof entry !== "string")) {
     throw new Error("externalDirectories must be an array of directory paths");
   }
-  for (const entry of entries as string[]) {
-    const expanded = entry
-      .replace(/^~(?=\/|$)/, homedir())
-      .replace(/\$\{HOME\}|\$HOME(?=\/|$)/g, homedir());
-    if ((await directory(expanded)) === target) return target;
+  return (entries as string[]).map((entry) =>
+    entry.replace(/^~(?=\/|$)/, homedir()).replace(/\$\{HOME\}|\$HOME(?=\/|$)/g, homedir()),
+  );
+}
+
+/** Discover only configured canonical directories; reject misplaced or unresolvable session headers. */
+export async function listAuthorizedSessions(cwd: string, signal: AbortSignal) {
+  const caller = await directory(cwd);
+  const spellings = [cwd, ...(await externalDirectories(caller))];
+  const canonical = await Promise.all(spellings.map(directory));
+  const locations = new Map<string, string>();
+  for (let i = 0; i < spellings.length; i++) {
+    locations.set(spellings[i], canonical[i]);
+    locations.set(canonical[i], canonical[i]);
   }
-  throw new Error(`Unauthorized cwd: ${target}`);
+  signal.throwIfAborted();
+  const groups = await Promise.all(
+    [...locations.keys()].map((dir) => SessionManager.list(dir, undefined, undefined, signal)),
+  );
+  const result = [];
+  const seen = new Set<string>();
+  for (const [i, expected] of [...locations.values()].entries()) {
+    for (const info of groups[i]) {
+      signal.throwIfAborted();
+      try {
+        if ((await directory(info.cwd)) === expected && !seen.has(info.path)) {
+          seen.add(info.path);
+          result.push({ ...info, cwd: expected === caller ? cwd : expected });
+        }
+      } catch {
+        // A missing or invalid header cwd cannot establish authorization.
+      }
+    }
+  }
+  signal.throwIfAborted();
+  return result;
 }
 
 export interface SessionTarget {
@@ -78,7 +114,12 @@ export async function searchSessions(
   const matches: SessionMatch[] = [];
   for (const info of infos.sort((a, b) => b.modified.getTime() - a.modified.getTime())) {
     signal?.throwIfAborted();
-    if (!info.cwd || realpathSync(info.cwd) !== realpathSync(cwd)) continue;
+    try {
+      if (!info.cwd || realpathSync(info.cwd) !== realpathSync(cwd)) continue;
+    } catch {
+      // Stale or inaccessible header directories cannot be authorized.
+      continue;
+    }
     const lines = info.allMessagesText
       .split(/\r?\n/)
       .filter((line) => line.toLowerCase().includes(needle));

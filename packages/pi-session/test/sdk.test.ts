@@ -68,12 +68,18 @@ it("binds the real extension in offline SDK RPC mode and shuts down its runtime"
     await session.bindExtensions({ mode: "rpc" });
     expect(runner.createContext().mode).toBe("rpc");
     expect((await search()).details).toMatchObject({ sessions: [{ id: target.getSessionId() }] });
-    expect(await runner.emitInput(`@s:${target.getSessionId()}`, undefined, "rpc")).toMatchObject({
+    expect(
+      await runner.emitInput(`@session[RPC notes](${target.getSessionId()})`, undefined, "rpc"),
+    ).toMatchObject({
       action: "transform",
       text: `Read or search RPC notes ${target.getSessionFile()} if more context is needed.`,
     });
     expect(
-      await runner.emitInput(`@s:${target.getSessionId()}`, undefined, "extension"),
+      await runner.emitInput(
+        `@session[RPC notes](${target.getSessionId()})`,
+        undefined,
+        "extension",
+      ),
     ).toMatchObject({ action: "continue" });
     await runner.emit({ type: "session_shutdown", reason: "quit" });
     await expect(search()).rejects.toThrow("active caller session");

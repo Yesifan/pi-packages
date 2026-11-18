@@ -1,15 +1,11 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { createReferenceProvider, expandReferences, type SessionList } from "./references.js";
-import { resolveCwd, searchSessions } from "./sessions.js";
+import { listAuthorizedSessions, resolveCwd, searchSessions } from "./sessions.js";
 import { SessionTasks } from "./tasks.js";
 
 function listFor(cwd: string): SessionList {
-  return (scope, signal) =>
-    scope === "all"
-      ? SessionManager.listAll(undefined, signal)
-      : SessionManager.list(cwd, undefined, undefined, signal);
+  return (_scope, signal) => listAuthorizedSessions(cwd, signal);
 }
 
 const cwdParameter = Type.Optional(
@@ -19,10 +15,12 @@ const cwdParameter = Type.Optional(
   }),
 );
 
-function warn(ctx: ExtensionContext, message: string, error: unknown): void {
+function warn(ctx: ExtensionContext, message: string, error?: unknown): void {
   try {
     ctx.ui.notify(
-      `${message}: ${error instanceof Error ? error.message : String(error)}`,
+      error === undefined
+        ? message
+        : `${message}: ${error instanceof Error ? error.message : String(error)}`,
       "warning",
     );
   } catch {
@@ -47,7 +45,7 @@ export default function piSession(pi: ExtensionAPI): void {
     tasks = new SessionTasks();
     try {
       ctx.ui.addAutocompleteProvider((current) =>
-        createReferenceProvider(current, listFor(ctx.cwd)),
+        createReferenceProvider(current, listFor(ctx.cwd), ctx.cwd),
       );
     } catch (error) {
       warn(ctx, "Session reference completion unavailable", error);
@@ -118,7 +116,9 @@ export default function piSession(pi: ExtensionAPI): void {
   pi.on("input", async (event, ctx) => {
     if (event.source !== "interactive" && event.source !== "rpc") return { action: "continue" };
     try {
-      const text = await expandReferences(event.text, listFor(ctx.cwd), ctx.signal);
+      const text = await expandReferences(event.text, listFor(ctx.cwd), ctx.signal, (message) =>
+        warn(ctx, message),
+      );
       return text === event.text ? { action: "continue" } : { action: "transform", text };
     } catch (error) {
       warn(ctx, "Session references left unchanged", error);

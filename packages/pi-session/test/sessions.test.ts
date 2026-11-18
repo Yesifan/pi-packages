@@ -111,6 +111,17 @@ describe("SDK session discovery", () => {
     expect(() => findSession(caller, misplaced.getSessionId())).toThrow("authorized project");
     expect((await searchSessions(caller, "needle")).sessions).toEqual([]);
   });
+  it("ignores stale header directories without losing valid results", async () => {
+    const local = session(caller, "needle local");
+    const stale = join(root, "stale");
+    await mkdir(stale);
+    const misplaced = SessionManager.create(stale, local.getSessionDir());
+    misplaced.appendMessage({ role: "user", content: "needle stale", timestamp: Date.now() });
+    await rm(stale, { recursive: true });
+    expect((await searchSessions(caller, "needle")).sessions.map((entry) => entry.id)).toEqual([
+      local.getSessionId(),
+    ]);
+  });
   it("rejects blank queries and canceled requests", async () => {
     await expect(searchSessions(caller, " ")).rejects.toThrow("empty");
     const controller = new AbortController();

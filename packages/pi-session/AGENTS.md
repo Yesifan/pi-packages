@@ -2,18 +2,18 @@
 
 `@yesifan/pi-session` 是一个 Pi 扩展，提供 session 引用补全、授权 cwd 历史正文搜索和在原会话中运行的轻量后台提问。实现基线为 `pnpm-workspace.yaml` 中 catalog 锁定的 Pi SDK 版本；涉及 SDK 行为时，以该版本的类型和源码为准。
 
-先阅读 [`README.md`](README.md) 了解当前公开行为，再阅读[规格索引与维护规则](docs/specs/README.md)。原始约定见 [pi-session 规格](docs/specs/pi-session.md)，跨模式及异步提示由[后续规格](docs/specs/pi-session-cross-mode.md) 扩展；后续规格未明确替代的行为继续遵循原规格。涉及 SDK 升级时同时核对[全仓升级规格](../../docs/specs/pi-1.4-upgrade.md)。
+先阅读 [`README.md`](README.md) 了解当前公开行为，再阅读[规格索引与维护规则](docs/specs/README.md)。原始约定见 [pi-session 规格](docs/specs/pi-session.md)，跨模式及异步提示由[跨模式规格](docs/specs/pi-session-cross-mode.md) 扩展，会话引用补全由[统一 @ 补全规格](docs/specs/pi-session-unified-at-completion.md)替代；后续规格未明确替代的行为继续遵循原规格。涉及 SDK 升级时同时核对[全仓升级规格](../../docs/specs/pi-1.4-upgrade.md)。
 
 修改公开语义、授权或生命周期边界前先核对规格；发现未被明确替代的冲突时暂停并与用户讨论，不自行选择新语义。包内规格统一放在 `docs/specs/` 并同步索引及相关引用。已完成规格不改写历史约定，后续行为变更新建规格并说明扩展或替代关系。
 
 ## 核心模型与不变量
 
-- `@s:` 查找当前 cwd 的有名会话，`@as:` 查找 SDK 标准存储中可发现的所有项目有名会话；不扫描任意自定义存储或 subagent 私有目录。
-- 补全选中后只插入保留前缀与完整 session ID，不提交输入、不注入会话正文。无匹配不回退到文件搜索；非 session 补全完整委托原 provider。
+- `@` 合并原生文件补全和当前 cwd、已授权外部 cwd 的会话；不扫描任意自定义存储或 subagent 私有目录。搜索覆盖标题和显示标签，选中会话插入 `@session[标题](完整ID)`，不提交输入、不注入会话正文。
+- 文件候选保持原 provider 行为；旧 `@s:` / `@as:` 不再作为引用解析。
 - 引用展开按 input source 决定：`interactive` 和 `rpc` 展开，`extension` 原样通过，不按运行 mode 筛选。未知 ID 或枚举失败时保留输入，通知失败不能阻断提交。
 - 两个工具在 TUI、RPC、JSON、print 均注册，执行要求调用方生命周期已启动且仍有效。runtime 初始化与补全注册分离；无 UI 或补全失败不能禁用工具，不将 `hasUI` 或 no-op provider 注册当作补全 UI 能力。
 - `search-session` 和 `ask-session` 默认使用 caller cwd；其他 cwd 必须在 `<caller-cwd>/.pi/pi-session/setting.json` 的 `externalDirectories` 中授权。工具 cwd 必须绝对化，经 realpath 后精确匹配，不按路径前缀授权子目录；枚举或运行前验证授权并核实实际 cwd。
-- cwd 授权不是文件系统沙箱，也不限制 `@as:` 名称发现；发现名称不代表获准搜索正文或运行会话。
+- cwd 授权不是文件系统沙箱；会话发现和引用展开仅覆盖当前及明确授权的目录。
 - 搜索使用 SDK 聚合的 user/assistant 文本，按大小写不敏感子串匹配，以换行截取片段；不承诺消息边界、行号或 toolResult/thinking 搜索。保留结果数量、片段长度限制及明确的截断标记。
 - `ask-session` 仅接受指定授权 cwd 内的完整 session ID，拒绝当前 caller session。在原持久化会话继续执行，不分叉、不复制为私有 history、不切换编辑器会话。
 - 目标使用目标 cwd 的默认 SDK 环境和已存历史，不继承 caller 的 trust、工具、UI 或其他覆盖配置，不承诺复现 CLI 专属加载能力。
@@ -47,7 +47,7 @@
 
 修复缺陷优先添加复现测试，按改动覆盖以下边界：
 
-- 补全范围、名称变化、自动建议与 Tab、保留前缀无匹配、过期查询及非 session provider 委托；
+- 补全授权范围、名称变化、自动建议与 Tab、文件 provider 委托及过期查询；
 - 多引用、空格名称与路径、未知 ID、枚举失败及完整 ID 插入到提交展开的转换；
 - 默认/空 cwd、绝对路径、home 展开、canonical 精确授权和实际 cwd 校验；
 - 搜索排序、片段截取、数量与长度限制及截断标记；

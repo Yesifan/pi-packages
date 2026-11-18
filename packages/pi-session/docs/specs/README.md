@@ -8,5 +8,6 @@
 | --- | --- | --- | --- |
 | [pi-session 跨模式](pi-session-cross-mode.md) | 扩展原已完成规格的 TUI-only 约定：四模式工具、source 输入展开、补全容错与异步生命周期提示。 | completed | 2026-10-23 / 2026-10-23 |
 | [pi-session](pi-session.md) | Session 名称引用补全、授权 cwd 正文搜索及通过完整 ID 继续原会话的轻量后台对话。 | completed | 2026-10-08 / 2026-10-21 |
+| [pi-session 统一 @ 补全](pi-session-unified-at-completion.md) | 替代原规格的引用补全与解析，将文件和授权项目会话合并到原生 `@` 列表。 | completed | 2026-11-18 / 2026-11-18 |
 
 已完成规格保留当时约定；跨模式规格未明确替代的行为继续遵循原规格。后续行为变更新建规格，并在此记录扩展或替代关系。

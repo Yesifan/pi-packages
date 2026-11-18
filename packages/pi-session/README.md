@@ -17,12 +17,11 @@ The extension calls Pi's public autocomplete-provider API in every mode. The ter
 
 ## Reference a session
 
-- `@s:query`: search named sessions in the current cwd.
-- `@as:query`: search named sessions across SDK-discoverable projects in Pi's standard storage.
+Type `@` to see native file candidates followed by recent sessions in the current project and authorized external projects. Type a keyword to search session titles as well as files. Current-project sessions appear as `[session]title`; external sessions appear as `[session project-name]title`, using the directory name. Candidates also provide cwd, activity time and ID. A session without a custom title uses its first-message summary, or `Untitled` if none is available.
 
-Queries are case-insensitive name substrings, with no whitespace. Use a word from a name containing spaces. Tokens start at the beginning of a line or after whitespace and end at whitespace. Candidates show the name, cwd, activity time and ID; the 20 most recently active matches are shown. Unnamed sessions are excluded. New or renamed sessions are visible on subsequent queries.
+Matching ignores case and searches full session titles and displayed labels, including `session` and external project names. Exact, prefix, then substring title matches rank ahead of label-only matches. Within a match category, current-project sessions come first, then the most recently updated. Displayed and inserted titles are limited to 80 Unicode characters including a trailing `…` when truncated; the complete title remains searchable and the full ID is preserved. Bare `@` shows the 20 most recently updated sessions in scope; a keyword searches all sessions in scope before selecting up to 20. File candidates are separately limited to 20 and retain native search, order and insertion behavior. A continuous completion reuses its session index; selection, leaving the `@` context or moving to a different reference refreshes it on the next query. Pi does not notify extensions when the menu is dismissed, so reopening it at the same position after Escape may reuse stale results.
 
-Selecting a candidate inserts **`@s:<full-ID>` or `@as:<full-ID>`** into the editor. It does not send anything. You can edit/delete it or add more text and references. On submission, each valid reference is transformed into:
+Selecting a session inserts **`@session[title](full-ID)`** into the editor. A `]` or backslash in the title is backslash-escaped, and newlines are replaced with spaces. Selection does not send anything. You can edit/delete it or add more text and references. On submission, each valid reference is resolved by full ID and transformed into:
 
 ```text
 Read or search <session name> <absolute path> if more context is needed.
@@ -30,13 +29,11 @@ Read or search <session name> <absolute path> if more context is needed.
 
 Expansion follows input **source**, not mode: `interactive` and `rpc` inputs are expanded in all four modes; `extension` inputs are left unchanged, including background ask/steer prompts. An RPC client can submit full-ID tokens even without a completion UI.
 
-The model and persisted user message receive this sentence, not the ID token. After reopening the session, recalled input history therefore contains the expanded sentence. Unknown IDs remain unchanged; enumeration errors leave the input unchanged with a best-effort warning. An unavailable or failing notification UI never blocks submission. No referenced conversation body is automatically injected.
-
-Reserved session prefixes never fall back to file search when no candidate matches. Other commands, file completions and provider wrappers are delegated unchanged.
+The model and persisted user message receive this sentence, not the ID token. After reopening the session, recalled input history therefore contains the expanded sentence. Unknown IDs remain unchanged; duplicate IDs among SDK-returned sessions and enumeration errors reported by the SDK leave affected input unchanged with a best-effort warning. An unavailable or failing notification UI never blocks submission. The SDK can silently skip unreadable directories or session files, so discovery may be incomplete and duplicate IDs in skipped sessions cannot be detected. No referenced conversation body is automatically injected. The old `@s:` and `@as:` reference formats are no longer expanded; they are ordinary text.
 
 ## Authorize another cwd
 
-Both tools default to the caller's cwd when `cwd` is omitted or empty. To allow another directory, create **`<caller-cwd>/.pi/pi-session/setting.json`**:
+Both tools default to the caller's cwd when `cwd` is omitted or empty. Session completion and reference resolution also use the current cwd and authorized external directories. To allow another directory, create **`<caller-cwd>/.pi/pi-session/setting.json`**:
 
 ```json
 {
@@ -44,9 +41,9 @@ Both tools default to the caller's cwd when `cwd` is omitted or empty. To allow 
 }
 ```
 
-Paths are canonicalized with realpath and must match exactly: authorizing a directory does **not** authorize its children. Configuration paths can use `~` or `$HOME`; tool arguments must be absolute paths. Configuration is read on each external-cwd call.
+Paths are canonicalized with realpath and must match exactly: authorizing a directory does **not** authorize its children. Configuration paths can use `~` or `$HOME`; tool arguments must be absolute paths. Configuration is read on each external-cwd call and when the session completion index is refreshed. If a configured directory is invalid or unavailable, session discovery fails closed: file completion still works, but references remain unchanged with a warning until the configuration is fixed.
 
-This is a cwd admission rule, **not a filesystem sandbox**. `@as:` name discovery is not restricted by this whitelist; finding a name does not authorize tool execution or body search in that project.
+This is a cwd admission rule, **not a filesystem sandbox**. Session completion and reference resolution are limited to these authorized directories. Discovery checks configured path spellings and their canonical paths; sessions stored under other symlink spellings may not be found. `ask-session` uses the canonical cwd's storage, so it may not find a session discovered under a symlink spelling.
 
 ## Tools
 

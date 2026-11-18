@@ -7,7 +7,6 @@
 | Spec | Purpose | Status | Execution time |
 | --- | --- | --- | --- |
 | [Pi 1.4.0 全仓升级](pi-1.4-upgrade.md) | 原版 SDK 升级、官方 services/恢复/steering 替换、submitted 与串行清理合同、daemon UI 类型及四包回归。 | completed | 2026-10-22 / 2026-10-22 |
-
 | [后台会话与子代理报告](background-session-maintenance.md) | 对齐后台输入来源和结果判定，扩展会话关闭约定及子代理报告展示。 | completed | 2026-11-18 / 2026-11-18 |
 
 ## 归属与包内索引
