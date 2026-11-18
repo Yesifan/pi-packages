@@ -318,7 +318,7 @@ Your final response is automatically reported to your direct parent.`;
       }
       await session.bindExtensions({
         uiContext: ui,
-        mode: "tui",
+        mode: "print",
         abortHandler: () => {
           void session?.abort();
         },

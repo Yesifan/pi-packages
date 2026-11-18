@@ -165,6 +165,8 @@ Results stay with the executing window's captured direct-parent report chain. Cl
 
 ## Background lifecycle
 
+New and restored child sessions bind extensions in `print` mode and submit prompts and steering as `extension` input. The root UI proxy still handles supported requests. Child extensions that check `ctx.mode` or `event.source` see those values.
+
 Local preparation, including `running`, is persisted before calling the SDK. Here `running` means this package has assumed background-task responsibility, not that the SDK is streaming. A preparation failure does not call the SDK; after submission, failures retain identity/history and use background cleanup. Handled ordinary input remains submitted, without inventing a started run or reusing an old answer. Cancelling the originating tool does not retract submitted background work.
 
 - Accepted executions report completion, failure, cancellation, interruption, or absence of final text at most once to their still-valid original direct caller. SDK aborts and host interruptions are never reported as successful completion; commentary is not final text. Reports use Pi custom messages (`customType: "subagent-report"`). Older histories may contain `bykwp-subagent-report` messages; the extension does not rewrite them.

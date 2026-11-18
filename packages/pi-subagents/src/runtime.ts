@@ -672,7 +672,10 @@ export class RootRuntime implements DelegationRuntimeApi {
     execution.accepted = true;
     execution.phase = "executing";
     this.holdPrompt(execution);
-    const completion = session.prompt(prompt, { expandPromptTemplates: false });
+    const completion = session.prompt(prompt, {
+      expandPromptTemplates: false,
+      source: "extension",
+    });
     void completion.then(
       () => {
         this.releasePrompt(execution);
@@ -724,7 +727,7 @@ export class RootRuntime implements DelegationRuntimeApi {
     signal?.throwIfAborted();
     this.holdPrompt(execution);
     try {
-      const disposition = await execution.session.steer(prompt);
+      const disposition = await execution.session.steer(prompt, undefined, { source: "extension" });
       if (disposition === "handled")
         throw new SubagentError(
           "PROMPT_HANDLED",
