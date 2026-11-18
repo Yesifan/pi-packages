@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.0
+
+### Minor Changes
+
+- 36e1eb8: BREAKING: Pi loads each extension from the package-root `index.js`, which delegates to compiled JavaScript in `dist/`. If your configuration references or filters an old entry (`src/index.ts`, `dist/index.js`, or `extensions/`), change it to `index.js` relative to that package. Package-name and package-directory installs pick up the new entry automatically.
+
+### Patch Changes
+
+- a511171: Update the workspace Pi SDK and the daemon's embedded Pi runtime to 1.5.2.
+
 ## 0.2.0
 
 ### Minor Changes

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.2
+
+### Patch Changes
+
+- a511171: Update the workspace Pi SDK and the daemon's embedded Pi runtime to 1.5.2.
+
 ## 0.8.1
 
 ### Patch Changes
