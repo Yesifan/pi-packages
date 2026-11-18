@@ -150,6 +150,54 @@ export default function(pi) {
 }
 
 describe("actual SDK runtime lifecycle and report processing", () => {
+  it("reports an explicit abort from the locked SDK once to the live root", async () => {
+    const h = await realHarness();
+    await h.runtime.createSubagent(h.caller, { name: "worker", prompt: "start" }, h.ctx);
+    await h.waitCall(0);
+    const session = h.agent("worker").currentExecution!.session!;
+    await session.abort();
+    await h.waitReport(0);
+    await h.flush();
+    expect(h.reports).toHaveLength(1);
+    expect(h.reports[0]?.report).toMatchObject({ outcome: "aborted", error: { code: "ABORTED" } });
+    expect(h.agent("worker").state).toBe("interrupted");
+    expect(h.scope.executions.size).toBe(0);
+  });
+
+  it("processes a cancelled child's report through the real SDK before its parent finishes", async () => {
+    const h = await realHarness();
+    await h.runtime.createSubagent(
+      h.caller,
+      { name: "parent", prompt: "coordinate", cwd: h.external },
+      h.ctx,
+    );
+    const parentCall = await h.waitCall(0);
+    await h.runtime.createSubagent(
+      h.nestedCaller("parent"),
+      { name: "worker", prompt: "start" },
+      h.ctx,
+    );
+    await h.waitCall(1);
+    const parent = h.agent("parent").currentExecution!;
+    const child = h.agent("parent").children.get("worker")!.currentExecution!;
+    await child.session!.abort();
+    await h.control.disposed.get("worker")!.promise;
+    await h.flush();
+    expect(parent.pendingReports.size).toBe(1);
+    expect(h.reports).toHaveLength(0);
+    parentCall.finish("preliminary");
+    const processing = await h.waitCall(2);
+    expect(parent.pendingReports.size).toBe(1);
+    const entry = parent
+      .session!.sessionManager.getBranch()
+      .find((value) => value.type === "custom_message" && value.customType === "subagent-report");
+    expect(entry).toMatchObject({ details: { outcome: "aborted" } });
+    processing.finish("handled cancelled child");
+    await h.waitReport(0);
+    expect(parent.pendingReports.size).toBe(0);
+    expect(h.reports[0]?.report.result).toBe("handled cancelled child");
+  });
+
   it("uses public steering expansion, handled and command rejection without another execution", async () => {
     const h = await realHarness();
     const prompts = path.join(h.cwd, ".pi", "prompts");

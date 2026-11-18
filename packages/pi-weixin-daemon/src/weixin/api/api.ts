@@ -1,9 +1,7 @@
 import crypto from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 
 import { createLogger, type Logger } from "../../util/logger.js";
+import { VERSION } from "../../version.js";
 import { redactBody, redactUrl } from "../util/redact.js";
 import type {
   BaseInfo,
@@ -39,36 +37,10 @@ const defaultLogger = createLogger();
 /** iLink-App-Id: 直接读取 package.json 顶层 ilink_appid 字段。 */
 const ILINK_APP_ID: string = "bot";
 
-interface PackageJson {
-  name?: string;
-  version?: string;
-}
-
-/** Read our own package.json (dev: src/, publish: dist/ — walk up to find it). */
-function readOwnPackageJson(): PackageJson {
-  let dir = path.dirname(fileURLToPath(import.meta.url));
-  const { root } = path.parse(dir);
-  while (dir && dir !== root) {
-    const candidate = path.join(dir, "package.json");
-    if (fs.existsSync(candidate)) {
-      try {
-        const parsed = JSON.parse(fs.readFileSync(candidate, "utf-8")) as PackageJson;
-        if (parsed.name === "pi-weixin-daemon") return parsed;
-      } catch {
-        // keep walking up
-      }
-    }
-    dir = path.dirname(dir);
-  }
-  return {};
-}
-
-const pkg = readOwnPackageJson();
-
-const CHANNEL_VERSION: string = pkg.version ?? "0.1.0";
+const CHANNEL_VERSION: string = VERSION;
 
 /** Default `bot_agent` value (UA-style, like Tencent's OpenClaw default). */
-const DEFAULT_BOT_AGENT = `pi-weixin-daemon/${pkg.version ?? "0.1.0"}`;
+const DEFAULT_BOT_AGENT = `pi-weixin-daemon/${VERSION}`;
 
 /** Maximum length (bytes) of the sanitized `bot_agent` string. */
 const BOT_AGENT_MAX_LEN = 256;
@@ -86,7 +58,7 @@ function buildClientVersion(version: string): number {
   return ((major & 0xff) << 16) | ((minor & 0xff) << 8) | (patch & 0xff);
 }
 
-const ILINK_APP_CLIENT_VERSION: number = buildClientVersion(pkg.version ?? "0.0.0");
+const ILINK_APP_CLIENT_VERSION: number = buildClientVersion(VERSION);
 
 /**
  * Sanitize a `bot_agent` string into a wire-safe value.

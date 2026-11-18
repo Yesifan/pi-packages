@@ -7,6 +7,7 @@ Persistent, in-process background subagents for [Pi](https://pi.dev).
 ```bash
 pi install npm:@yesifan/pi-subagents
 # local checkout
+pnpm --filter @yesifan/pi-subagents build
 pi install -l ./packages/pi-subagents
 ```
 
@@ -77,7 +78,7 @@ Report concrete evidence and file locations. Do not modify files.
 
 Roles accept either `tools` (SDK tool selection) or `disallowedTools` (exclusion patterns), never both—even when one is empty. Both are arrays of non-empty strings; duplicate entries are removed. `tools: []` allows no tools, while `disallowedTools: []` adds no restrictions. Omitting both preserves the normal target session's tools.
 
-Tool policy follows Pi SDK 1.4.0 semantics:
+Tool policy follows Pi SDK 1.5.2 semantics:
 
 - A non-empty `tools` list selects built-in and extension tools, but **is not a strict allowlist across all tools**: if it contains no tool names starting with `mcp__`, already registered MCP tools remain available. Including a name starting with `mcp__` filters MCP tools to those selections; naming only a resource helper such as `list_mcp_resources` does not trigger this filtering; `tools: []` excludes all tools, including MCP.
 - `tools` selections are passed directly to the SDK, including its supported patterns. This package does not prevalidate tool existence: unknown or misspelled selections match no tools instead of failing child creation with `TOOL_UNAVAILABLE`. Explicit MCP selections can match tools registered later; actual calls to unavailable tools still fail through the SDK. Check role spelling when expected tools are missing.
@@ -104,7 +105,7 @@ The selected policy is included in the saved role snapshot and content hash. Lat
 
 ## Codemode and MCP
 
-Children load the SDK 1.4.0 built-in `codemode`, `tool_search`, and `mcp` extensions using their own target cwd, agentDir, and settings. No adapter or duplicate MCP configuration is needed. Parent tool instances, connections, and temporary CLI overrides are not copied.
+Children load the SDK 1.5.2 built-in `codemode`, `tool_search`, and `mcp` extensions using their own target cwd, agentDir, and settings. No adapter or duplicate MCP configuration is needed. Parent tool instances, connections, and temporary CLI overrides are not copied.
 
 Loading does not unconditionally activate tools. For codemode without MCP, set `"defaultTools": ["+codemode"]` in Pi settings. Enabled MCP servers can activate codemode or tool search according to SDK configuration. MCP configuration is read from `<agentDir>/mcp.json` and trusted project `.pi/mcp.json`.
 
@@ -154,21 +155,33 @@ New child history uses public `SessionManager.create(cwd, privateDir)`, with `pr
 
 Default native discovery, picker, and continue do not select these new histories. Explicit file opening/resume and explicit discovery with a custom session directory pointing at the private directory remain allowed; this is not an access-control boundary. Existing default-directory histories referenced by the current metadata stay at their saved paths, remain recoverable, and may still appear in ordinary discovery. No existing files are migrated, relocated, or deleted. The tree writer lock does not coordinate independent manual edits to child history. See [Spec 0002](docs/specs/0002-prompt-and-session-storage.md) and [ADR-0003](docs/adr/0003-sdk-sessions-and-parent-metadata.md).
 
+## Multiple windows on the same root
+
+Multiple Pi windows may open the exact same persistent root session without reserving its subagent tree. The first `subagent` or ordinary `ask_subagent` call acquires the whole-tree writer lock and rebuilds the tree from the latest saved metadata before checking names, ownership, or limits. Recovery is deferred until this acquisition; an idle window never marks another window's work interrupted.
+
+While one window owns the tree, its own tasks and descendants can run in parallel within the existing limits. Other windows immediately receive `ROOT_SCOPE_IN_USE` for create, ask, and steer—even for an idle sibling. That failure affects only that call: after all work, report dependencies, SDK calls, and cleanup finish, the lock is released and either window can explicitly try again without reload or restart. Requests are not queued or forwarded. Idle steering does not start an execution or recover old work; it returns `SUBAGENT_NOT_STEERABLE` when no other window owns the tree.
+
+Results stay with the executing window's captured direct-parent report chain. Closing that window stops its work; another window does not take over or receive old reports. Root report submission is not a receipt that the root model consumed it. A non-cooperative hook can delay cleanup and lock release. This lock does **not** coordinate the root Pi history itself or independent manual child-history writes. See [Spec 0005](docs/specs/0005-execution-scoped-root-lock.md) and [ADR-0005](docs/adr/0005-execution-scoped-root-lock.md).
+
 ## Background lifecycle
+
+New and restored child sessions bind extensions in `print` mode and submit prompts and steering as `extension` input. The root UI proxy still handles supported requests. Child extensions that check `ctx.mode` or `event.source` see those values.
 
 Local preparation, including `running`, is persisted before calling the SDK. Here `running` means this package has assumed background-task responsibility, not that the SDK is streaming. A preparation failure does not call the SDK; after submission, failures retain identity/history and use background cleanup. Handled ordinary input remains submitted, without inventing a started run or reusing an old answer. Cancelling the originating tool does not retract submitted background work.
 
-- Final responses are reported automatically to the direct parent as Pi custom messages (`customType: "subagent-report"`). Older histories may contain `bykwp-subagent-report` messages; the extension does not rewrite them.
+- Accepted executions report completion, failure, cancellation, interruption, or absence of final text at most once to their still-valid original direct caller. SDK aborts and host interruptions are never reported as successful completion; commentary is not final text. Reports use Pi custom messages (`customType: "subagent-report"`). Older histories may contain `bykwp-subagent-report` messages; the extension does not rewrite them.
 - Tool results list the caller's direct subagents as running, done, or interrupted, alongside current shared live usage. `SUBAGENT_BUSY` and `LIVE_AGENT_LIMIT` results include the same snapshot. Lists include every direct subagent and its saved creation-time role (`agentType`); names are shortened when long. Role-file changes do not change existing subagents' displayed roles.
 - Automatic reports include the validated absolute JSONL path on a `Complete conversation: ...` line before the result, without a separate `Full session` heading. Missing, unsafe, malformed, or identity-mismatched history is explicitly marked unavailable; reports do not expand the file contents. This is persisted conversation history, not a complete system-prompt/tool-definition snapshot.
-- Automatic reports show the direct parent's subagent statuses (including the reporting agent as done) and remind the direct parent that it can use `ask_subagent` with any idle subagent listed above for related follow-up work. While relevant reports are pending, the caller is instructed to provide only a brief progress update and defer its final answer.
+- Automatic reports show at most `max_live_agents + 4` of the direct parent's subagents. Running subagents keep their places, and remaining places go to the most recently active idle or interrupted subagents. Entries are displayed newest first. Restoration uses the latest persisted message time, or the session header time for an empty history. The report includes an omitted count when needed. Full tool snapshots and exact-name reuse remain available. While relevant reports are pending, the caller is instructed to provide only a brief progress update and defer its final answer.
 - An idle parent waiting for children remains loaded; it is not cold-released.
 - Stopping only the root model response does not stop accepted background work.
 - Quitting, replacing, forking, or reloading the root session uses public `abort()` for active descendants, cancels proxied UI, and disposes child SDK sessions before releasing the writer lock. Non-cooperative input hooks can delay cleanup and lock release.
 - Completed logical identities and histories remain available when the exact persistent root session is resumed.
 - Interrupted work is not automatically replayed.
+- Root shutdown/replacement suppresses reports to the closing caller and saves accepted unfinished work as interrupted. A failed parent aborts its children without individual child notifications. After a process crash, the next explicit ownership cycle recovers residual running metadata as interrupted; no surviving host means no immediate notice, and reports are never replayed to a new root.
+- JSON lifecycle diagnostics on stderr distinguish terminal outcome, delivery attempts/submission/processing/failure and suppression (`root_closed`, `caller_unavailable`, `parent_failed`), plus cleanup/history processing failures. They contain names, Pi session IDs and reason codes, without prompt, tool-output or result bodies. Root submission is not proof of processing; nested parents keep the SDK persistence/settled receipt barrier. See [Spec 0003](https://github.com/Yesifan/pi-packages/blob/main/packages/pi-subagents/docs/specs/0003-terminal-exit-reporting.md).
 
-Cross-restart recovery requires the exact file-backed root identity (Pi ID plus normalized absolute file path). A new, forked, cloned, or imported root cannot take ownership of another root's children. Recovery loads identities and saved roles, marks unfinished accepted work interrupted, and clears prepared opening state to idle; it does not mount children, replay tasks, or redeliver old reports. Completed results that were not delivered before shutdown remain available only in child history. Deleting a project's directory does not delete global metadata/history, but missing or moved cwd values cause follow-up asks to fail rather than relocate automatically.
+Cross-restart recovery requires the exact file-backed root identity (Pi ID plus normalized absolute file path). A new, forked, cloned, or imported root cannot take ownership of another root's children. After acquiring ownership for the next explicit create or ordinary ask, recovery loads identities and saved roles, marks unfinished accepted work interrupted, and clears prepared opening state to idle; it does not mount children, replay tasks, or redeliver old reports. Completed results that were not delivered before shutdown remain available only in child history. Deleting a project's directory does not delete global metadata/history, but missing or moved cwd values cause follow-up asks to fail rather than relocate automatically.
 
 Ordinary asks validate the child's history identity and cwd, then let the SDK restore model selection, thinking, and conversation without parent/settings overrides. Missing historical selections or unavailable models/authentication follow SDK defaults, fallback, and thinking clamp. Public fallback diagnostics are shown when available; preserving the original model or successful fallback is not guaranteed. No available model or later execution failures still fail normally. Target tools/resources/configuration are rebuilt, while the saved role remains unchanged. Reports carry persisted conversation paths, not complete system-prompt or tool-definition snapshots.
 
@@ -203,7 +216,7 @@ Children run in the same Node.js process. This package keeps its own state sessi
 
 ## Development
 
-The development baseline is Pi SDK 1.4.0. See [ADR-0004](docs/adr/0004-official-sdk-lifecycle.md) for the submitted, steering, restoration, and cleanup decisions.
+The development baseline is Pi SDK 1.5.2. See [ADR-0004](docs/adr/0004-official-sdk-lifecycle.md) for the submitted, steering, restoration, and cleanup decisions.
 
 ```bash
 pnpm install

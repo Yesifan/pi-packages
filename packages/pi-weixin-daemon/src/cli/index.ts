@@ -1,6 +1,8 @@
 import { Command } from "commander";
+import { storageIdentity } from "../config/control-lock.js";
 import { VERSION } from "../version.js";
 import { accountsCommand } from "./accounts.js";
+import { applyControl } from "./apply-control.js";
 import { broadcastCommand } from "./broadcast.js";
 import {
   logsCommand,
@@ -9,10 +11,12 @@ import {
   statusCommand,
   stopCommand,
 } from "./control.js";
+import { ControlStore } from "./control-store.js";
 import { doctorCommand } from "./doctor.js";
 import { loginCommand } from "./login.js";
 import { projectCommand } from "./project.js";
 import { promptCommand } from "./prompt.js";
+import { rpcCall } from "./rpc-client.js";
 import { serveCommand } from "./serve.js";
 import { serviceCommand } from "./service.js";
 
@@ -29,6 +33,13 @@ export function buildProgram(): Command {
   program.addCommand(restartCommand());
   program.addCommand(statusCommand());
   program.addCommand(logsCommand());
+  program
+    .command("reload")
+    .description("Apply current saved configuration (daemon must be online)")
+    .action(async () => {
+      await rpcCall("control.sync", { identity: storageIdentity() });
+      console.log("Daemon applied current saved configuration.");
+    });
   program.addCommand(loginCommand());
   program.addCommand(logoutCommand());
   program.addCommand(accountsCommand());
@@ -42,27 +53,11 @@ export function buildProgram(): Command {
 function logoutCommand(): Command {
   return new Command("logout")
     .description(
-      "Log out a Weixin account (clear credentials, unbind from projects, stop its monitor)",
+      "Remove an unbound account: save registration, synchronize receivers, then safely clean files",
     )
-    .argument("<account>", "account id or name")
+    .argument("<name>", "account name (case-sensitive; IDs are not accepted)")
     .action(async (account: string) => {
-      try {
-        const { rpcCall } = await import("./rpc-client.js");
-        const list = await rpcCall<Array<{ accountId: string; name?: string }>>("account.list");
-        const hit = list.find((a) => a.accountId === account || a.name === account);
-        const accountId = (hit?.accountId ?? account) as string;
-        const { resolveWeixinAccountIdByName } = await import("../weixin/auth/accounts.js");
-        const resolved = resolveWeixinAccountIdByName(account) ?? accountId;
-        await rpcCall("account.logout", { accountId: resolved });
-        console.log(`Logged out account "${resolved}".`);
-      } catch {
-        // daemon not running: fall back to local credential removal.
-        const { unregisterWeixinAccountId, clearWeixinAccount } = await import(
-          "../weixin/auth/accounts.js"
-        );
-        clearWeixinAccount(account);
-        unregisterWeixinAccountId(account);
-        console.log(`Logged out account "${account}" (daemon not running; credentials cleared).`);
-      }
+      const removed = await new ControlStore().logout(account);
+      await applyControl(removed);
     });
 }

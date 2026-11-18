@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -29,8 +29,9 @@ function fake() {
     prompt: vi.fn(() => done.promise),
     steer: vi.fn(async () => "queued" as const),
     dispose: vi.fn(),
-    getLastAssistantText: () => "answer",
-    messages: [],
+    abort: vi.fn(async () => done.resolve()),
+    subscribe: vi.fn(() => () => {}),
+    sessionManager: SessionManager.inMemory(),
     isStreaming: true as boolean,
   } satisfies TaskSession;
   return { session, done };
@@ -38,6 +39,7 @@ function fake() {
 const target = { id: "full-target-id", cwd: "/target", path: "/target/session.jsonl" };
 const request = { ...target, prompt: "question", callerId: "caller" };
 const runtimes: SessionTasks[] = [];
+const temporaryDirectories: string[] = [];
 function runtime(load: () => Promise<TaskSession>) {
   const tasks = new SessionTasks({ find: () => target, load });
   runtimes.push(tasks);
@@ -45,6 +47,11 @@ function runtime(load: () => Promise<TaskSession>) {
 }
 afterEach(async () => {
   await Promise.all(runtimes.splice(0).map((tasks) => tasks.close()));
+  await Promise.all(
+    temporaryDirectories
+      .splice(0)
+      .map((directory) => rm(directory, { recursive: true, force: true })),
+  );
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
@@ -101,19 +108,26 @@ it.each(["finished", "closed", "idle"])(
     await tasks.ask(request, report);
     await vi.waitFor(() => expect(session.prompt).toHaveBeenCalledOnce());
     const pending = tasks.ask({ ...request, steer: true }, vi.fn());
+    await vi.waitFor(() => expect(session.steer).toHaveBeenCalledOnce());
+    let closing: Promise<void> | undefined;
     if (phase === "finished") {
       done.resolve();
-      await vi.waitFor(() => expect(report).toHaveBeenCalledOnce());
-      // A new task with the same ID must not validate the old steering request.
-      await tasks.ask(request, report);
+      await vi.waitFor(() => expect(session.abort).toHaveBeenCalledOnce());
+      await expect(tasks.ask(request, report)).rejects.toThrow("busy");
     } else if (phase === "closed") {
-      await tasks.close();
+      closing = tasks.close();
+      await vi.waitFor(() => expect(session.abort).toHaveBeenCalledOnce());
     } else {
       session.isStreaming = false;
     }
     steering.resolve("queued");
     await expect(pending).rejects.toThrow("stopped before steering");
     done.resolve();
+    await closing;
+    if (phase === "finished") {
+      await vi.waitFor(() => expect(report).toHaveBeenCalledOnce());
+      await tasks.ask(request, report);
+    }
   },
 );
 
@@ -129,8 +143,15 @@ it.each(["completed", "closed", "loading", "bind failed"])(
     vi.mocked(createAgentSession).mockResolvedValue({
       session: sdkSession as unknown as AgentSession,
     } as Awaited<ReturnType<typeof createAgentSession>>);
-    vi.spyOn(SessionManager, "open").mockReturnValue(SessionManager.inMemory());
-    const tasks = new SessionTasks({ find: () => target });
+    const cwd = await realpath(await mkdtemp(join(tmpdir(), "pi-task-shutdown-")));
+    temporaryDirectories.push(cwd);
+    const actualTarget = { ...target, cwd, path: join(cwd, "fixture.jsonl") };
+    await writeFile(actualTarget.path, "");
+    const manager = SessionManager.inMemory(cwd);
+    vi.spyOn(manager, "getSessionId").mockReturnValue(actualTarget.id);
+    vi.spyOn(manager, "getSessionFile").mockReturnValue(actualTarget.path);
+    vi.spyOn(SessionManager, "open").mockReturnValue(manager);
+    const tasks = new SessionTasks({ find: () => actualTarget });
     runtimes.push(tasks);
     const report = vi.fn();
     await tasks.ask(request, report);
@@ -219,12 +240,11 @@ it.each(["loading", "running"])("close during %s disposes without late reports",
 
 it("reports terminal model error even if SDK prompt resolves", async () => {
   const { session, done } = fake();
-  const messages: TaskSession["messages"] = [];
-  const tasks = runtime(async () => ({ ...session, messages }));
+  const tasks = runtime(async () => session);
   const report = vi.fn();
   await tasks.ask(request, report);
   await vi.waitFor(() => expect(session.prompt).toHaveBeenCalledOnce());
-  messages.push({
+  session.sessionManager.appendMessage({
     role: "assistant",
     content: [],
     api: "anthropic-messages",
@@ -263,14 +283,15 @@ it("reopens the same real SDK file for each run and binds reporting to each call
       load: async (found) => {
         const manager = SessionManager.open(found.path);
         return {
-          messages: [],
+          sessionManager: manager,
           isStreaming: false,
           prompt: async (text) => {
             manager.appendMessage({ role: "user", content: text, timestamp: Date.now() });
           },
           steer: async () => "queued",
           dispose: vi.fn(),
-          getLastAssistantText: () => "saved",
+          abort: async () => {},
+          subscribe: () => () => {},
         };
       },
     });

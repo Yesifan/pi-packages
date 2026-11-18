@@ -9,7 +9,7 @@ import { sendWeixinMediaFile } from "./messaging/send-media.js";
 import { monitorWeixinProvider } from "./monitor/monitor.js";
 import { normalizeInboundMessage } from "./normalize.js";
 import { RecipientUnavailableError, resolveRecipient } from "./recipient.js";
-import { restoreContextTokens, setContextToken } from "./storage/context-token.js";
+import { setContextToken } from "./storage/context-token.js";
 import type { InboundMessage, TurnContext, WeixinTransport } from "./types.js";
 
 /** Inbound gate reply when the account is not bound to any project. */
@@ -44,8 +44,8 @@ export interface WeixinTransportOptions {
 }
 
 /**
- * WeixinTransport facade for one account: owns the long-poll monitor, message
- * normalization, outbound text/file sending and the typing indicator.
+ * WeixinTransport facade for one account: adapts polling, normalization, sending
+ * and typing. AccountManager owns the receive controller and task.
  *
  * The agent layer only ever sees InboundMessage/TurnContext (weixin/types).
  */
@@ -53,10 +53,8 @@ export class ILinkWeixinTransport implements WeixinTransport {
   private readonly baseUrl: string;
   private readonly token: string | undefined;
   private readonly configManager: WeixinConfigManager;
-  private abortController: AbortController | undefined;
-  private monitorPromise: Promise<void> | undefined;
+
   private handlers: Array<(message: InboundMessage) => Promise<void>> = [];
-  private stopped = false;
 
   constructor(private readonly opts: WeixinTransportOptions) {
     this.baseUrl = opts.baseUrl ?? resolveWeixinBaseUrl(opts.accountId);
@@ -72,49 +70,30 @@ export class ILinkWeixinTransport implements WeixinTransport {
   }
 
   async start(): Promise<void> {
-    if (this.monitorPromise) return;
-    const log = this.opts.logger;
-
-    restoreContextTokens(this.opts.accountId);
-
-    // Best-effort start notification (mirrors Tencent's notifyStart on channel start).
     try {
-      await notifyStart({ baseUrl: this.baseUrl, token: this.token, logger: log });
-    } catch (err) {
-      log.warn(`notifyStart failed (ignored): ${String(err)}`);
+      await notifyStart({ baseUrl: this.baseUrl, token: this.token, logger: this.opts.logger });
+    } catch {
+      this.opts.logger.warn("notifyStart failed (ignored)");
     }
+  }
 
-    this.abortController = new AbortController();
-    this.monitorPromise = monitorWeixinProvider({
+  receive(signal: AbortSignal): Promise<void> {
+    return monitorWeixinProvider({
       baseUrl: this.baseUrl,
       token: this.token,
-      accountId: this.opts.accountId,
-      abortSignal: this.abortController.signal,
-      logger: log,
-      onInbound: async (raw: WeixinMessage) => {
-        await this.handleInbound(raw);
-      },
+      accountId: this.accountId,
+      abortSignal: signal,
+      logger: this.opts.logger,
+      onInbound: (raw) => this.handleInbound(raw, signal),
     });
-    this.monitorPromise.catch((err: unknown) => {
-      log.error({ err }, `monitor crashed for account ${this.opts.accountId}`);
-    });
-    log.info({ accountId: this.opts.accountId, baseUrl: this.baseUrl }, "transport started");
   }
 
   async stop(): Promise<void> {
-    if (this.stopped) return;
-    this.stopped = true;
-    const log = this.opts.logger;
-    this.abortController?.abort();
-    await this.monitorPromise?.catch(() => {});
-    this.monitorPromise = undefined;
-    // Best-effort stop notification.
     try {
-      await notifyStop({ baseUrl: this.baseUrl, token: this.token, logger: log });
-    } catch (err) {
-      log.warn(`notifyStop failed (ignored): ${String(err)}`);
+      await notifyStop({ baseUrl: this.baseUrl, token: this.token, logger: this.opts.logger });
+    } catch {
+      this.opts.logger.warn("notifyStop failed (local receive already stopped)");
     }
-    log.info({ accountId: this.opts.accountId }, "transport stopped");
   }
 
   async sendText(ctx: TurnContext, text: string): Promise<void> {
@@ -176,7 +155,8 @@ export class ILinkWeixinTransport implements WeixinTransport {
     };
   }
 
-  private async handleInbound(raw: WeixinMessage): Promise<void> {
+  private async handleInbound(raw: WeixinMessage, signal: AbortSignal): Promise<void> {
+    if (signal.aborted) return;
     // getUpdates may include bot-originated records. Only user messages are
     // valid Pi input; reject everything else before project lookup, media
     // download or context-token persistence.
@@ -193,17 +173,16 @@ export class ILinkWeixinTransport implements WeixinTransport {
       return;
     }
 
-    // Tokens belong to the actual sender, including messages rejected by the project gate.
-    if (raw.from_user_id && raw.context_token) {
-      setContextToken(this.opts.accountId, raw.from_user_id, raw.context_token);
-    }
-
     // Multi-project gate before media download: when a project inbox resolver is
     // configured and yields no dir, the account is unbound / project disabled —
     // drop the message entirely (never download, never emit into Pi) and tell
     // the user why.
     const resolved = this.opts.resolveInboxDir?.(this.opts.accountId);
     if (this.opts.resolveInboxDir && !resolved?.dir) {
+      // Gate replies still cache the actual sender's token, never the login user's.
+      if (raw.from_user_id && raw.context_token) {
+        setContextToken(this.opts.accountId, raw.from_user_id, raw.context_token);
+      }
       await this.replyGate(raw, resolved?.reason);
       return;
     }
@@ -216,8 +195,14 @@ export class ILinkWeixinTransport implements WeixinTransport {
       inboxDir,
       cdnBaseUrl: this.opts.cdnBaseUrl,
       logger: this.opts.logger,
+      signal,
     });
+    if (signal.aborted) return;
     const msg = normalizeInboundMessage(this.opts.accountId, raw, attachments, failures);
+    // A cancelled download must not persist an old receiver's token.
+    if (msg.senderId && msg.contextToken) {
+      setContextToken(this.opts.accountId, msg.senderId, msg.contextToken);
+    }
     const hasEmptyVoiceTranscript = raw.item_list?.some(
       (item) => item.type === MessageItemType.VOICE && !item.voice_item?.text?.trim(),
     );
@@ -244,6 +229,7 @@ export class ILinkWeixinTransport implements WeixinTransport {
       if (!msg.text?.trim() && msg.attachments.length === 0 && !msg.mediaFailures?.length) return;
     }
     for (const handler of [...this.handlers]) {
+      if (signal.aborted) return;
       await handler(msg);
     }
   }

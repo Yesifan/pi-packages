@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
+import { atomicWriteJson } from "../../config/atomic-write.js";
 import { resolveAccountsDir, resolveStateDir } from "../storage/state-dir.js";
 
 export const DEFAULT_BASE_URL = "https://ilinkai.weixin.qq.com";
@@ -36,13 +37,16 @@ function resolveAccountIndexPath(): string {
 export function listIndexedWeixinAccountIds(): string[] {
   const filePath = resolveAccountIndexPath();
   try {
-    if (!fs.existsSync(filePath)) return [];
     const raw = fs.readFileSync(filePath, "utf-8");
-    const parsed = z.array(z.string().min(1)).safeParse(JSON.parse(raw));
-    return parsed.success ? parsed.data : [];
-  } catch {
-    return [];
+    return z.array(z.string().min(1)).parse(JSON.parse(raw));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw new Error(`Cannot read account registry: ${filePath}`);
   }
+}
+
+export function saveWeixinAccountIds(ids: string[]): void {
+  atomicWriteJson(resolveAccountIndexPath(), ids);
 }
 
 /** Add accountId to the persistent index (no-op if already present). */
@@ -54,7 +58,7 @@ export function registerWeixinAccountId(accountId: string): void {
   if (existing.includes(accountId)) return;
 
   const updated = [...existing, accountId];
-  fs.writeFileSync(resolveAccountIndexPath(), JSON.stringify(updated, null, 2), "utf-8");
+  saveWeixinAccountIds(updated);
 }
 
 /** Remove accountId from the persistent index. */
@@ -62,7 +66,7 @@ export function unregisterWeixinAccountId(accountId: string): void {
   const existing = listIndexedWeixinAccountIds();
   const updated = existing.filter((id) => id !== accountId);
   if (updated.length !== existing.length) {
-    fs.writeFileSync(resolveAccountIndexPath(), JSON.stringify(updated, null, 2), "utf-8");
+    saveWeixinAccountIds(updated);
   }
 }
 
@@ -101,16 +105,11 @@ function resolveAccountPath(accountId: string): string {
 
 function readAccountFile(filePath: string): WeixinAccountData | null {
   try {
-    if (fs.existsSync(filePath)) {
-      const parsed = WeixinAccountDataSchema.safeParse(
-        JSON.parse(fs.readFileSync(filePath, "utf-8")),
-      );
-      return parsed.success ? parsed.data : null;
-    }
-  } catch {
-    // ignore
+    return WeixinAccountDataSchema.parse(JSON.parse(fs.readFileSync(filePath, "utf-8")));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw new Error(`Cannot read account credentials: ${filePath}`);
   }
-  return null;
 }
 
 /** Load account data by ID. */
@@ -152,7 +151,7 @@ export function saveWeixinAccount(
   };
 
   const filePath = resolveAccountPath(accountId);
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf-8");
+  atomicWriteJson(filePath, data);
   try {
     fs.chmodSync(filePath, 0o600);
   } catch {
@@ -160,14 +159,36 @@ export function saveWeixinAccount(
   }
 }
 
-/** Resolve the account id (ilink_bot_id) for a given account label, if any. */
-export function resolveWeixinAccountIdByName(name: string): string | undefined {
+export interface NamedAccount {
+  accountId: string;
+  name?: string;
+}
+
+/** Match names only, case-sensitively; never silently choose among duplicates. */
+export function findAccountIdByName(accounts: NamedAccount[], name: string): string | undefined {
   const target = name.trim();
   if (!target) return undefined;
-  for (const id of listIndexedWeixinAccountIds()) {
-    if (loadWeixinAccount(id)?.name?.trim() === target) return id;
-  }
-  return undefined;
+  const matches = accounts.filter((account) => account.name?.trim() === target);
+  if (matches.length > 1) throw new Error(`ambiguous account name "${target}"`);
+  return matches[0]?.accountId;
+}
+
+export function requireAccountIdByName(accounts: NamedAccount[], name: string): string {
+  const id = findAccountIdByName(accounts, name);
+  if (!id) throw new Error(`unknown account name "${name.trim()}"`);
+  return id;
+}
+
+export function listLocalNamedAccounts(): NamedAccount[] {
+  return listIndexedWeixinAccountIds().map((accountId) => ({
+    accountId,
+    name: loadWeixinAccount(accountId)?.name,
+  }));
+}
+
+/** Resolve a unique local name, if present (also used for login collision checks). */
+export function resolveWeixinAccountIdByName(name: string): string | undefined {
+  return findAccountIdByName(listLocalNamedAccounts(), name);
 }
 
 /** Resolve the account label for a given account id (ilink_bot_id), if any. */
@@ -188,16 +209,17 @@ export function resolveWeixinBaseUrl(accountId: string): string {
  */
 export function clearWeixinAccount(accountId: string): void {
   const dir = resolveAccountsDir();
+  // Keep credentials (including the selectable name) until auxiliary cleanup succeeds.
   const accountFiles = [
-    `${accountId}.json`,
     `${accountId}.sync.json`,
     `${accountId}.context-tokens.json`,
+    `${accountId}.json`,
   ];
   for (const file of accountFiles) {
     try {
       fs.unlinkSync(path.join(dir, file));
-    } catch {
-      // ignore if not found
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
   }
 }

@@ -1,19 +1,14 @@
 import { Command } from "commander";
 import { createLogger } from "../util/logger.js";
-import {
-  clearStaleAccountsForUserId,
-  DEFAULT_BASE_URL,
-  loadWeixinAccount,
-  registerWeixinAccountId,
-  resolveWeixinAccountIdByName,
-  saveWeixinAccount,
-} from "../weixin/auth/accounts.js";
+import { DEFAULT_BASE_URL } from "../weixin/auth/accounts.js";
 import {
   displayQRCode,
   startWeixinLoginWithQr,
   waitForWeixinLogin,
 } from "../weixin/auth/login-qr.js";
 import { redactToken } from "../weixin/util/redact.js";
+import { applyControl } from "./apply-control.js";
+import { ControlStore } from "./control-store.js";
 
 const NAME_RE = /^[A-Za-z0-9_.-]+$/;
 
@@ -65,36 +60,14 @@ export function loginCommand(): Command {
       if (result.connected && result.accountId) {
         const accountId = result.accountId; // ilink_bot_id, unique per login session
 
-        // Name collisions: reject if `name` belongs to a *different* user's
-        // account. Re-login of the same user is allowed (old account cleaned
-        // below by clearStaleAccountsForUserId).
-        const existingByName = resolveWeixinAccountIdByName(name);
-        if (existingByName && existingByName !== accountId) {
-          const existingUser = loadWeixinAccount(existingByName)?.userId;
-          if (result.userId && existingUser && existingUser !== result.userId) {
-            console.error(`error: --name "${name}" is already used by account ${existingByName}`);
-            process.exitCode = 1;
-            return;
-          }
-        }
-
-        registerWeixinAccountId(accountId);
-        saveWeixinAccount(accountId, {
+        const removed = await new ControlStore().login(accountId, {
           token: result.botToken,
           baseUrl: result.baseUrl,
           userId: result.userId,
           name,
         });
-        clearStaleAccountsForUserId(accountId, result.userId ?? "");
         logger.info({ accountId, name, userId: redactToken(result.userId) }, "account saved");
-        console.log(`\n✅ 微信账号已保存: ${name} (${accountId})`);
-        // Best-effort: ask a running daemon to pick up the new account now.
-        try {
-          await import("./rpc-client.js").then(({ rpcCall }) => rpcCall("account.reload"));
-          console.log(`运行 \`pi-wx accounts\` 查看全部账号。`);
-        } catch {
-          console.log(`Daemon 未运行；账号已保存，下次启动时自动加载。`);
-        }
+        await applyControl(removed);
       } else {
         console.log(result.message);
         if (!result.alreadyConnected) {

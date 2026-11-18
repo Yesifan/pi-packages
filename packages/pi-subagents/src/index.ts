@@ -5,7 +5,6 @@ import { buildDelegationContext } from "./delegation.js";
 import { asSubagentError, SubagentError } from "./errors.js";
 import { canonicalizeDirectory, findProjectRoot } from "./paths.js";
 import { RootRuntime } from "./runtime.js";
-import { formatSubagentReport } from "./status.js";
 import { createDelegationExtension, type DelegationRuntimeApi } from "./tools.js";
 import type {
   CallerBinding,
@@ -13,8 +12,6 @@ import type {
   DeliveredSubagentReport,
   SubagentReport,
 } from "./types.js";
-
-const OWN_EXTENSION_PATH = fileURLToPath(import.meta.url);
 
 async function assertRootProjectTrusted(
   ctx: ExtensionContext,
@@ -71,8 +68,11 @@ function failedRuntime(error: unknown): DelegationRuntimeApi {
   };
 }
 
-export default function piSubagents(pi: ExtensionAPI): void {
-  const runtime = new RootRuntime(OWN_EXTENSION_PATH);
+export default function piSubagents(
+  pi: ExtensionAPI,
+  ownExtensionPath = fileURLToPath(import.meta.url),
+): void {
+  const runtime = new RootRuntime(ownExtensionPath);
   let started = false;
 
   pi.on("session_start", async (_event, ctx) => {
@@ -120,11 +120,11 @@ export default function piSubagents(pi: ExtensionAPI): void {
           rootSessionId: ctx.sessionManager.getSessionId(),
           rootSessionFile,
           ctx,
-          sendReport: (report: SubagentReport, status: DelegationStatusSnapshot) => {
+          sendReport: (report, status, content) => {
             pi.sendMessage(
               {
                 customType: "subagent-report",
-                content: formatSubagentReport(report, status),
+                content,
                 display: true,
                 details: deliveredReport(report, status),
               },

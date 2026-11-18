@@ -262,11 +262,7 @@ export class ProjectController {
 
   async stop(): Promise<void> {
     this.state = "stopping";
-    await this.session
-      ?.stop()
-      .catch((err: unknown) =>
-        this.opts.logger.warn({ err, project: this.projectId }, "session stop error"),
-      );
+    await this.session?.stop();
     this.session = undefined;
     this.state = "off";
   }

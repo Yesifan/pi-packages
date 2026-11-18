@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearStaleAccountsForUserId,
   clearWeixinAccount,
@@ -22,6 +22,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   if (OLD_ENV === undefined) {
     delete process.env.PI_WEIXIN_DATA_DIR;
   } else {
@@ -74,7 +75,7 @@ describe("weixin account store", () => {
     const dir = path.join(dataDir, "accounts");
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, "bad.json"), JSON.stringify({ token: 123 }), "utf-8");
-    expect(loadWeixinAccount("bad")).toBeNull();
+    expect(() => loadWeixinAccount("bad")).toThrow("Cannot read account credentials");
   });
 
   it("clears stale accounts sharing the same userId", () => {
@@ -107,13 +108,91 @@ describe("weixin account store", () => {
     expect(resolveWeixinAccountName("acct-a")).toBe("personal");
   });
 
+  it("rejects ambiguous names rather than selecting the first account", () => {
+    for (const id of ["a", "b"]) {
+      registerWeixinAccountId(id);
+      saveWeixinAccount(id, { name: "personal" });
+    }
+    expect(() => resolveWeixinAccountIdByName(" personal ")).toThrow(/ambiguous account name/);
+    expect(resolveWeixinAccountIdByName("Personal")).toBeUndefined();
+    expect(resolveWeixinAccountIdByName("a")).toBeUndefined();
+  });
+
+  it("ignores missing files and still removes later files", () => {
+    const dir = path.join(dataDir, "accounts");
+    fs.mkdirSync(dir, { recursive: true });
+    const contextPath = path.join(dir, "acct-a.context-tokens.json");
+    fs.writeFileSync(contextPath, "{}");
+    expect(() => clearWeixinAccount("acct-a")).not.toThrow();
+    expect(fs.existsSync(contextPath)).toBe(false);
+    expect(() => clearWeixinAccount("acct-a")).not.toThrow();
+  });
+
+  for (const suffix of [".json", ".sync.json", ".context-tokens.json"]) {
+    it.each(["EACCES", "EPERM", "EIO"])(`propagates %s when deleting ${suffix}`, (code) => {
+      const error = Object.assign(new Error("unlink failed"), { code });
+      const target = path.join(dataDir, "accounts", `acct-a${suffix}`);
+      const unlink = fs.unlinkSync.bind(fs);
+      vi.spyOn(fs, "unlinkSync").mockImplementation((file) => {
+        if (file === target) throw error;
+        unlink(file);
+      });
+      expect(() => clearWeixinAccount("acct-a")).toThrow(error);
+    });
+  }
+
+  it.each([".sync.json", ".context-tokens.json"])(
+    "preserves credentials and name when deleting %s fails, then retries",
+    (suffix) => {
+      registerWeixinAccountId("acct-a");
+      saveWeixinAccount("acct-a", { token: "test-token", name: "personal" });
+      const dir = path.join(dataDir, "accounts");
+      for (const file of [".sync.json", ".context-tokens.json"]) {
+        fs.writeFileSync(path.join(dir, `acct-a${file}`), "{}");
+      }
+      const account = loadWeixinAccount("acct-a");
+      const original = fs.unlinkSync.bind(fs);
+      const unlink = vi.spyOn(fs, "unlinkSync").mockImplementation((file) => {
+        if (file === path.join(dir, `acct-a${suffix}`)) {
+          throw Object.assign(new Error("unlink denied"), { code: "EACCES" });
+        }
+        original(file);
+      });
+      expect(() => clearWeixinAccount("acct-a")).toThrow("unlink denied");
+      expect(loadWeixinAccount("acct-a")).toEqual(account);
+      expect(resolveWeixinAccountIdByName("personal")).toBe("acct-a");
+      unlink.mockRestore();
+      clearWeixinAccount("acct-a");
+      unregisterWeixinAccountId("acct-a");
+      expect(listIndexedWeixinAccountIds()).toEqual([]);
+      for (const file of [".json", ".sync.json", ".context-tokens.json"]) {
+        expect(fs.existsSync(path.join(dir, `acct-a${file}`))).toBe(false);
+      }
+    },
+  );
+
+  it("keeps stale account indexed when credential deletion fails", () => {
+    registerWeixinAccountId("old-acct");
+    saveWeixinAccount("old-acct", { token: "test-token", userId: "user-x" });
+    const error = Object.assign(new Error("unlink denied"), { code: "EACCES" });
+    vi.spyOn(fs, "unlinkSync").mockImplementation(() => {
+      throw error;
+    });
+    expect(() => clearStaleAccountsForUserId("new-acct", "user-x")).toThrow(error);
+    expect(listIndexedWeixinAccountIds()).toEqual(["old-acct"]);
+    expect(loadWeixinAccount("old-acct")?.token).toBe("test-token");
+  });
+
   it("clearWeixinAccount removes all account files", () => {
     registerWeixinAccountId("acct-a");
     saveWeixinAccount("acct-a", { token: "t" });
     const dir = path.join(dataDir, "accounts");
     fs.writeFileSync(path.join(dir, "acct-a.sync.json"), "{}", "utf-8");
 
+    fs.writeFileSync(path.join(dir, "acct-a.context-tokens.json"), "{}", "utf-8");
+
     clearWeixinAccount("acct-a");
+    expect(fs.existsSync(path.join(dir, "acct-a.context-tokens.json"))).toBe(false);
     expect(loadWeixinAccount("acct-a")).toBeNull();
     expect(fs.existsSync(path.join(dataDir, "accounts", "acct-a.sync.json"))).toBe(false);
   });

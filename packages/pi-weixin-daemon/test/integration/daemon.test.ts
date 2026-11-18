@@ -19,6 +19,7 @@ import { FakeWeixinTransport } from "../helpers/fake-transport.js";
 
 const logger = createLogger({ level: "silent" });
 const OLD_DATA = process.env.PI_WEIXIN_DATA_DIR;
+const OLD_STATE = process.env.PI_WEIXIN_STATE_DIR;
 let dataDir: string;
 
 const tick = () => new Promise<void>((r) => setTimeout(r, 1));
@@ -29,6 +30,7 @@ let barDir: string;
 beforeEach(() => {
   dataDir = fs.mkdtempSync(path.join(process.cwd(), "test/.tmp", "daemon-"));
   process.env.PI_WEIXIN_DATA_DIR = dataDir;
+  process.env.PI_WEIXIN_STATE_DIR = dataDir;
   fooDir = fs.mkdtempSync(path.join(process.cwd(), "test/.tmp", "dfoo-"));
   barDir = fs.mkdtempSync(path.join(process.cwd(), "test/.tmp", "dbar-"));
   for (const a of ["A", "B", "C", "D"]) {
@@ -40,6 +42,8 @@ beforeEach(() => {
 afterEach(() => {
   if (OLD_DATA === undefined) delete process.env.PI_WEIXIN_DATA_DIR;
   else process.env.PI_WEIXIN_DATA_DIR = OLD_DATA;
+  if (OLD_STATE === undefined) delete process.env.PI_WEIXIN_STATE_DIR;
+  else process.env.PI_WEIXIN_STATE_DIR = OLD_STATE;
   fs.rmSync(dataDir, { recursive: true, force: true });
   fs.rmSync(fooDir, { recursive: true, force: true });
   fs.rmSync(barDir, { recursive: true, force: true });
@@ -57,9 +61,9 @@ function msg(accountId: string, senderId: string, messageId: string, text: strin
 }
 
 describe("Daemon composition (fake transports + fake runtimes)", () => {
-  it("unsubscribes and removes accounts before awaiting stop, tolerating repeated removal and stop failures", async () => {
+  it("retains failed receivers until stop succeeds, then unsubscribes once and tolerates repeated removal", async () => {
     const events: string[] = [];
-    const snapshots: string[][] = [];
+    let failStop = true;
     let releaseStop!: () => void;
     const stopping = new Promise<void>((resolve) => {
       releaseStop = resolve;
@@ -79,9 +83,8 @@ describe("Daemon composition (fake transports + fake runtimes)", () => {
         };
         transport.stop = async () => {
           events.push(`stop:${id}`);
-          snapshots.push(daemon.getAccountStatuses().map((account) => account.accountId));
           if (id === "A") await stopping;
-          if (id === "A" || id === "B") throw new Error("stop failed");
+          if (failStop && (id === "A" || id === "B")) throw new Error("stop failed");
         };
         return transport;
       },
@@ -94,28 +97,30 @@ describe("Daemon composition (fake transports + fake runtimes)", () => {
         expect(account).not.toHaveProperty("transport");
       }
       unregisterWeixinAccountId("A");
-      const removal = daemon.reloadAccounts();
-      await vi.waitFor(() => expect(events).toEqual(["unsubscribe:A", "stop:A"]));
-      expect(snapshots).toEqual([["B", "C", "D"]]);
-      await daemon.reloadAccounts();
-      expect(events).toHaveLength(2);
+      const removal = expect(daemon.reloadAccounts()).rejects.toThrow("stop failed");
+      await vi.waitFor(() => expect(events).toEqual(["stop:A"]));
+      expect(daemon.getControlStatus().runningAccountIds).toContain("A");
       releaseStop();
       await removal;
+      expect(
+        daemon.getAccountStatuses().find((account) => account.accountId === "A"),
+      ).toMatchObject({ registered: false, status: "error" });
+      // Failed stop is not acknowledged as removal or hidden by daemon shutdown.
+      await expect(daemon.stop()).rejects.toThrow("stop failed");
+      expect(events).not.toContain("unsubscribe:A");
+      failStop = false;
+      await daemon.reloadAccounts();
+      await daemon.reloadAccounts();
+      expect(events.filter((event) => event === "unsubscribe:A")).toHaveLength(1);
+      expect(daemon.getControlStatus().runningAccountIds).not.toContain("A");
       await daemon.stop();
       await daemon.stop();
-      expect(events).toEqual([
-        "unsubscribe:A",
-        "stop:A",
-        "unsubscribe:B",
-        "stop:B",
-        "unsubscribe:C",
-        "stop:C",
-        "unsubscribe:D",
-        "stop:D",
-      ]);
-      expect(snapshots).toEqual([["B", "C", "D"], ["C", "D"], ["D"], []]);
-      expect(daemon.getAccountStatuses()).toEqual([]);
+      for (const id of ["A", "B", "C", "D"]) {
+        expect(events.filter((event) => event === `unsubscribe:${id}`)).toHaveLength(1);
+      }
+      expect(daemon.getControlStatus().runningAccountIds).toEqual([]);
     } finally {
+      failStop = false;
       releaseStop();
       await daemon.stop();
     }
@@ -163,9 +168,10 @@ describe("Daemon composition (fake transports + fake runtimes)", () => {
       expect(
         daemon.getAccountStatuses().find((account) => account.accountId === "new"),
       ).toMatchObject({ status: "online", userId: "new-user" });
-      expect(daemon.getAccountStatuses().some((account) => account.accountId === "missing")).toBe(
-        false,
-      );
+      expect(
+        daemon.getAccountStatuses().find((account) => account.accountId === "missing"),
+      ).toMatchObject({ registered: true, status: "stopped" });
+      expect(daemon.getControlStatus().runningAccountIds).not.toContain("missing");
       expect(warn).not.toHaveBeenCalled();
     } finally {
       await daemon.stop();

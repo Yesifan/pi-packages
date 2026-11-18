@@ -11,13 +11,13 @@ AgentSession，并提供 `subagent` 与 `ask_subagent` 工具。实现基线为
 [`docs/README.md`](docs/README.md) 索引及相关引用。
 新增、编辑或实施规格前先阅读并遵守 [`规格索引与维护规则`](docs/specs/README.md)，同步规格 metadata 与索引。
 
-当前工作区已实现 [`Spec 0002`](docs/specs/0002-prompt-and-session-storage.md) 的 runtime 重写与私有 history 目录；最新 typecheck、21 个文件 / 245 项测试、build 与 pack 通过。此前 runtime 独立最终复审已完成，不将其冒充最新目录修订已复审；该审查由主代理记录。实际交互 TUI/print 手测未运行，用户明确接受延期并关闭 Spec 0002（completed），不能因此声称 §14 CLI 全验收通过。PR #11 尚未合并，用户要求把最终目录/discovery 直接整合进原 Spec 0002 和 [`ADR-0003`](docs/adr/0003-sdk-sessions-and-parent-metadata.md)，不另立后续规格/决策。权威规格中的 V1 大节仅保留真实历史资料；当前按顶部摘要、Spec 0002/ADR-0003 执行，独立打开仍允许。[`Spec 0003`](docs/specs/0003-terminal-exit-reporting.md) 仍为未开始的异常退出通知计划，未经授权不要顺带实施。
+当前工作区已实现 [`Spec 0002`](docs/specs/0002-prompt-and-session-storage.md) 的 runtime 重写与私有 history 目录；最新 typecheck、21 个文件 / 245 项测试、build 与 pack 通过。此前 runtime 独立最终复审已完成，不将其冒充最新目录修订已复审；该审查由主代理记录。实际交互 TUI/print 手测未运行，用户明确接受延期并关闭 Spec 0002（completed），不能因此声称 §14 CLI 全验收通过。PR #11 尚未合并，用户要求把最终目录/discovery 直接整合进原 Spec 0002 和 [`ADR-0003`](docs/adr/0003-sdk-sessions-and-parent-metadata.md)，不另立后续规格/决策。权威规格中的 V1 大节仅保留真实历史资料；当前按顶部摘要、Spec 0002/ADR-0003 执行，独立打开仍允许。[`Spec 0003`](docs/specs/0003-terminal-exit-reporting.md) 记录 #40 本轮异常退出通知实现与自动验收；CLI 手测未运行，不扩大跨重启补投或 parent 失败逐 child 通知范围。
 
 当前升级合同见 [ADR-0004](docs/adr/0004-official-sdk-lifecycle.md)；它替代上述历史 preflight/严格模型恢复约定，旧验收不代表 Pi 1.4.0 验证通过。
 
 ## 核心模型与不变量
 
-- 每个 file-backed root Pi session 对应一个 `RootRuntime` 和新的内存 `RootScope`，持有 `<getAgentDir()>/subagents/locks/<rootKey>/` 整树 writer lock；metadata 按直接 parent session 保存于全局 `subagents/sessions/<sessionKey>.json`，无项目镜像。
+- 每个 file-backed root Pi session 窗口对应一个 `RootRuntime` 和内存 `RootScope`；按 Spec 0005/ADR-0005，仅执行周期持有 `<getAgentDir()>/subagents/locks/<rootKey>/` 整树 writer lock，获取后重建最新 Agent 树与 store 缓存，完整清理后空闲释放。其他窗口 create/ask/steer 单次 ROOT_SCOPE_IN_USE，不 IPC、不永久禁用；metadata 按直接 parent session 保存于全局 `subagents/sessions/<sessionKey>.json`，无项目镜像。
 - logical subagent 以直接 parent 下 trim、大小写敏感唯一 name 寻址；`ask_subagent` 使用 name，不支持旧 id。身份可跨 ask/exact root resume 保留，每次普通 ask 使用新的 `Execution` 与 AgentSession；不生成本包 agent/run/mount/report ID 或 epoch。
 - 新 child history 采用 SDK `SessionManager.create(cwd, privateDir)`，privateDir 为 `<getAgentDir()>/subagents/histories`，不追加 cwd 分组、不应用 CLI/env/settings sessionDir、不继承 root CLI override；`PI_CODING_AGENT_DIR` 仍决定 agentDir。存量新 schema metadata 引用的默认目录 history 按已保存 exact paths 恢复，不迁移、搬迁或删除。cwd/model/thinking 从 Pi header/history 恢复，不在 metadata 重复保存。
 - caller 只使用自己的 session-local `DelegationContext`：自己的 cwd、agent registry 和 external cwd 配置。
@@ -36,7 +36,7 @@ AgentSession，并提供 `subagent` 与 `ask_subagent` 工具。实现基线为
 
 ## 主要目录与模块
 
-- `src/index.ts`：Pi 扩展入口及 root session 生命周期绑定。
+- `index.js`：Pi 包入口，向 `src/index.ts` 的编译产物传入公开入口路径。`src/index.ts` 绑定 root session 生命周期。
 - `src/runtime.ts`：Agent/Execution/RootScope 生命周期、name reservation、普通 ask、steering、在线报告处理 barrier 和 shutdown。
 - `src/child-session.ts`：目标 cwd AgentSession 创建/恢复、资源隔离、工具白名单/黑名单和角色 prompt。
 - `src/delegation.ts`：session-local delegation context 与动态 tool description。
@@ -72,7 +72,7 @@ AgentSession，并提供 `subagent` 与 `ask_subagent` 工具。实现基线为
 - agent layer override、snapshot 稳定性、symlink escape、工具白名单/黑名单互斥及动态扩展重新注册后的过滤；
 - direct ownership、depth/live/cycle limit、普通 ask 原子 busy；
 - Spec 0002 的 Execution/steering 行为、具体拒绝诊断、单 report 与迟到 callback guards；
-- child 等待、report delivery、恢复、interrupted run 和 writer lock；
+- child 等待、report delivery、恢复、interrupted run 和 writer lock；Spec 0005 多窗口 A→B→A 交接、全生命周期保锁、失败修复重试与真实双进程互斥/崩溃 stale 恢复；
 - target resources/tools 更新、跨 cwd 隔离及 `Warning Cache Broke` 场景；
 - UI FIFO、取消、timeout、无 UI fallback 和 status cleanup；
 - pre-accept abort、post-accept contract 与 shutdown race。

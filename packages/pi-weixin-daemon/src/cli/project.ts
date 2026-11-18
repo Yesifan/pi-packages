@@ -1,7 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { Command } from "commander";
+import { storageIdentity, withControlLock } from "../config/control-lock.js";
+import { ProjectStore } from "../projects/project-store.js";
 import type { ProjectStatus } from "../projects/types.js";
+import { applyControl } from "./apply-control.js";
+import { ControlStore } from "./control-store.js";
 import { formatProjectRow, rpcCall } from "./rpc-client.js";
 
 /** Resolve cwd (require exists + dir). Returns resolved absolute path. */
@@ -18,7 +22,7 @@ export function projectCommand(): Command {
     .description(
       "Manage projects.\n" +
         "  pi-wx project create <name> --cwd <path>\n" +
-        "  pi-wx project <name> add|remove <label>...\n" +
+        "  pi-wx project <name> add|remove <account-name>... (case-sensitive; no IDs)\n" +
         "  pi-wx project list|show|enable|disable|restart|remove",
     )
     .option("--cwd <path>", "project working directory (for create; fixed after creation)")
@@ -39,16 +43,45 @@ export function projectCommand(): Command {
     });
 }
 
+/** Config and runtime are separate columns; an unavailable daemon is not "off". */
+async function persistentProjects() {
+  const configured = await withControlLock(() => new ProjectStore().list());
+  let actual: ProjectStatus[] = [];
+  try {
+    const status = await rpcCall<{ identity: string; projects: ProjectStatus[] }>("daemon.status");
+    if (status.identity !== storageIdentity()) throw new Error("Storage identity mismatch");
+    actual = status.projects;
+  } catch {
+    console.warn(
+      "Runtime unavailable or storage identity mismatch; showing configuration with unknown runtime state.",
+    );
+  }
+  const names = new Set([...configured.map((p) => p.name), ...actual.map((p) => p.name)]);
+  return [...names].map((name) => {
+    const desired = configured.find((p) => p.name === name)?.config;
+    const live = actual.find((p) => p.name === name);
+    return {
+      name,
+      cwd: desired?.cwd ?? live?.cwd ?? "",
+      accounts: desired?.accounts ?? live?.accounts ?? [],
+      configured: !!desired,
+      enabled: desired?.enabled ?? false,
+      state: live?.state ?? "unknown",
+      error: live?.error,
+    };
+  });
+}
+
 async function dispatch(first: string, rest: string[], opts: { cwd?: string }): Promise<void> {
   const name = rest[0];
   switch (first) {
     case "list": {
-      const list = await rpcCall<ProjectStatus[]>("project.list");
+      const list = await persistentProjects();
       if (list.length === 0) {
         console.log("No projects. Add one with `project create <name> --cwd <path>`.");
         return;
       }
-      console.log("NAME         STATE      ENABLED   ACCOUNTS             CWD");
+      console.log("NAME        CONFIGURED STATE     ENABLED  ACCOUNTS            CWD");
       for (const p of list) console.log(formatProjectRow(p));
       return;
     }
@@ -57,7 +90,8 @@ async function dispatch(first: string, rest: string[], opts: { cwd?: string }): 
         throw new Error("usage: project create <name> --cwd <path>");
       }
       const cwd = resolveCwd(opts.cwd);
-      await rpcCall("project.create", { name, cwd });
+      await new ControlStore().project("create", name, { cwd });
+      await applyControl();
       console.log(
         `Created project "${name}" (disabled). Enable it with \`project enable ${name}\`.`,
       );
@@ -65,7 +99,8 @@ async function dispatch(first: string, rest: string[], opts: { cwd?: string }): 
     }
     case "show": {
       if (!name) throw new Error("usage: project show <name>");
-      const p = await rpcCall<ProjectStatus>("project.get", { name });
+      const p = (await persistentProjects()).find((project) => project.name === name);
+      if (!p) throw new Error(`project "${name}" does not exist`);
       console.log(formatProjectRow(p));
       return;
     }
@@ -74,7 +109,12 @@ async function dispatch(first: string, rest: string[], opts: { cwd?: string }): 
     case "restart":
     case "remove": {
       if (!name) throw new Error(`usage: project ${first} <name>`);
-      await rpcCall(`project.${first}`, { name });
+      if (first === "restart")
+        await rpcCall("project.restart", { name, identity: storageIdentity() });
+      else {
+        await new ControlStore().project(first, name);
+        await applyControl();
+      }
       const past =
         first === "enable"
           ? "Enabled"
@@ -92,7 +132,8 @@ async function dispatch(first: string, rest: string[], opts: { cwd?: string }): 
       const verb = rest[0];
       const labels = rest.slice(1);
       if ((verb === "add" || verb === "remove") && labels.length > 0) {
-        await rpcCall(`project.account.${verb}`, { name: projectName, accounts: labels });
+        await new ControlStore().project(`account.${verb}`, projectName, { names: labels });
+        await applyControl();
         console.log(
           `${verb === "add" ? "Added" : "Removed"} account(s) ${verb === "add" ? "to" : "from"} project "${projectName}".`,
         );

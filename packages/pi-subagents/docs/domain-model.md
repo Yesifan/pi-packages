@@ -2,9 +2,11 @@
 
 > Spec 0002 原 runtime 独立复审已完成；最新私有目录修订的 typecheck、21 个文件 / 245 项测试、build 与 pack 通过，不冒充该修订已独立复审。PR #11 未合并，最终目录/discovery 直接整合进原规格。用户于 2026-10-09 接受手动 TUI/print 验收延期，Spec 0002 保持 completed；手测未运行，不宣称全部验收通过。
 
-行为以[权威实现规格](specs/yesifan-pi-subagents-spec.md)、[Spec 0002](specs/0002-prompt-and-session-storage.md) 和 [ADR-0003](adr/0003-sdk-sessions-and-parent-metadata.md) 为准；原 Spec 0002/ADR-0003 已包含新 history 私有目录、普通发现排除与独立打开允许的最终决定。[Spec 0003](https://github.com/Yesifan/pi-packages/blob/main/packages/pi-subagents/docs/specs/0003-terminal-exit-reporting.md) 的异常退出通知扩展仍为未开始计划，不属于本文的已实现承诺。旧 project-local store、sa/run/mount/report ID、epoch 和持久 delivery 属于历史实现，不是当前不变量。
+行为以[权威实现规格](specs/yesifan-pi-subagents-spec.md)、[Spec 0002](specs/0002-prompt-and-session-storage.md) 和 [ADR-0003](adr/0003-sdk-sessions-and-parent-metadata.md) 为准；原 Spec 0002/ADR-0003 已包含新 history 私有目录、普通发现排除与独立打开允许的最终决定。[Spec 0003](https://github.com/Yesifan/pi-packages/blob/main/packages/pi-subagents/docs/specs/0003-terminal-exit-reporting.md) 扩展异常终态覆盖与诊断；本轮实现和自动验收记录见该规格，不代表已执行 CLI 手测。旧 project-local store、sa/run/mount/report ID、epoch 和持久 delivery 属于历史实现，不是当前不变量。
 
 当前 Pi 1.4.0 生命周期以 [ADR-0004](adr/0004-official-sdk-lifecycle.md) 为准：普通 prompt 先持久化本地准备/running，再调用 SDK 并返回 submitted，不保证 started；公开 steer 的 queued 仅保证排队，handled 不入队。接受模板/skill 展开及 extension command 拒绝，不保证 hook 期间取消零入队。prompt/steer 调用与清理未结束仍 busy，迟到操作仅绑定捕获 session，shutdown 最后释放 writer lock。每 mount 使用独立官方 services，拒绝 error diagnostics；SDK 原生恢复模型/thinking，允许默认选择/fallback/clamp，展示已有公开诊断，不放松 history 身份、cwd、角色、trust 与工具策略。升级实施中，历史验收不代表本次验证。
+
+执行周期锁以 [Spec 0005](specs/0005-execution-scoped-root-lock.md) 与 [ADR-0005](adr/0005-execution-scoped-root-lock.md) 为准，扩展 ADR-0003/0004：打开窗口不持锁、不恢复树；首次 create/普通 ask 获取整树锁后重建最新 identities/metadata。全部 opening、Execution、report 依赖、SDK 调用、持久化与 dispose 清理结束才释放，下一轮重新读取，不能沿用旧树缓存。其他窗口的 create/ask/steer 单次返回 ROOT_SCOPE_IN_USE，不禁用工具、不排队、不 IPC；idle steer 不恢复、不创建执行。root void 报告仍只表示 submitted。
 
 ## 1. 核心实体
 
@@ -30,7 +32,7 @@ Root Session 是整棵树的管理边界，要求 file-backed Pi session。Sessi
 
 ### RootRuntime / RootScope
 
-RootRuntime 是单一整树协调者，不是持久业务身份。RootScope 是一次 root 生命周期的内存对象，保存 children、agents、executions 和 deliveries。关闭后置 closing，不复用该 scope；通过对象身份拒绝迟到 callback，不生成 epoch。
+RootRuntime 是一个窗口的整树协调者，不是持久业务身份。RootScope 是一次 root 窗口生命周期的内存对象，保存 children、agents、executions 和 deliveries。每次获取执行周期锁时重新创建 Agent 树及 store 缓存；窗口空闲保留的 children 不是有效执行依据。关闭后置 closing，不复用该 scope；通过捕获 Execution 对象身份、closed/closing 与当前执行校验拒绝迟到 callback，不生成 epoch。
 
 整树共享 root 项目的 max_depth、max_live_agents、ui_timeout_ms、UI FIFO 与进度 widget。RootRuntime 不把 caller registries 或 external cwd 授权合并成全局资源。
 
@@ -54,7 +56,7 @@ SubagentReport 是本次在线结果信封，包含 name、保存的 role、cwd�
 
 ReportDelivery 是内存中的来源、捕获 target 与提交/观察/处理状态。child 依赖同步从 pendingChildren 转入 pendingReports；nested parent 观察 custom message、核对持久 Pi entry 和后续 settled 后才解除 barrier，发送返回不等于 processed。关联使用 Pi 自有 session/entry identity，不依赖对象经过 SDK clone 后仍相等，不生成本包 report ID。root 投递沿返回 void 的宿主 sendReport，成功返回只证明 submitted，不证明 recorded/processed；成功提交后释放 scope delivery，没有本包 root parent mount finalize 依赖。处理确认持有仅适用于 nested Execution；不新增 root inbox/receipt，也不据此宣称 exactly-once。
 
-sender 释放后 delivery 可继续存在；即使同一 Agent 的下一次 ask 已开始，旧 delivery 仍只面向原有效 parent，不改新 Execution。parent 已关闭/root scope 失效时不转交下一执行。当前通路的异常投递覆盖与诊断完善另见未实施的 Spec 0003；parent 自身失败导致 child 中断不承诺逐 child 通知。
+sender 释放后 delivery 可继续存在；即使同一 Agent 的下一次 ask 已开始，旧 delivery 仍只面向原有效 parent，不改新 Execution。parent 已关闭/root scope 失效时不转交下一执行。当前通路的异常投递覆盖与诊断见 Spec 0003；parent 自身失败导致 child 中断不承诺逐 child 通知。
 
 ## 2. 值对象与资源边界
 
@@ -111,7 +113,7 @@ SUBAGENT_NOT_STEERABLE 解释 idle/interrupted/released/opening/waiting children
 7. 普通 ask 按当前 cwd/trust/工具资源重校验，完整 role snapshot 不替换；模型/thinking 从历史恢复。
 8. 整树锁保护本包管理，不阻止用户独立打开/resume child 或宿主直接写 JSONL。新 child 位于普通 discovery 根之外，默认 list/listAll/picker/continue 不选取它们；显式 private-directory 查询/custom sessionDir 和 explicit file open 仍允许，不改 mtime，不添加 owned-child guard/marker/index，不承诺并发直接打开无冲突或访问隔离。
 9. 仅停止 root 当前模型响应不停止已接受后台工作；root shutdown/replacement 标 closing、取消 UI、abort/dispose descendants、保存终态、清进度并最后释放锁。
-10. exact root resume 只递归加载轻量关系/history，不恢复 SDK 对象/pending 集合/旧 Promise，不续跑、不对账或补投报告；保存 idle 后投递前退出可能丢在线报告。首次 root owner 文件缺失按空树处理，不承诺诊断历史删除。
+10. exact root resume 的下一次 create/普通 ask 获取锁后才递归加载轻量关系/history，不恢复 SDK 对象/pending 集合/旧 Promise，不续跑、不对账或补投报告；保存 idle 后投递前退出可能丢在线报告。首次 root owner 文件缺失按空树处理，不承诺诊断历史删除。
 
 所有 descendants 共用一个 blocking UI FIFO；confirm/select/input 保留取消、timeout 与无 UI fallback。child 不直接修改 root widget，进度仅为 execution-local 最新摘要，不持久化或复制 thinking/tool output。同进程第三方 singleton、环境修改与不合作退出不保证隔离。不合作的异步 input hook 尚未退出时 shutdown 保留整树 writer lock，避免新 writer 接管仍可能写入的旧工作，不保证关闭立即完成。symlink/realpath/header 校验不是 filesystem sandbox，也不承诺防住恶意并发路径替换的全部 TOCTOU 攻击。
 

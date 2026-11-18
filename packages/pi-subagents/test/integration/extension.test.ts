@@ -147,8 +147,10 @@ describe("Pi extension integration", () => {
       expect(ask?.description).toContain("not a status or result-polling tool");
       expect(ask?.parameters).toHaveProperty("required", expect.arrayContaining(["name"]));
       expect(ask?.parameters).not.toHaveProperty("properties.id");
-      expect((await stat(path.join(agentDir, "subagents", "sessions"))).isDirectory()).toBe(true);
-      expect((await stat(path.join(agentDir, "subagents", "locks"))).isDirectory()).toBe(true);
+      // Merely opening a window neither acquires ownership nor initializes metadata.
+      await expect(stat(path.join(agentDir, "subagents", "locks"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
       // Configuration reads no longer initialize project-local sessions or .gitignore.
       await expect(stat(path.join(cwd, ".pi", "subagents"))).rejects.toMatchObject({
         code: "ENOENT",

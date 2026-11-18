@@ -5,11 +5,12 @@ import { Command } from "commander";
 import { z } from "zod";
 import { checkModelAvailability, isPiSdkAvailable, piSdkVersion } from "../pi/sdk-info.js";
 import {
-  listIndexedWeixinAccountIds,
   loadWeixinAccount,
+  requireAccountIdByName,
   resolveWeixinBaseUrl,
 } from "../weixin/auth/accounts.js";
 import { resolveStateDir } from "../weixin/storage/state-dir.js";
+import { listSelectableAccounts } from "./account-selection.js";
 
 const DoctorArgsSchema = z.object({
   cwd: z.string().min(1).optional(),
@@ -25,14 +26,19 @@ interface Check {
 const MIN_NODE_MAJOR = 22;
 const MIN_NODE_MINOR = 19;
 
-/** `pi-wx doctor [--cwd <path>] [--account <id>...]` */
+/** `pi-wx doctor [--cwd <path>] [--account <name>...]` */
 export function doctorCommand(): Command {
   const collect = (value: string, previous: string[]) => [...previous, value];
 
   return new Command("doctor")
     .description("Check the environment for running the daemon")
     .option("--cwd <path>", "project directory to check")
-    .option("--account <id>", "account to check (repeatable)", collect, [] as string[])
+    .option(
+      "--account <name>",
+      "account name to check (case-sensitive; repeatable; no IDs)",
+      collect,
+      [] as string[],
+    )
     .action(async (opts: { cwd?: string; account?: string[] }) => {
       const parsed = DoctorArgsSchema.safeParse({
         cwd: opts.cwd,
@@ -116,8 +122,10 @@ export function doctorCommand(): Command {
       }
 
       // --- Accounts ---
-      const accountIds =
-        args.accounts && args.accounts.length > 0 ? args.accounts : listIndexedWeixinAccountIds();
+      const { accounts } = await listSelectableAccounts(true);
+      const accountIds = args.accounts?.length
+        ? args.accounts.map((name) => requireAccountIdByName(accounts, name))
+        : accounts.map((account) => account.accountId);
       if (accountIds.length === 0) {
         checks.push({
           name: "weixin accounts",

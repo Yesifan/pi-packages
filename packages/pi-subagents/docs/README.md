@@ -17,9 +17,9 @@
 - PR #11 尚未合并，按用户要求将最终目录/discovery 决策直接整合进原 Spec 0002/ADR-0003，不另立后续规格或虚构已发布的替代历史。Spec 0002 保持 completed，日期 `2026-10-08 / 2026-10-09`；用户明确接受实际交互 TUI/print 手测延期，手测未运行，不表示 §14 全部验收通过。
 - 最新 privateDir 修订已有 typecheck、21 文件 / 245 测试、build、pack 成功记录。原 runtime 独立复审已解决此前 5 项问题；不将该旧复审冒充最新目录修订已复审，该审查由主代理记录。root submitted 无 processing receipt、queued 不可撤回、不合作 hook 保留关闭锁、路径检查非 sandbox 的边界继续有效。
 
-## 待实施的异常退出通知
+## 异常退出通知
 
-- [Spec 0003：异常退出也向主代理报告](https://github.com/Yesifan/pi-packages/blob/main/packages/pi-subagents/docs/specs/0003-terminal-exit-reporting.md) — 未开始实现；包含[现场证据](https://github.com/Yesifan/pi-packages/blob/main/packages/pi-subagents/docs/specs/evidence/0003-terminal-exit-2026-10-09.md)。不因本轮目录修订声称异常退出通知或诊断完善已完成。
+- [Spec 0003：异常退出也向主代理报告](https://github.com/Yesifan/pi-packages/blob/main/packages/pi-subagents/docs/specs/0003-terminal-exit-reporting.md) — #40 本轮实施与验证见规格正文；包含[现场证据](https://github.com/Yesifan/pi-packages/blob/main/packages/pi-subagents/docs/specs/evidence/0003-terminal-exit-2026-10-09.md)。本轮增加取消/失败终态覆盖及投递诊断，交互式 CLI 手测未运行。
 
 ## 原生 Codemode 与 MCP
 
@@ -28,6 +28,10 @@
 ## Pi 1.4.0 升级
 
 - [全仓升级规格](https://github.com/Yesifan/pi-packages/blob/main/docs/specs/pi-1.4-upgrade.md) — completed（2026-10-22）；[ADR-0004](adr/0004-official-sdk-lifecycle.md) 记录 submitted、官方 services/恢复 fallback/steering 与串行清理决定，替代旧 preflight/严格恢复要求。历史规格和验收保留，本轮离线回归、构建、pack 与独立审查已完成，交互 TUI/print 手测未执行；详见全仓规格验收摘要。
+
+## 执行周期整树锁
+
+- [Spec 0005：执行周期整树锁与同 root 多窗口使用](specs/0005-execution-scoped-root-lock.md) — completed（2026-10-23 / 2026-10-23）；[ADR-0005](adr/0005-execution-scoped-root-lock.md) 扩展 Spec 0002 与 ADR-0003/0004 的锁生命周期。允许同 exact root 多窗口打开，执行期间整树互斥，获取后刷新 metadata，全部工作和清理完成后释放；不引入 IPC。测试方案已获用户批准，实际验证记录见规格，不宣称 CLI 手测已运行。
 
 ## 历史实现设计
 

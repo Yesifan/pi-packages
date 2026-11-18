@@ -1,6 +1,6 @@
 {
   "name": "@yesifan/pi-subagents",
-  "version": "0.5.2",
+  "version": "0.6.1",
   "description": "Persistent in-process background subagents for Pi Coding Agent",
   "keywords": [
     "pi-package",
@@ -18,6 +18,7 @@
     "node": ">=22.19.0"
   },
   "files": [
+    "index.js",
     "dist",
     "agents",
     "examples",
@@ -26,18 +27,19 @@
     "docs/specs/0001-project-local-subagent-storage.md",
     "docs/specs/0002-prompt-and-session-storage.md",
     "docs/specs/0004-sdk-builtin-tools-and-mcp.md",
+    "docs/specs/0005-execution-scoped-root-lock.md",
     "docs/adr/0001-project-local-subagent-storage.md",
     "docs/adr/0002-native-widget-for-background-progress.md",
     "docs/adr/0003-sdk-sessions-and-parent-metadata.md",
     "docs/adr/0004-official-sdk-lifecycle.md",
+    "docs/adr/0005-execution-scoped-root-lock.md",
     "README.md",
     "CHANGELOG.md",
     "LICENSE"
   ],
   "scripts": {
     "build": "tsc",
-    "prepare": "tsc",
-    "prepublishOnly": "tsc",
+    "prepare": "pnpm run build",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json",
     "test": "vitest run",
     "test:ci": "vitest run",
@@ -62,7 +64,7 @@
   },
   "pi": {
     "extensions": [
-      "./dist/index.js"
+      "./index.js"
     ]
   },
   "publishConfig": {

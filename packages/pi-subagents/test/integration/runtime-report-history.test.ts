@@ -38,7 +38,7 @@ describe("report history validation", () => {
     expect(content).not.toContain(history);
     expect(content).not.toContain("run_id");
     expect(content).not.toContain("agentId");
-    const record = (await h.store.readOwner(h.scope.identity, null))!;
+    const record = (await h.readOwner(h.scope.identity, null))!;
     expect(record.children.worker!.state).toBe("idle");
     expect(JSON.stringify(record)).not.toContain("Done.");
     expect(JSON.stringify(record)).not.toContain("delivery");
@@ -128,12 +128,10 @@ describe("scope-bound report delivery", () => {
       await reached.promise;
       expect(h.agent("worker").currentExecution).toBeUndefined();
       expect(h.scope.deliveries.size).toBe(1);
-      if (action === "shutdown") await h.runtime.shutdown();
-      else {
-        const replacement = await h.restart();
-        expect(Reflect.get(replacement, "scope")).not.toBe(h.scope);
-      }
+      const stopping = action === "shutdown" ? h.runtime.shutdown() : h.restart();
+      // Cleanup must join the suspended report validation before releasing ownership.
       resume.resolve();
+      await stopping;
       await h.flush();
       expect(h.reports).toHaveLength(0);
       expect(h.scope.deliveries.size).toBe(0);

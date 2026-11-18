@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import net from "node:net";
 import { resolveDaemonSocket } from "../config/paths.js";
 import type { ProjectBroadcastResult } from "../projects/types.js";
@@ -22,7 +21,7 @@ let nextId = 1;
 
 /**
  * Call a daemon RPC method over the UDS. Throws DaemonNotRunningError when the
- * socket is absent / connection refused (daemon down).
+ * socket is absent / connection refused. This alone does not prove receivers stopped.
  */
 export async function rpcCall<T = unknown>(
   method: string,
@@ -53,11 +52,12 @@ async function callRpc<T>(
   socketPath: string,
   timeoutMs: number,
 ): Promise<T> {
-  if (!fs.existsSync(socketPath)) throw new DaemonNotRunningError();
   return new Promise<T>((resolve, reject) => {
     const socket = net.connect(socketPath);
     const id = nextId++;
     let settled = false;
+    let connected = false;
+    const chunks: Buffer[] = [];
     const close = () => {
       if (!socket.destroyed) socket.destroy();
     };
@@ -71,18 +71,30 @@ async function callRpc<T>(
       }
     };
     socket.on("connect", () => {
+      connected = true;
       socket.write(`${JSON.stringify({ id, method, params })}\n`);
     });
-    let response = "";
-    socket.setEncoding("utf8");
-    socket.on("data", (chunk: string) => {
-      response += chunk;
+    socket.on("data", (buf: Buffer) => {
+      if (!settled) chunks.push(buf);
     });
+    // The server ends the socket after its response; data events are not message boundaries.
     socket.on("end", () => {
       done(() => {
         let resp: RpcResponse;
         try {
-          resp = JSON.parse(response) as RpcResponse;
+          const response = Buffer.concat(chunks);
+          if (response.length === 0) throw new Error("Empty RPC response");
+          resp = JSON.parse(response.toString("utf-8")) as RpcResponse;
+          if (
+            resp === null ||
+            typeof resp !== "object" ||
+            Array.isArray(resp) ||
+            resp.id !== id ||
+            typeof resp.ok !== "boolean" ||
+            (resp.error !== undefined && typeof resp.error !== "string")
+          ) {
+            throw new Error("Invalid RPC response");
+          }
         } catch (err) {
           reject(err instanceof Error ? err : new Error(String(err)));
           return;
@@ -91,7 +103,15 @@ async function callRpc<T>(
         else reject(new Error(resp.error ?? "rpc failed"));
       });
     });
-    socket.on("error", () => done(() => reject(new DaemonNotRunningError())));
+    socket.on("error", (err: NodeJS.ErrnoException) =>
+      done(() =>
+        reject(
+          !connected && (err.code === "ENOENT" || err.code === "ECONNREFUSED")
+            ? new DaemonNotRunningError()
+            : err,
+        ),
+      ),
+    );
     socket.on("timeout", () => done(() => reject(new Error("rpc timeout"))));
     socket.on("close", () => done(() => reject(new Error("rpc connection closed"))));
     socket.setTimeout(timeoutMs);
@@ -103,6 +123,7 @@ export function formatProjectRow(p: {
   name: string;
   state: string;
   enabled: boolean;
+  configured?: boolean;
   accounts: string[];
   cwd: string;
   error?: string;
@@ -111,5 +132,5 @@ export function formatProjectRow(p: {
   const enabled = p.enabled ? "yes" : "no";
   const state = p.state;
   const err = p.error ? `  [${p.error}]` : "";
-  return `${p.name.padEnd(12)}${state.padEnd(10)}${enabled.padEnd(9)}${accounts.padEnd(20)}${p.cwd}${err}`;
+  return `${p.name.padEnd(12)}${(p.configured === false ? "no" : "yes").padEnd(11)}${state.padEnd(10)}${enabled.padEnd(9)}${accounts.padEnd(20)}${p.cwd}${err}`;
 }

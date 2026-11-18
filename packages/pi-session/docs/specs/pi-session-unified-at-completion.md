@@ -8,6 +8,7 @@ version: null
 related_documents:
   - "[Spec 索引与维护规则](README.md)"
   - "[原 pi-session 规格](pi-session.md)"
+  - "[pi-session 跨模式](pi-session-cross-mode.md)"
   - "[Issue #58](https://github.com/Yesifan/pi-packages/issues/58)"
 ---
 
@@ -34,7 +35,7 @@ related_documents:
 
 ### 范围与展示
 
-- 保持现有 TUI 补全和 interactive 输入展开的范围；不改变后台输入。
+- 保持跨模式规格的补全注册与输入来源约定：interactive 和 rpc 输入展开，extension 输入保持不变。
 - 当前工作目录的会话显示为 `[session]标题`，外部工作目录的会话显示为 `[session 项目名]标题`，项目名使用目录名。有自定义标题时使用自定义标题，否则使用首条消息摘要；两者均不可用时使用 `Untitled`。显示及插入的标题最多 80 个 Unicode 字符，超出时截断并以 `…` 结尾，完整 ID 不截断；搜索仍覆盖完整标题。同名候选提供足以区分项目和 ID 的辅助信息。
 - 补全和引用解析仅覆盖当前工作目录及其 `.pi/pi-session/setting.json` 的 `externalDirectories` 中授权的目录；未配置时仅当前目录。沿用工具授权的规范化与精确目录匹配规则，不扩展到任意自定义存储或私有 subagent 存储。配置目录无效或不可用时会话发现整体失败，文件补全不受影响，提交时引用保留并警告，避免不完整索引误判重复 ID。
 
@@ -65,8 +66,8 @@ related_documents:
 
 ## Out of Scope
 
-不更改 `search-session` / `ask-session` 行为或 cwd 授权，不自动读取或注入会话正文，不添加自建持久化索引，不扩展 RPC、JSON 或 print 模式的补全 UI，也不执行远端发布。
+不更改 `search-session` / `ask-session` 行为或 cwd 授权，不自动读取或注入会话正文，不添加自建持久化索引，不承诺 RPC、JSON 或 print 模式提供补全 UI，也不执行远端发布。
 
 ## Further Notes
 
-用户确认终端手动测试通过，并将 issue 原定的所有项目范围收窄为当前项目及显式授权的外部项目。已接受 Pi SDK 无补全关闭回调、以及可能静默跳过不可读会话的限制，见上文。SDK 使用 `(no messages)` 表示没有首条消息；仅凭 SDK 元数据无法区分该占位值和内容恰为该字符串的真实首条消息，两者均显示为 `Untitled`。
+用户确认终端手动测试通过，并将 issue 原定的所有项目范围收窄为当前项目及显式授权的外部项目。发现使用配置中的路径拼写及其 canonical 路径；其他符号链接拼写所存的会话可能遗漏，`ask-session` 仅查找 canonical cwd 的存储，也可能无法打开通过符号链接拼写发现的会话。已接受 Pi SDK 无补全关闭回调、以及可能静默跳过不可读会话的限制，见上文。SDK 使用 `(no messages)` 表示没有首条消息；仅凭 SDK 元数据无法区分该占位值和内容恰为该字符串的真实首条消息，两者均显示为 `Untitled`。

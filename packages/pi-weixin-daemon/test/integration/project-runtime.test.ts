@@ -181,43 +181,55 @@ describe("ProjectRuntime: sender marker + project-wide notify/broadcast + idle c
     expect(h.fakes.get("foo")!.prompts).toHaveLength(0);
   });
 
-  it("auto-closes an idle session: notifies + restores default on next message", async () => {
-    const h = setup({ sessionIdleMs: 40 });
-    await h.pm.sync(fooConfig as never);
+  it.each([true, false])(
+    "auto-closes idle sessions (default=%s), notifying only for non-default",
+    async (isDefault) => {
+      const h = setup({ sessionIdleMs: 40 });
+      await h.pm.sync(fooConfig as never);
 
-    // Register A and B.
-    const pB = h.pm.dispatch("B", textMsg("B", "u-b", "m1", "b"));
-    await tick();
-    h.fakes.get("foo")!.complete("");
-    await pB;
-    const pA = h.pm.dispatch("A", textMsg("A", "u-a", "m2", "a"));
-    await tick();
-    h.fakes.get("foo")!.complete("");
-    await pA;
+      // Register A and B.
+      const pB = h.pm.dispatch("B", textMsg("B", "u-b", "m1", "b"));
+      await tick();
+      h.fakes.get("foo")!.complete("");
+      await pB;
+      const pA = h.pm.dispatch("A", textMsg("A", "u-a", "m2", "a"));
+      await tick();
+      h.fakes.get("foo")!.complete("");
+      await pA;
 
-    // Wait past the idle window: both should get the close notice.
-    await vi.waitFor(() => {
-      expect(h.transports.get("A")!.textsTo("A")).toContain("本次会话已关闭");
-      expect(h.transports.get("B")!.textsTo("B")).toContain("本次会话已关闭");
-    });
+      const runtime = h.fakes.get("foo")!;
+      const status = runtime.getStatus();
+      const activeStatus = vi.spyOn(runtime, "getStatus").mockReturnValue({
+        ...status,
+        sessionId: isDefault ? status.sessionId : "temporary-session",
+      });
+      await vi.waitFor(() => expect(runtime.stopCalls).toBeGreaterThan(0));
+      for (const account of ["A", "B"]) {
+        const notices = h.transports
+          .get(account)!
+          .textsTo(account)
+          .filter((text) => text === "本次会话已关闭");
+        expect(notices).toHaveLength(isDefault ? 0 : 1);
+      }
+      // Real dispose still happens for both default and temporary sessions.
+      expect(runtime.stopCalls).toBeGreaterThan(0);
+      activeStatus.mockRestore();
 
-    // W3: idle close disposes the session (real close), not just a flag.
-    expect(h.fakes.get("foo")!.stopCalls).toBeGreaterThan(0);
+      const ensureBefore = h.fakes.get("foo")!.ensureSessionCalls;
+      h.fakes.get("foo")!.sessions = [
+        { id: "fake-session", path: "/fake/session.jsonl", firstMessage: "", modifiedAt: 0 },
+      ];
+      const pC = h.pm.dispatch("A", textMsg("A", "u-a", "m3", "after idle"));
+      await tick();
+      // Releasing the runtime preserves the explicit default identity.
+      expect(h.fakes.get("foo")!.ensureSessionCalls).toBe(ensureBefore);
+      expect(h.fakes.get("foo")!.resumeCalls).toEqual(["/fake/session.jsonl"]);
 
-    const ensureBefore = h.fakes.get("foo")!.ensureSessionCalls;
-    h.fakes.get("foo")!.sessions = [
-      { id: "fake-session", path: "/fake/session.jsonl", firstMessage: "", modifiedAt: 0 },
-    ];
-    const pC = h.pm.dispatch("A", textMsg("A", "u-a", "m3", "after idle"));
-    await tick();
-    // Releasing the runtime preserves the explicit default identity.
-    expect(h.fakes.get("foo")!.ensureSessionCalls).toBe(ensureBefore);
-    expect(h.fakes.get("foo")!.resumeCalls).toEqual(["/fake/session.jsonl"]);
-
-    h.fakes.get("foo")!.complete("replied");
-    await pC;
-    expect(h.transports.get("A")!.textsTo("A")).toContain("replied");
-  });
+      h.fakes.get("foo")!.complete("replied");
+      await pC;
+      expect(h.transports.get("A")!.textsTo("A")).toContain("replied");
+    },
+  );
 });
 
 describe("ProjectRuntime: login user delivery", () => {

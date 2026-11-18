@@ -46,3 +46,36 @@ jobs:
 
       - name: Verify package tarballs
         run: pnpm -r --filter './packages/*' pack --pack-destination "$RUNNER_TEMP/packages"
+
+      - name: Smoke-test installed Pi packages
+        env:
+          PI_OFFLINE: "1"
+        run: |
+          export PI_CODING_AGENT_DIR="$RUNNER_TEMP/pi-package-smoke/agent"
+          mkdir -p "$PI_CODING_AGENT_DIR/npm" "$RUNNER_TEMP/pi-package-smoke/project"
+          for name in pi-session pi-subagents pi-system-prompt; do
+            tar -tzf "$RUNNER_TEMP/packages/yesifan-$name-"*.tgz > "$RUNNER_TEMP/$name.files"
+            grep -Fx 'package/index.js' "$RUNNER_TEMP/$name.files"
+            grep -E '^package/dist/.*\.js$' "$RUNNER_TEMP/$name.files"
+            if grep -E '^package/(src|extensions|test|tests)/|\.tsx?$|/(tsconfig[^/]*\.json|AGENTS\.md)$' "$RUNNER_TEMP/$name.files"; then
+              exit 1
+            fi
+          done
+          pi_version=$(node -p "require('./packages/pi-subagents/node_modules/@earendil-works/pi-coding-agent/package.json').version")
+          npm install --prefix "$PI_CODING_AGENT_DIR/npm" --no-audit --no-fund \
+            "@earendil-works/pi-coding-agent@$pi_version" "$RUNNER_TEMP/packages/"*.tgz
+          cp .github/scripts/smoke-pi-packages.mjs "$PI_CODING_AGENT_DIR/npm"
+          cd "$RUNNER_TEMP/pi-package-smoke/project"
+          node "$PI_CODING_AGENT_DIR/npm/smoke-pi-packages.mjs"
+          "$PI_CODING_AGENT_DIR/npm/node_modules/.bin/pi-wx" --version
+          export TERM=xterm-256color
+          tui_log="$RUNNER_TEMP/pi-package-smoke/tui.log"
+          timeout 12s script -qefc \
+            'stty rows 40 cols 140; exec "$PI_CODING_AGENT_DIR/npm/node_modules/.bin/pi" --no-session' \
+            /dev/null < <(sleep 5; printf '\004') > "$tui_log" 2>&1 || test "$?" -eq 124
+          for name in pi-session pi-subagents pi-system-prompt; do
+            if ! grep -Fq "@yesifan/$name" "$tui_log" || grep -Fq "@yesifan/$name:" "$tui_log"; then
+              cat "$tui_log"
+              exit 1
+            fi
+          done

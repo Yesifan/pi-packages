@@ -1,4 +1,4 @@
-import fs from "node:fs/promises";
+import fs from "node:fs";
 import path from "node:path";
 
 import type { Logger } from "../../util/logger.js";
@@ -47,13 +47,15 @@ async function saveInboundMedia(params: {
   filename: string;
   buf: Buffer;
   logger: Logger;
+  signal?: AbortSignal;
 }): Promise<string> {
   const { inboxDir, messageKey, filename, buf, logger } = params;
   const dir = path.join(inboxDir, sanitizeDirName(messageKey));
-  await fs.mkdir(dir, { recursive: true });
+  params.signal?.throwIfAborted();
+  fs.mkdirSync(dir, { recursive: true });
   const safeName = sanitizeFilename(filename) || "media.bin";
   const filePath = path.join(dir, safeName);
-  await fs.writeFile(filePath, buf);
+  fs.writeFileSync(filePath, buf);
   logger.info(`saved inbound media: ${filePath} (${buf.length} bytes)`);
   return filePath;
 }
@@ -80,7 +82,13 @@ interface MediaDownloadResult {
  */
 export async function downloadMediaFromItem(
   item: MessageItem,
-  deps: { inboxDir: string; messageKey: string; cdnBaseUrl?: string; logger: Logger },
+  deps: {
+    inboxDir: string;
+    messageKey: string;
+    cdnBaseUrl?: string;
+    logger: Logger;
+    signal?: AbortSignal;
+  },
 ): Promise<MediaDownloadResult> {
   const { inboxDir, messageKey, logger } = deps;
   const cdnBaseUrl = deps.cdnBaseUrl ?? CDN_BASE_URL;
@@ -112,6 +120,7 @@ export async function downloadMediaFromItem(
       const filePath = await saveInboundMedia({
         inboxDir,
         messageKey,
+        signal: deps.signal,
         filename: `image${ext}`,
         buf,
         logger,
@@ -141,7 +150,14 @@ export async function downloadMediaFromItem(
         fileItem.media.full_url,
       );
       const mime = getMimeFromFilename(filename);
-      const filePath = await saveInboundMedia({ inboxDir, messageKey, filename, buf, logger });
+      const filePath = await saveInboundMedia({
+        inboxDir,
+        messageKey,
+        filename,
+        buf,
+        logger,
+        signal: deps.signal,
+      });
       return { attachment: attachment("file", filePath, filename, mime) };
     } catch (err) {
       logger.error(`${label} file download failed: ${String(err)}`);
@@ -168,6 +184,7 @@ export async function downloadMediaFromItem(
       const filePath = await saveInboundMedia({
         inboxDir,
         messageKey,
+        signal: deps.signal,
         filename: "video.mp4",
         buf,
         logger,
@@ -186,7 +203,7 @@ export async function downloadMediaFromItem(
 /** Download all media items of a raw message into the inbox. */
 export async function downloadAttachmentsFromMessage(
   raw: WeixinMessage,
-  deps: { inboxDir?: string; cdnBaseUrl?: string; logger: Logger },
+  deps: { inboxDir?: string; cdnBaseUrl?: string; logger: Logger; signal?: AbortSignal },
 ): Promise<{ attachments: InboundAttachment[]; failures: MediaFailure[] }> {
   // No inbox => no place to persist inbound media; drop attachments (text still flows).
   if (!deps.inboxDir) return { attachments: [], failures: [] };
@@ -194,6 +211,7 @@ export async function downloadAttachmentsFromMessage(
   const attachments: InboundAttachment[] = [];
   const failures: MediaFailure[] = [];
   for (const item of raw.item_list ?? []) {
+    if (deps.signal?.aborted) break;
     const result = await downloadMediaFromItem(item, {
       ...deps,
       messageKey,

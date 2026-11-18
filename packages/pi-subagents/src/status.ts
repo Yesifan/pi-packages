@@ -26,6 +26,13 @@ export function createDelegationStatusSnapshot(
   };
 }
 export function formatDelegationStatus(status: DelegationStatusSnapshot): string {
+  return formatStatus(status, status.directSubagents);
+}
+
+function formatStatus(
+  status: DelegationStatusSnapshot,
+  visible: DelegationStatusSnapshot["directSubagents"],
+): string {
   const running = status.activeDirectSubagentCount;
   const interrupted = status.interruptedDirectSubagentCount;
   const counts = [
@@ -34,15 +41,27 @@ export function formatDelegationStatus(status: DelegationStatusSnapshot): string
   ];
   if (interrupted) counts.push(`${interrupted} interrupted`);
   const summary = `**${counts.join(", ")}; shared usage: ${status.liveAgents}/${status.maxLiveAgents} (includes initialization).**`;
-  const lines = status.directSubagents.map(
+  const lines = visible.map(
     ({ name, agentType, state }) => `- ${label(name)} (role: ${agentType}): ${state}`,
   );
+  const omitted = status.directSubagentCount - visible.length;
+  if (omitted > 0) lines.push(`- ${omitted} subagents omitted`);
   return `${summary}\n${lines.length ? lines.join("\n") : "- None"}`;
 }
 export function formatSubagentReport(
   report: SubagentReport,
   status: DelegationStatusSnapshot,
+  activity: ReadonlyMap<string, number> = new Map(),
 ): string {
+  const byActivity = (a: ActiveSubagentSummary, b: ActiveSubagentSummary) =>
+    (activity.get(b.name) ?? 0) - (activity.get(a.name) ?? 0) ||
+    (a.name < b.name ? -1 : Number(a.name > b.name));
+  const visible = [...status.directSubagents]
+    .sort(
+      (a, b) => Number(b.state === "running") - Number(a.state === "running") || byActivity(a, b),
+    )
+    .slice(0, status.maxLiveAgents + 4)
+    .sort(byActivity);
   return `# ${label(report.name)} Subagent Report
 
 > role: ${report.agentType} outcome: ${report.outcome} cwd: ${report.cwd}
@@ -55,7 +74,7 @@ ${report.result}
 
 ## Subagents
 
-${formatDelegationStatus(status)}
+${formatStatus(status, visible)}
 
 **Follow-up:** For related work, you can use \`ask_subagent\` with the full name of any idle subagent listed above.`;
 }
