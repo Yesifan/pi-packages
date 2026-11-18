@@ -17,11 +17,14 @@
     "node": ">=22.19.0"
   },
   "files": [
-    "src",
+    "index.js",
+    "dist",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepare": "pnpm run build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:ci": "vitest run",
@@ -40,7 +43,7 @@
   },
   "pi": {
     "extensions": [
-      "./src/index.ts"
+      "./index.js"
     ]
   },
   "publishConfig": {

@@ -7,6 +7,7 @@ Persistent, in-process background subagents for [Pi](https://pi.dev).
 ```bash
 pi install npm:@yesifan/pi-subagents
 # local checkout
+pnpm --filter @yesifan/pi-subagents build
 pi install -l ./packages/pi-subagents
 ```
 

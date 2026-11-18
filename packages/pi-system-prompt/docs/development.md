@@ -17,12 +17,16 @@ Pi 安装包（package）的命令是 `pi install`。本仓库是 pnpm workspace
 ```json
 {
   "pi": {
-    "extensions": ["./extensions"]
+    "extensions": ["./index.js"]
   }
 }
 ```
 
-包目录下 `extensions/system-prompt.ts` 会被 Pi 当作扩展加载。
+Pi 加载包根的 `index.js`，由它转发到 `dist/system-prompt.js`。先在仓库根目录构建：
+
+```bash
+pnpm --filter @yesifan/pi-system-prompt build
+```
 
 ### 方式一：用户级（写进 `~/.pi/agent/settings.json`）
 
@@ -57,8 +61,7 @@ pi install -l ./packages/pi-system-prompt
 ### 关键点：本地路径不会被复制
 
 本地路径（local path）与 npm / git 包不同：**Pi 直接把本地路径加进
-settings，而不会拷贝一份副本**。也就是说，Pi 加载的就是仓库里的那份源码，
-包目录下的 `extensions/system-prompt.ts` 改了就等于是「已安装版」改了，不需要重新拷贝。
+settings，而不会拷贝一份副本**。Pi 直接加载仓库里的构建产物，因此更新本地源码后重新构建即可。
 
 ### 安装后生效
 
@@ -86,7 +89,7 @@ pi list
 ```
 
 能看到 `pi-system-prompt`、且来源（source）是本地路径（不是 `npm:` / `git:`），
-就说明扩展直接读磁盘上的源码。
+就说明扩展直接读本地包的构建产物。
 
 ### 步骤 2：改源码
 
@@ -97,13 +100,7 @@ pi list
 
 ### 步骤 3：让改动生效
 
-由于是本地路径，改完源码后在当前会话执行：
-
-```
-/reload
-```
-
-（或者重启 Pi。）Pi 会重新加载 `./extensions` 下的扩展，改动立即生效。
+改完源码后先运行 `pnpm --filter @yesifan/pi-system-prompt build`，再在当前会话执行 `/reload` 或重启 Pi。
 
 > 注意：`/reload` 重新加载的是「已注册的包」。如果改了扩展文件名、或者
 > 新增/删除了扩展文件，有时需要重新 `pi install <path>` 让 Pi 重新解析
@@ -134,7 +131,7 @@ pi install ./packages/pi-system-prompt   # 刷新注册（本地路径）
 | 查看已装包 | `pi list` |
 | 移除 | `pi remove "$(pwd)/packages/pi-system-prompt"` |
 | 仅本轮临时生效（不写入 settings） | `pi -e ./packages/pi-system-prompt` |
-| 源码改动后让扩展生效 | 会话内 `/reload`（或重启 Pi） |
+| 源码改动后让扩展生效 | 重新构建，再 `/reload` 或重启 Pi |
 | 注册信息需要刷新时 | 重新 `pi install <path>` |
 
 ---
@@ -142,7 +139,7 @@ pi install ./packages/pi-system-prompt   # 刷新注册（本地路径）
 ## 4. 常见问题
 
 **Q：改了源码但 `/system-prompt` 没变？**
-A：确认是否执行了 `/reload`；另外确认 `pi list` 里注册的是本地路径而不是
+A：确认是否重新构建并执行了 `/reload`；另外确认 `pi list` 里注册的是本地路径而不是
 某份拷贝。如果之前是用 `pi install` 装的 npm/git 源，改动的是 git 克隆目录，
 需 `pi install git:...@新tag` 移动引用。
 

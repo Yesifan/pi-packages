@@ -14,8 +14,6 @@ import type {
   SubagentReport,
 } from "./types.js";
 
-const OWN_EXTENSION_PATH = fileURLToPath(import.meta.url);
-
 async function assertRootProjectTrusted(
   ctx: ExtensionContext,
   projectRoot: string,
@@ -71,8 +69,11 @@ function failedRuntime(error: unknown): DelegationRuntimeApi {
   };
 }
 
-export default function piSubagents(pi: ExtensionAPI): void {
-  const runtime = new RootRuntime(OWN_EXTENSION_PATH);
+export default function piSubagents(
+  pi: ExtensionAPI,
+  ownExtensionPath = fileURLToPath(import.meta.url),
+): void {
+  const runtime = new RootRuntime(ownExtensionPath);
   let started = false;
 
   pi.on("session_start", async (_event, ctx) => {

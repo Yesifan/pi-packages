@@ -7,6 +7,7 @@ Pi extension for session references, history search and lightweight background c
 ```bash
 pi install npm:@yesifan/pi-session
 # From this repository:
+pnpm --filter @yesifan/pi-session build
 pi install -l ./packages/pi-session
 ```
 
