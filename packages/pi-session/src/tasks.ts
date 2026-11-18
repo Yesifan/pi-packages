@@ -3,11 +3,12 @@ import {
   createAgentSession,
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
+import { describeSessionResult } from "./result.js";
 import { findSession, type SessionTarget } from "./sessions.js";
 
 export type TaskSession = Pick<
   AgentSession,
-  "prompt" | "steer" | "getLastAssistantText" | "messages" | "isStreaming"
+  "prompt" | "steer" | "sessionManager" | "isStreaming"
 > & { dispose: () => void | Promise<void> };
 export interface TaskReport extends SessionTarget {
   status: "completed" | "failed";
@@ -127,22 +128,11 @@ export class SessionTasks {
       const session = await task.loading;
       task.session = session;
       if (this.closed) return;
-      const previous = session.messages.findLast((message) => message.role === "assistant");
+      const startLeafId = session.sessionManager.getLeafId();
       await session.prompt(prompt, { source: "extension" });
-      const latest = session.messages.findLast((message) => message.role === "assistant");
-      const last = latest !== previous ? latest : undefined;
-      if (
-        last?.role === "assistant" &&
-        (last.stopReason === "error" || last.stopReason === "aborted")
-      ) {
-        throw new Error(last.errorMessage || `Session ${last.stopReason}`);
-      }
       result = {
         ...task.target,
-        status: "completed",
-        text:
-          (last ? session.getLastAssistantText() : undefined) ??
-          "Session completed without an assistant response.",
+        ...describeSessionResult(startLeafId, session.sessionManager.getBranch()),
       };
     } catch (error) {
       result = {

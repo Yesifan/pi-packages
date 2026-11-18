@@ -29,8 +29,7 @@ function fake() {
     prompt: vi.fn(() => done.promise),
     steer: vi.fn(async () => "queued" as const),
     dispose: vi.fn(),
-    getLastAssistantText: () => "answer",
-    messages: [],
+    sessionManager: SessionManager.inMemory(),
     isStreaming: true as boolean,
   } satisfies TaskSession;
   return { session, done };
@@ -219,12 +218,11 @@ it.each(["loading", "running"])("close during %s disposes without late reports",
 
 it("reports terminal model error even if SDK prompt resolves", async () => {
   const { session, done } = fake();
-  const messages: TaskSession["messages"] = [];
-  const tasks = runtime(async () => ({ ...session, messages }));
+  const tasks = runtime(async () => session);
   const report = vi.fn();
   await tasks.ask(request, report);
   await vi.waitFor(() => expect(session.prompt).toHaveBeenCalledOnce());
-  messages.push({
+  session.sessionManager.appendMessage({
     role: "assistant",
     content: [],
     api: "anthropic-messages",
@@ -263,14 +261,13 @@ it("reopens the same real SDK file for each run and binds reporting to each call
       load: async (found) => {
         const manager = SessionManager.open(found.path);
         return {
-          messages: [],
+          sessionManager: manager,
           isStreaming: false,
           prompt: async (text) => {
             manager.appendMessage({ role: "user", content: text, timestamp: Date.now() });
           },
           steer: async () => "queued",
           dispose: vi.fn(),
-          getLastAssistantText: () => "saved",
         };
       },
     });

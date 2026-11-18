@@ -22,6 +22,7 @@ import {
   buildProgressWidgetLines,
   createSubagentProgressState,
 } from "./progress.js";
+import { describeSubagentResult } from "./result.js";
 import { createDelegationStatusSnapshot, formatSubagentReport } from "./status.js";
 import { PersistentSubagentStore } from "./store.js";
 import type { DelegationRuntimeApi } from "./tools.js";
@@ -54,16 +55,6 @@ function mountedSession(execution: Execution) {
 }
 function agentCwd(agent: Agent): string {
   return initialized(agent.cwd, "Agent cwd");
-}
-
-function isCommentary(signature: string | undefined): boolean {
-  if (!signature) return false;
-  try {
-    const parsed = JSON.parse(signature);
-    return parsed?.v === 1 && parsed?.phase === "commentary";
-  } catch {
-    return false; // Legacy opaque signatures have no phase.
-  }
 }
 
 function lastPersistedActivity(manager: SessionManager): number {
@@ -902,9 +893,9 @@ export class RootRuntime implements DelegationRuntimeApi {
       entries.find((entry) => entry.type === "message" && entry.message.role === "user")?.id ??
       execution.startLeafId ??
       undefined;
-    const last = [...entries]
-      .reverse()
-      .find((entry) => entry.type === "message" && entry.message.role === "assistant");
+    const last = entries.findLast(
+      (entry) => entry.type === "message" && entry.message.role === "assistant",
+    );
     if (execution.failure) {
       report.outcome = execution.terminalOutcome ?? "failed";
       report.error = { ...execution.failure };
@@ -918,35 +909,9 @@ export class RootRuntime implements DelegationRuntimeApi {
       report.result = "";
       return report;
     }
-    if (last?.type === "message" && last.message.role === "assistant") {
-      const message = last.message;
-      report.result = message.content
-        .filter((value) => value.type === "text")
-        .filter((value) => !isCommentary(value.textSignature))
-        .map((value) => value.text)
-        .join("\n");
-      report.outcome =
-        message.stopReason === "error"
-          ? "failed"
-          : message.stopReason === "aborted"
-            ? "aborted"
-            : message.stopReason === "length"
-              ? "incomplete"
-              : "completed";
-      if (message.errorMessage || report.outcome === "failed" || report.outcome === "aborted")
-        report.error = {
-          code: report.outcome === "aborted" ? "ABORTED" : "MODEL_ERROR",
-          message:
-            message.errorMessage ??
-            "The SDK stopped this execution without a more specific reason.",
-        };
-      if (!report.result && report.outcome === "completed") {
-        report.outcome = "incomplete";
-        report.result =
-          "The final response contains no text; inspect the complete conversation for non-text content.";
-      }
-    }
-    return report;
+    const message =
+      last?.type === "message" && last.message.role === "assistant" ? last.message : undefined;
+    return { ...report, ...describeSubagentResult(message) };
   }
   private async finalize(execution: Execution): Promise<void> {
     if (!this.current(execution)) return;
