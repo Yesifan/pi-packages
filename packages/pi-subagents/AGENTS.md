@@ -36,7 +36,7 @@ AgentSession，并提供 `subagent` 与 `ask_subagent` 工具。实现基线为
 
 ## 主要目录与模块
 
-- `src/index.ts`：Pi 扩展入口及 root session 生命周期绑定。
+- `index.js`：Pi 包入口，向 `src/index.ts` 的编译产物传入公开入口路径。`src/index.ts` 绑定 root session 生命周期。
 - `src/runtime.ts`：Agent/Execution/RootScope 生命周期、name reservation、普通 ask、steering、在线报告处理 barrier 和 shutdown。
 - `src/child-session.ts`：目标 cwd AgentSession 创建/恢复、资源隔离、工具白名单/黑名单和角色 prompt。
 - `src/delegation.ts`：session-local delegation context 与动态 tool description。

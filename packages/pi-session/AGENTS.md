@@ -66,4 +66,4 @@ pnpm --filter @yesifan/pi-session test
 pnpm --filter @yesifan/pi-session pack --pack-destination /tmp
 ```
 
-按根约定在代码编辑阶段后及时使用 Biome 格式化相关文件。包直接发布 TypeScript 源码，无 build 步骤；保留 `package.json` 的 `files` allowlist，检查 tarball 仅包含运行时源码及用户所需文件，不包含测试、开发配置、内部规格或 `AGENTS.md`。扩展源码修改后需 reload 或启动新会话验证，当前已加载实例可能仍运行旧代码。
+按根约定在代码编辑阶段后及时使用 Biome 格式化相关文件。包从根 `index.js` 加载 `dist/` 中的编译产物；检查 tarball 包含入口、运行时代码及用户文档。扩展源码修改后先构建，再 reload 或启动新会话验证，当前已加载实例可能仍运行旧代码。

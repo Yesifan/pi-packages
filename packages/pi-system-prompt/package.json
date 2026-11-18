@@ -18,12 +18,15 @@
     "node": ">=22.19.0"
   },
   "files": [
-    "extensions",
+    "index.js",
+    "dist",
     "README.md",
     "CHANGELOG.md",
     "docs/development.md"
   ],
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepare": "pnpm run build",
     "typecheck": "tsc --noEmit",
     "test": "node --test test/*.test.mjs",
     "test:ci": "node --test test/*.test.mjs"
@@ -38,7 +41,7 @@
   },
   "pi": {
     "extensions": [
-      "./extensions"
+      "./index.js"
     ]
   },
   "publishConfig": {

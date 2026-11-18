@@ -70,7 +70,7 @@ function identity(manager: sdk.SessionManager): SessionIdentity {
   return { sessionId: manager.getSessionId(), sessionFile };
 }
 
-async function harness(trusted = true) {
+async function harness(trusted = true, usePackageEntry = false) {
   const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pi-subagents-child-session-")));
   temporaryDirectories.push(root);
   const cwd = path.join(root, "project");
@@ -116,7 +116,9 @@ async function harness(trusted = true) {
   const model = modelRuntime.getModel("child-test", "a");
   if (!model) throw new Error("Missing fixture model");
   const broker = new RootUiBroker({} as ConstructorParameters<typeof RootUiBroker>[0], false, 100);
-  const ownExtension = path.join(cwd, ".pi", "extensions", "own.js");
+  const ownExtension = usePackageEntry
+    ? path.join(root, "package", "index.js")
+    : path.join(cwd, ".pi", "extensions", "own.js");
   const resolveTrust = vi.fn(async () => trusted);
   const factory = new ChildSessionFactory(agentDir, ownExtension, broker, resolveTrust);
   const callerAgent: Agent = {
@@ -697,6 +699,45 @@ describe("ChildSessionFactory target mounts", () => {
     });
     expect(h.resolveTrust).toHaveBeenCalledWith(h.cwd);
     await expect(stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("excludes a package-root entry while keeping the nested delegation extension", async () => {
+    const h = await harness(true, true);
+    const packageRoot = path.dirname(h.ownExtension);
+    await mkdir(packageRoot);
+    await writeFile(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ type: "module", pi: { extensions: ["./index.js"] } }),
+    );
+    await writeFile(
+      h.ownExtension,
+      `export default function (pi) {
+        pi.registerCommand("public-root-only", { description: "Root marker", handler: async () => {} });
+      }`,
+    );
+    await writeFile(
+      path.join(h.agentDir, "settings.json"),
+      JSON.stringify({ packages: [packageRoot] }),
+    );
+    const loader = new sdk.DefaultResourceLoader({ cwd: h.cwd, agentDir: h.agentDir });
+    await loader.reload();
+    expect(loader.getExtensions().extensions.map((extension) => extension.resolvedPath)).toContain(
+      h.ownExtension,
+    );
+    const child = await h.open(await h.factory.createSessionManager(h.cwd), {
+      canDelegate: true,
+      delegationContext: {
+        cwd: h.cwd,
+        projectRoot: h.cwd,
+        externalDirectories: [],
+        agentTypes: new Map(),
+      },
+    });
+    expect(child.session.extensionRunner.getExtensionPaths()).not.toContain(h.ownExtension);
+    expect(child.session.extensionRunner.getCommand("public-root-only")).toBeUndefined();
+    expect(child.session.getAllTools().map((tool) => tool.name)).toEqual(
+      expect.arrayContaining(["subagent", "ask_subagent"]),
+    );
   });
 
   it("filters its own extension and preserves dynamic exclusions/current tools on remount", async () => {

@@ -44,6 +44,7 @@ const services = {
   diagnostics: [] as Array<{ type: "error" | "warning"; message: string }>,
   settingsManager: settings,
   resourceLoader: { getExtensions: () => extensions },
+  modelRuntime: { settleCredentialWrites: async () => {} },
 };
 const logger = createLogger({ level: "silent" });
 let project: TmpProject;

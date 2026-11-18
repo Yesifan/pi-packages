@@ -7,6 +7,7 @@ Persistent, in-process background subagents for [Pi](https://pi.dev).
 ```bash
 pi install npm:@yesifan/pi-subagents
 # local checkout
+pnpm --filter @yesifan/pi-subagents build
 pi install -l ./packages/pi-subagents
 ```
 
@@ -77,7 +78,7 @@ Report concrete evidence and file locations. Do not modify files.
 
 Roles accept either `tools` (SDK tool selection) or `disallowedTools` (exclusion patterns), never both—even when one is empty. Both are arrays of non-empty strings; duplicate entries are removed. `tools: []` allows no tools, while `disallowedTools: []` adds no restrictions. Omitting both preserves the normal target session's tools.
 
-Tool policy follows Pi SDK 1.4.0 semantics:
+Tool policy follows Pi SDK 1.5.2 semantics:
 
 - A non-empty `tools` list selects built-in and extension tools, but **is not a strict allowlist across all tools**: if it contains no tool names starting with `mcp__`, already registered MCP tools remain available. Including a name starting with `mcp__` filters MCP tools to those selections; naming only a resource helper such as `list_mcp_resources` does not trigger this filtering; `tools: []` excludes all tools, including MCP.
 - `tools` selections are passed directly to the SDK, including its supported patterns. This package does not prevalidate tool existence: unknown or misspelled selections match no tools instead of failing child creation with `TOOL_UNAVAILABLE`. Explicit MCP selections can match tools registered later; actual calls to unavailable tools still fail through the SDK. Check role spelling when expected tools are missing.
@@ -104,7 +105,7 @@ The selected policy is included in the saved role snapshot and content hash. Lat
 
 ## Codemode and MCP
 
-Children load the SDK 1.4.0 built-in `codemode`, `tool_search`, and `mcp` extensions using their own target cwd, agentDir, and settings. No adapter or duplicate MCP configuration is needed. Parent tool instances, connections, and temporary CLI overrides are not copied.
+Children load the SDK 1.5.2 built-in `codemode`, `tool_search`, and `mcp` extensions using their own target cwd, agentDir, and settings. No adapter or duplicate MCP configuration is needed. Parent tool instances, connections, and temporary CLI overrides are not copied.
 
 Loading does not unconditionally activate tools. For codemode without MCP, set `"defaultTools": ["+codemode"]` in Pi settings. Enabled MCP servers can activate codemode or tool search according to SDK configuration. MCP configuration is read from `<agentDir>/mcp.json` and trusted project `.pi/mcp.json`.
 
@@ -213,7 +214,7 @@ Children run in the same Node.js process. This package keeps its own state sessi
 
 ## Development
 
-The development baseline is Pi SDK 1.4.0. See [ADR-0004](docs/adr/0004-official-sdk-lifecycle.md) for the submitted, steering, restoration, and cleanup decisions.
+The development baseline is Pi SDK 1.5.2. See [ADR-0004](docs/adr/0004-official-sdk-lifecycle.md) for the submitted, steering, restoration, and cleanup decisions.
 
 ```bash
 pnpm install

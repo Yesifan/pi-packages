@@ -45,7 +45,7 @@
 
 ## 安装
 
-要求：Linux、Node.js >= 22.19、`util-linux` 提供的 `flock` 命令，以及 pnpm **11.x**（本项目已用 `packageManager` 固定为 `pnpm@11.25.0`）。控制协调使用内核文件锁，不需要后台锁服务。当前开发与内嵌运行时基线为 Pi SDK 1.4.0。
+要求：Linux、Node.js >= 22.19、`util-linux` 提供的 `flock` 命令，以及 pnpm **11.x**（本项目已用 `packageManager` 固定为 `pnpm@11.25.0`）。控制协调使用内核文件锁，不需要后台锁服务。当前开发与内嵌运行时基线为 Pi SDK 1.5.2。
 
 > ⚠️ 推荐 11.x：pnpm 12 对 `install -g <本地路径/tarball>` 有回归（会把本地路径误当 registry 包名，报 `@scope` 错）。
 

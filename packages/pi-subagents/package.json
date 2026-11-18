@@ -18,6 +18,7 @@
     "node": ">=22.19.0"
   },
   "files": [
+    "index.js",
     "dist",
     "agents",
     "examples",
@@ -38,8 +39,7 @@
   ],
   "scripts": {
     "build": "tsc",
-    "prepare": "tsc",
-    "prepublishOnly": "tsc",
+    "prepare": "pnpm run build",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json",
     "test": "vitest run",
     "test:ci": "vitest run",
@@ -64,7 +64,7 @@
   },
   "pi": {
     "extensions": [
-      "./dist/index.js"
+      "./index.js"
     ]
   },
   "publishConfig": {

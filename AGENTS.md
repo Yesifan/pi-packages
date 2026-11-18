@@ -121,7 +121,7 @@ pnpm --filter @yesifan/<pkg> pack --pack-destination /tmp
 ## Pi 扩展注意事项
 
 - Pi 扩展通常在会话启动时加载一次。修改扩展源码后，当前会话仍可能运行旧代码；验证改动时应重新加载扩展或启动新会话。
-- `pi-system-prompt` 当前直接发布 `extensions/` 下的 TypeScript 源码。
+- 三个 Pi 扩展都以包根的 `index.js` 为 Pi 清单入口，并从 `dist/` 加载编译后的实现；本地修改源码后先构建，再重新加载。
 - `pi-weixin-daemon` 通过 `dist/` 发布 CLI；其 `src/pi/` 是直接依赖 Pi SDK 的边界。修改该包时必须继续遵守 `packages/pi-weixin-daemon/AGENTS.md` 中描述的分层规则。
 
 ## 文档维护
