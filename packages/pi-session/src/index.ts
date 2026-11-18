@@ -1,15 +1,11 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { createReferenceProvider, expandReferences, type SessionList } from "./references.js";
-import { resolveCwd, searchSessions } from "./sessions.js";
+import { listAuthorizedSessions, resolveCwd, searchSessions } from "./sessions.js";
 import { SessionTasks } from "./tasks.js";
 
 function listFor(cwd: string): SessionList {
-  return (scope, signal) =>
-    scope === "all"
-      ? SessionManager.listAll(undefined, signal)
-      : SessionManager.list(cwd, undefined, undefined, signal);
+  return (_scope, signal) => listAuthorizedSessions(cwd, signal);
 }
 
 const cwdParameter = Type.Optional(
@@ -37,7 +33,9 @@ export default function piSession(pi: ExtensionAPI): void {
     installed = true;
     callerId = ctx.sessionManager.getSessionId();
     tasks = new SessionTasks();
-    ctx.ui.addAutocompleteProvider((current) => createReferenceProvider(current, listFor(ctx.cwd)));
+    ctx.ui.addAutocompleteProvider((current) =>
+      createReferenceProvider(current, listFor(ctx.cwd), ctx.cwd),
+    );
 
     pi.registerTool({
       name: "search-session",
@@ -92,7 +90,9 @@ export default function piSession(pi: ExtensionAPI): void {
   pi.on("input", async (event, ctx) => {
     if (ctx.mode !== "tui" || event.source !== "interactive") return { action: "continue" };
     try {
-      const text = await expandReferences(event.text, listFor(ctx.cwd), ctx.signal);
+      const text = await expandReferences(event.text, listFor(ctx.cwd), ctx.signal, (message) =>
+        ctx.ui.notify(message, "warning"),
+      );
       return text === event.text ? { action: "continue" } : { action: "transform", text };
     } catch (error) {
       ctx.ui.notify(
