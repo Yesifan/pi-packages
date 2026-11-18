@@ -52,10 +52,10 @@ export function findSession(cwd: string, id: string): SessionTarget {
   const header = parseSessionEntries(readFileSync(path, "utf8")).find(
     (entry) => entry.type === "session",
   );
-  if (!header || realpathSync(header.cwd) !== realpathSync(cwd)) {
+  if (!header || header.id !== id || realpathSync(header.cwd) !== realpathSync(cwd)) {
     throw new Error("Session cwd does not match the authorized project");
   }
-  return { id, cwd, path: resolve(path) };
+  return { id, cwd, path: realpathSync(path) };
 }
 
 export interface SessionMatch extends SessionTarget {
